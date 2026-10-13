@@ -88,7 +88,7 @@ export async function chatView({ taskId, facts, healthy }) {
       <div class="msgs" id="msgs" data-task="${task.id}" data-n="${task.messages.length}" data-running="${task.running}">${msgs}</div>
       <form class="compose" method="post" action="/t/${task.id}/reply"><textarea name="text" placeholder="${placeholder}" required></textarea><button>Send</button></form>`;
   } else {
-    main = `<div class="msgs"><div class="empty"><h2 style="font-weight:500">New task</h2>
+    main = `<div class="msgs"><div class="empty"><a href="/" class="hint" style="font-size:12px">← tasks</a><h2 style="font-weight:500">New task</h2>
       <p class="hint">Describe what you want. The agent replies once with questions (if any), a plan and what "done" means. After your "go" it works until its PR is green, without asking.</p>
       <form method="post" action="/tasks" class="card" style="text-align:left">
         <select name="project">${['contentcoach', 'factory'].map((p) => `<option>${p}</option>`).join('')}</select>
@@ -96,7 +96,7 @@ export async function chatView({ taskId, facts, healthy }) {
         <label class="hint" style="display:block;margin-bottom:12px"><input type="checkbox" name="auto">skip the brief, start right away</label><button>Start</button></form>
       ${err ? `<p class="pill bad">${esc(err)}</p>` : ''}</div></div>`;
   }
-  const html = `<div class="app ${task ? 'has-task' : ''}"><aside class="side"><h1>Factory</h1><a class="newbtn" href="/?task=new">+ New task</a>${side || '<p class="hint">No tasks yet.</p>'}
+  const html = `<div class="app ${task || taskId === 'new' ? 'has-task' : ''}"><aside class="side"><h1>Factory</h1><a class="newbtn" href="/?task=new">+ New task</a>${side || '<p class="hint">No tasks yet.</p>'}
     <div class="health">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● needs a look</span>'} · <a href="/health">health</a> · <a href="/logout">sign out</a></div></aside>
     <section class="main">${main}</section></div>
     <script>
