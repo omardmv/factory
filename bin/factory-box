@@ -106,6 +106,7 @@ down() {
   load_project "$1"; local n="$2"
   docker compose -p "$PREFIX-pr-$n" down --remove-orphans -t 10 >&2 2>/dev/null || true
   pg "DROP DATABASE IF EXISTS ${PREFIX}_pr_$n WITH (FORCE)"
+  pg "DROP ROLE IF EXISTS ${PREFIX}_pr_$n"   # the preview's own login (Coolify previews)
   docker run --rm -v "$(media_root):/m" alpine:3.20 rm -rf "/m/pr-$n"
   rm -rf "/srv/factory/artifacts/$PREFIX/pr-$n" "/srv/factory/state/$PREFIX-pr-$n".*
   docker image rm "factory/$PREFIX-api:pr-$n" "factory/$PREFIX-web:pr-$n" >/dev/null 2>&1 || true
