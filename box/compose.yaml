@@ -1,0 +1,40 @@
+# The factory's own long-lived services on the VPS (compose project "factory",
+# installed at /opt/factory). Previews are separate compose projects that join
+# the same external network "factory".
+name: factory
+
+services:
+  gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    # host nginx (TLS, Cloudflare-only, basic auth) proxies every
+    # <feature>-pr<N>.<domain> request here
+    ports:
+      - "127.0.0.1:19100:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /srv/factory/artifacts:/srv/artifacts:ro
+    networks: [factory]
+    mem_limit: 128m
+
+  pg:
+    # same image as prod/staging, so TEMPLATE copies and pgvector match
+    image: pgvector/pgvector:pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - pg:/var/lib/postgresql/data
+    networks: [factory]
+    mem_limit: 4g
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 5s
+      retries: 20
+
+volumes:
+  pg:
+
+networks:
+  factory:
+    external: true

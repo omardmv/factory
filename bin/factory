@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# factory - look at and talk to a running environment as a signed-in user.
+#
+#   factory url   <target>                       base URL of the app
+#   factory login <target>                       one single-use sign-in URL
+#   factory api   <target> <METHOD> <path> [json] call the API signed in
+#   factory shot  <target> <path> [options]      screenshot a page signed in
+#
+# <target> is `staging` or a PR number (`458`, `pr458`). Project: -p <name>
+# or FACTORY_PROJECT (default contentcoach). API paths are relative to the
+# project's API root (`/me`, `/threads`), page paths to the app root (`/`,
+# `/reports`). Sessions are cached in ~/.cache/factory; nothing is printed
+# that carries a token except `login`'s own output.
+set -euo pipefail
+FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
+project="${FACTORY_PROJECT:-contentcoach}"
+if [ "${1:-}" = "-p" ]; then project="$2"; shift 2; fi
+conf="$FACTORY_DIR/projects/$project.sh"
+[ -f "$conf" ] || { echo "unknown project: $project (no $conf)" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "$conf"
+
+cache="$HOME/.cache/factory/$project"; mkdir -p "$cache"; chmod 700 "$cache"
+
+die() { echo "factory: $*" >&2; exit 1; }
+
+parse_target() {
+  case "${1:-}" in
+    staging) kind=staging; host="$STAGING_HOST" ;;
+    pr[0-9]*|[0-9]*) kind=preview; pr="${1#pr}"; host="p-pr$pr.$DOMAIN" ;;
+    *) die "target must be 'staging' or a PR number, got '${1:-}'" ;;
+  esac
+  base="https://$host"
+  jar="$cache/$1.jar"
+}
+
+# previews sit behind basic auth; the password lives on the box
+basic_auth() {
+  [ "$kind" = preview ] || return 0
+  local f="$HOME/.config/factory/preview-password"
+  if [ ! -s "$f" ]; then
+    mkdir -p "$(dirname "$f")"; (umask 077; ssh vps cat /opt/factory/preview-password > "$f")
+  fi
+  printf 'factory:%s' "$(cat "$f")"
+}
+
+# the container's logger shares stdout with the URL: keep only the URL line
+mint() {
+  { if [ "$kind" = staging ]; then mint_staging; else mint_preview "$pr"; fi; } |
+    grep -E '^https://' | tail -1 | grep . || return 1
+}
+
+# redeem a fresh sign-in link into a session cookie jar
+new_session() {
+  local url token auth
+  url="$(mint)" || die "could not mint a sign-in link for $target"
+  token="${url#*#t=}"; token="${token%%&*}"
+  auth="$(basic_auth)"
+  (umask 077; curl -fsS ${auth:+-u "$auth"} -c "$jar" -H 'Content-Type: application/json' \
+     -d "{\"t\":\"$token\"}" "$base$REDEEM_PATH" >/dev/null) ||
+    die "redeeming the sign-in link failed"
+}
+
+call_api() {  # METHOD PATH [BODY] -> prints body, returns http code in $code
+  local auth out; auth="$(basic_auth)"; out="$cache/.last"
+  code=$(curl -sS ${auth:+-u "$auth"} -b "$jar" -c "$jar" -o "$out" -w '%{http_code}' \
+    -X "$1" ${3:+-H 'Content-Type: application/json' --data "$3"} "$base$API_PATH$2")
+}
+
+cmd="${1:-}"; shift || true
+target="${1:-}"; shift || true
+case "$cmd" in
+  url)   parse_target "$target"; echo "$base$APP_PATH" ;;
+  login) parse_target "$target"; mint ;;
+  api)
+    parse_target "$target"
+    [ $# -ge 2 ] || die "usage: factory api <target> <METHOD> <path> [json]"
+    [ -s "$jar" ] || new_session
+    call_api "$1" "$2" "${3:-}"
+    if [ "$code" = 401 ]; then new_session; call_api "$1" "$2" "${3:-}"; fi
+    cat "$cache/.last"; echo
+    echo "HTTP $code" >&2
+    [ "${code:0:1}" = 2 ] ;;
+  shot)
+    parse_target "$target"
+    [ $# -ge 1 ] || die "usage: factory shot <target> <path> [--width N] [--full] [--out file]"
+    [ -s "$jar" ] || new_session
+    # a dead session shows the sign-in page: check before shooting
+    call_api GET /me; [ "$code" = 401 ] && new_session
+    auth="$(basic_auth)"
+    [ -d "$FACTORY_DIR/tools/node_modules/playwright-core" ] ||
+      (cd "$FACTORY_DIR/tools" && npm install --silent >/dev/null)
+    FACTORY_JAR="$jar" FACTORY_BASIC="$auth" \
+      node "$FACTORY_DIR/tools/shot.mjs" "$base$APP_PATH" "$@" ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; [ -z "$cmd" ] || exit 2 ;;
+esac
