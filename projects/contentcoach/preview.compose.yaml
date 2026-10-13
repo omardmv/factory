@@ -6,7 +6,7 @@ name: cc-pr-${PR}
 
 x-app: &app
   image: ${IMAGE_API}
-  networks: [factory]
+  networks: [project]
   environment: &env
     CC_ENV: staging
     DATABASE_URL: ${DB_URL}
@@ -63,7 +63,7 @@ services:
     image: ${IMAGE_WEB}
     container_name: cc-pr-${PR}-web
     restart: unless-stopped
-    networks: [factory]
+    networks: [project]
     depends_on:
       api:
         condition: service_healthy
@@ -72,5 +72,6 @@ services:
     mem_limit: 128m
 
 networks:
-  factory:
+  project:
+    name: factory-cc
     external: true

@@ -1,0 +1,20 @@
+# One __PROJECT__ preview. factory-box sets PR, IMAGE_API, IMAGE_WEB,
+# PREVIEW_HOST, DB_URL, MEDIA_DIR, SESSION_SECRET, PROJECT_DIR.
+# The gateway sends <feature>-pr<N>.__DOMAIN__ to the container named
+# __PREFIX__-pr-<N>-web on port 80; /_factory/login to __PREFIX__-pr-<N>-login:8090.
+name: __PREFIX__-pr-${PR}
+
+services:
+  web:
+    image: ${IMAGE_WEB}
+    container_name: __PREFIX__-pr-${PR}-web
+    restart: unless-stopped
+    networks: [project]
+    environment:
+      DATABASE_URL: ${DB_URL}
+    mem_limit: 512m
+
+networks:
+  project:
+    name: factory-__PREFIX__
+    external: true

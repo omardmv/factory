@@ -6,6 +6,11 @@
 #   factory api   <target> <METHOD> <path> [json] call the API signed in
 #   factory shot  <target> <path> [options]      screenshot a page signed in
 #
+#   factory init  <project> --domain D --prefix P --repo owner/repo [--repo-dir DIR]
+#                 scaffold projects/<project>/ and (with --repo-dir) the repo's workflow
+#   factory runner <project>                     a self-hosted runner on the VPS for its repo
+#   factory push                                 push this factory repo (the box pulls it in <=5 min)
+#
 # <target> is `staging` or a PR number (`458`, `pr458`). Project: -p <name>
 # or FACTORY_PROJECT (default contentcoach). API paths are relative to the
 # project's API root (`/me`, `/threads`), page paths to the app root (`/`,
@@ -15,6 +20,55 @@ set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
 project="${FACTORY_PROJECT:-contentcoach}"
 if [ "${1:-}" = "-p" ]; then project="$2"; shift 2; fi
+
+# commands that are not about a running environment
+case "${1:-}" in
+  init)
+    shift; name="${1:?usage: factory init <project> --domain D --prefix P --repo owner/repo [--repo-dir DIR]}"; shift
+    domain=""; prefix=""; repo=""; repo_dir=""
+    while [ $# -gt 0 ]; do case "$1" in
+      --domain) domain="$2"; shift 2 ;; --prefix) prefix="$2"; shift 2 ;;
+      --repo) repo="$2"; shift 2 ;; --repo-dir) repo_dir="$2"; shift 2 ;;
+      *) echo "unknown option $1" >&2; exit 2 ;; esac; done
+    [ -n "$domain" ] && [ -n "$prefix" ] && [ -n "$repo" ] || { echo "--domain, --prefix and --repo are required" >&2; exit 2; }
+    [[ "$prefix" =~ ^[a-z][a-z0-9]{1,9}$ ]] || { echo "prefix: 2-10 lowercase letters/digits" >&2; exit 2; }
+    for p in "$FACTORY_DIR"/projects/*/project.sh; do
+      grep -q "^PREFIX=$prefix\b" "$p" && { echo "prefix $prefix is taken by $p" >&2; exit 1; }
+    done
+    dest="$FACTORY_DIR/projects/$name"; [ -e "$dest" ] && { echo "$dest exists" >&2; exit 1; }
+    mkdir -p "$dest"
+    for f in project.sh preview.compose.yaml; do
+      sed -e "s#__PROJECT__#$name#g; s#__DOMAIN__#$domain#g; s#__PREFIX__#$prefix#g; s#__REPO__#$repo#g" \
+        "$FACTORY_DIR/templates/project/$f" > "$dest/$f"
+    done
+    if [ -n "$repo_dir" ]; then
+      mkdir -p "$repo_dir/.github/workflows"
+      sed -e "s#__PROJECT__#$name#g; s#__PREFIX__#$prefix#g" "$FACTORY_DIR/templates/preview.yml" \
+        > "$repo_dir/.github/workflows/preview.yml"
+      echo "wrote $repo_dir/.github/workflows/preview.yml"
+    fi
+    cat <<NEXT
+scaffolded $dest. Next:
+  1. fill in $dest/project.sh (build_images, run_e2e, data source) and preview.compose.yaml
+  2. Cloudflare: a proxied "*" record for $domain; origin cert at /etc/ssl/cloudflare/$domain.pem/.key on the box
+  3. factory push          (the box syncs routes for $domain within 5 minutes)
+  4. factory runner $name  (a runner for $repo)
+  5. commit .github/workflows/preview.yml in $repo and open a PR: it previews itself
+NEXT
+    exit 0 ;;
+  runner)
+    name="${2:?usage: factory runner <project>}"
+    # shellcheck source=/dev/null
+    . "$FACTORY_DIR/projects/$name/project.sh"
+    [ -n "${REPO:-}" ] || { echo "projects/$name has no REPO" >&2; exit 1; }
+    token="$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token)"
+    ssh vps "factory-box runner-add $REPO $token"
+    exit 0 ;;
+  push)
+    git -C "$FACTORY_DIR" push -q && echo "pushed; the box pulls within 5 minutes (or: ssh vps factory-box self-update)"
+    exit 0 ;;
+esac
+
 conf="$FACTORY_DIR/projects/$project/project.sh"
 [ -f "$conf" ] || { echo "unknown project: $project (no $conf)" >&2; exit 2; }
 # shellcheck source=/dev/null

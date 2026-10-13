@@ -8,7 +8,8 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 install -d -m 755 /opt/factory /opt/factory/gateway /srv/factory/artifacts /srv/factory/media
 install -m 644 "$here/compose.yaml" /opt/factory/compose.yaml
-install -m 644 "$here/gateway/nginx.conf" /opt/factory/gateway/nginx.conf
+install -m 644 "$here/gateway/nginx.conf" /opt/factory/gateway/default.conf
+[ -f /opt/factory/gateway/projects.map.inc ] || : > /opt/factory/gateway/projects.map.inc
 
 # factory-pg credentials, generated once
 if [ ! -f /opt/factory/.env ]; then
@@ -28,17 +29,9 @@ fi
 
 docker network inspect factory >/dev/null 2>&1 || docker network create factory
 docker compose -f /opt/factory/compose.yaml up -d --wait
-# the gateway mounts one file: a replaced inode is invisible until restart
-docker compose -f /opt/factory/compose.yaml restart gateway
 
-install -m 644 "$here/host-nginx/factory-previews.conf" /etc/nginx/sites-available/factory-previews.conf
-ln -sf /etc/nginx/sites-available/factory-previews.conf /etc/nginx/sites-enabled/factory-previews.conf
-if ! nginx -t; then
-  rm -f /etc/nginx/sites-enabled/factory-previews.conf
-  echo "nginx -t failed: preview vhost removed again, nothing reloaded" >&2
-  exit 1
-fi
-systemctl reload nginx
+ln -sf "$here/../bin/factory-box" /usr/local/bin/factory-box
+# per-project networks, gateway routes and host vhosts, from projects/*
+factory-box sync
 install -m 644 "$here/factory.cron" /etc/cron.d/factory
-ln -sf /opt/factory-src/bin/factory-box /usr/local/bin/factory-box
 echo "factory installed"

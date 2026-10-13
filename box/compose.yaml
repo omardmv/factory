@@ -1,6 +1,7 @@
 # The factory's own long-lived services on the VPS (compose project "factory",
-# installed at /opt/factory). Previews are separate compose projects that join
-# the same external network "factory".
+# installed at /opt/factory). Previews are separate compose projects, one
+# docker network per project (factory-<prefix>); `factory-box sync` connects
+# the gateway and pg to each.
 name: factory
 
 services:
@@ -12,7 +13,8 @@ services:
     ports:
       - "127.0.0.1:19100:80"
     volumes:
-      - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # the whole dir: sync rewrites projects.map.inc in place
+      - ./gateway:/etc/nginx/conf.d:ro
       - /srv/factory/artifacts:/srv/artifacts:ro
     networks: [factory]
     mem_limit: 128m

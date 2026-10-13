@@ -1,3 +1,5 @@
 # /etc/cron.d/factory - the box clock is Tashkent time
-# 03:00: fresh disarmed snapshot of staging for new previews
-0 3 * * * factory /usr/local/bin/factory-box snapshot contentcoach >> /srv/factory/state/snapshot.log 2>&1
+# 03:00: fresh disarmed snapshot of every project's source data
+0 3 * * * factory /usr/local/bin/factory-box snapshot-all >> /srv/factory/state/snapshot.log 2>&1
+# every 5 minutes: pull the factory repo; regenerate routes if it changed
+*/5 * * * * root /usr/local/bin/factory-box self-update >> /srv/factory/state/self-update.log 2>&1

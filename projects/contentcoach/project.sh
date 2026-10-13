@@ -1,6 +1,8 @@
-# ContentCoach's answers to the factory's questions. Sourced by bin/factory.
-# (Moves into contentcoach's own .factory/ once previews land, phase 2.)
+# ContentCoach's answers to the factory's questions. Sourced by bin/factory
+# (laptop side) and bin/factory-box (VPS side).
 DOMAIN=contentcoach.org
+PREFIX=cc                  # containers cc-pr-<N>-*, DBs cc_pr_<N>, network factory-cc
+REPO=contentcoach/contentcoach
 STAGING_HOST=staging.contentcoach.org
 APP_PATH=/app            # the web app
 API_PATH=/app/api        # its API, behind the session cookie
@@ -26,7 +28,6 @@ mint_preview() {  # $1 = PR number
 }
 
 # ---- box side (bin/factory-box) ------------------------------------------
-PREFIX=cc                                  # containers cc-pr-<N>-*, DBs cc_pr_<N>
 SOURCE_DB_CONTAINER=staging-db-1           # read-only pg_dump source
 SOURCE_DB_NAME=contentcoach
 SOURCE_MEDIA_VOLUME=staging_media
