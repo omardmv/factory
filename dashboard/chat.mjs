@@ -58,7 +58,8 @@ export const chatCss = `
 @keyframes p{50%{opacity:.35}}
 .hint{color:#888780;font-size:13px} .empty{margin:auto;text-align:center;color:#5f5e5a;max-width:420px}
 select,input[type=text]{font:inherit;padding:8px 10px;border:1px solid #d3d1c7;border-radius:8px}
-@media (max-width:760px){.app{grid-template-columns:minmax(0,1fr)}.side{border-right:none}.app.has-task .side{display:none}.app:not(.has-task) .main{display:none}}`;
+a.back{display:none}
+@media (max-width:760px){a.back{display:inline}.app{grid-template-columns:minmax(0,1fr)}.side{border-right:none}.app.has-task .side{display:none}.app:not(.has-task) .main{display:none}}`;
 
 export async function chatView({ taskId, facts, healthy }) {
   let tasks = [], task = null, err = '';
@@ -84,11 +85,11 @@ export async function chatView({ taskId, facts, healthy }) {
     const msgs = task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
       + (task.running ? '<div class="hint">● the agent is working…</div>' : '');
     const placeholder = task.phase === 'brief' && !task.running ? 'Reply to the brief: "go", or your answers' : 'Message the agent…';
-    main = `<div class="head"><a href="/" class="hint" style="font-size:12px">← tasks</a><h2>${esc(task.title)}</h2><div class="meta">${esc(task.project)} · ${links}</div></div>
+    main = `<div class="head"><a href="/" class="hint back" style="font-size:12px">← tasks</a><h2>${esc(task.title)}</h2><div class="meta">${esc(task.project)} · ${links}</div></div>
       <div class="msgs" id="msgs" data-task="${task.id}" data-n="${task.messages.length}" data-running="${task.running}">${msgs}</div>
       <form class="compose" method="post" action="/t/${task.id}/reply"><textarea name="text" placeholder="${placeholder}" required></textarea><button>Send</button></form>`;
   } else {
-    main = `<div class="msgs"><div class="empty"><a href="/" class="hint" style="font-size:12px">← tasks</a><h2 style="font-weight:500">New task</h2>
+    main = `<div class="msgs"><div class="empty"><a href="/" class="hint back" style="font-size:12px">← tasks</a><h2 style="font-weight:500">New task</h2>
       <p class="hint">Describe what you want. The agent replies once with questions (if any), a plan and what "done" means. After your "go" it works until its PR is green, without asking.</p>
       <form method="post" action="/tasks" class="card" style="text-align:left">
         <select name="project">${['contentcoach', 'factory'].map((p) => `<option>${p}</option>`).join('')}</select>
