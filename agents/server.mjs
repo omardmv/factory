@@ -65,7 +65,8 @@ async function findPr(task) {
 }
 
 // ---------- one Claude Code run in a container ----------
-const running = new Map();   // task id -> child process
+const running = new Map();   // task id -> child process (docker run client)
+const containers = new Map(); // task id -> container name
 const queue = [];
 function enqueue(id, prompt, mode) { queue.push({ id, prompt, mode }); pump(); }
 function pump() {
@@ -93,7 +94,7 @@ async function run({ id, prompt, mode }) {
   if (t.sessionId) args.push('--resume', t.sessionId);
   const env = { ...process.env, TASK_ID: id, REPO: t.repo, BASE: t.base, GH_TOKEN: ghToken, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') };
   const child = spawn('docker', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  running.set(id, child);
+  running.set(id, child); containers.set(id, name);
   log('run.start', { task: id, mode, container: name });
   let buf = '', last = '', stderr = '';
   child.stdout.on('data', (c) => {
@@ -113,7 +114,7 @@ async function run({ id, prompt, mode }) {
   });
   child.stderr.on('data', (c) => { stderr = (stderr + c).slice(-2000); });
   await new Promise((r) => child.on('close', r));
-  running.delete(id);
+  running.delete(id); containers.delete(id);
   const done = load(id); done.sessionId = t.sessionId; done.costUsd = t.costUsd;
   if (last) say(id, 'agent', last);
   else say(id, 'factory', `[factory] the agent stopped without a reply. ${stderr.trim().slice(-400)}`);
@@ -168,7 +169,7 @@ const handler = async (req, res) => {
     if (!existsSync(`${dir(id)}/task.json`)) return send(404, { error: 'no such task' });
     if (!sub && req.method === 'GET') return send(200, { ...load(id), running: running.has(id), messages: messages(id) });
     if (sub === 'messages' && req.method === 'POST') { const b = await body(req); return send(200, post(id, b.from === 'factory' ? 'factory' : 'you', String(b.text ?? '').trim())); }
-    if (sub === 'stop' && req.method === 'POST') { running.get(id)?.kill('SIGTERM'); const t = load(id); t.status = 'stopped'; save(t); say(id, 'factory', '[factory] stopped by you.'); return send(200, t); }
+    if (sub === 'stop' && req.method === 'POST') { if (containers.has(id)) spawn('docker', ['kill', containers.get(id)], { stdio: 'ignore' }); running.get(id)?.kill('SIGTERM'); const t = load(id); t.status = 'stopped'; save(t); say(id, 'factory', '[factory] stopped by you.'); return send(200, t); }
     return send(405, { error: 'method not allowed' });
   } catch (e) { log('http.error', { error: e.message }); return send(400, { error: e.message }); }
 };
