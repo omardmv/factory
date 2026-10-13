@@ -175,6 +175,36 @@ server {
     }
 }
 VHOST
+      # sandboxes run by Coolify (pr<N>.<domain>): to its Traefik on loopback
+      if [ "${SANDBOXES:-}" = coolify ]; then
+        cat >> "$newvhost" <<VHOST
+
+# $DOMAIN -> Coolify sandboxes (Traefik, loopback only)
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ~^pr\d+\.$re\$;
+    ssl_certificate     $cert;
+    ssl_certificate_key $key;
+    if (\$from_cloudflare = 0) { return 444; }
+    server_tokens off;
+    add_header X-Robots-Tag "noindex, nofollow" always;
+    add_header X-Content-Type-Options nosniff always;
+    auth_basic "factory sandbox";
+    auth_basic_user_file /opt/factory/htpasswd;
+    client_max_body_size 64m;
+    location / {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }
+}
+VHOST
+      fi
       net="factory-$PREFIX"
       docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null
       for c in factory-gateway-1 factory-pg-1; do

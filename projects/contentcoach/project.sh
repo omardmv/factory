@@ -3,6 +3,7 @@
 DOMAIN=contentcoach.org
 PREFIX=cc                  # containers cc-pr-<N>-*, DBs cc_pr_<N>, network factory-cc
 REPO=contentcoach/contentcoach
+SANDBOXES=coolify         # PR sandboxes run by Coolify at pr<N>.contentcoach.org (sandbox.compose.yaml in the repo)
 STAGING_HOST=staging.contentcoach.org
 APP_PATH=/app            # the web app
 API_PATH=/app/api        # its API, behind the session cookie
