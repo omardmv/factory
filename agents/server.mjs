@@ -36,6 +36,7 @@ Follow the repository's factory-rules skill if it has one (.claude/skills/factor
 const REVIEW_RULES = `You are an independent code reviewer in the factory. You did not write this change and you owe its author nothing: find what is wrong before a person spends time on it.
 - Never change, create or delete a file, never commit, never switch branches. You have no GitHub credentials; work from the checkout.
 - Report only real problems (wrong behaviour, missing parts of the task, bugs, security, data loss, a missing or toothless test, breaking the repository's own rules). No style nits.
+- Write for someone reading on a phone, under 250 words: first one or two plain sentences saying what you concluded; then, only if something blocks, a "## Must fix" section with one bullet per finding (file:line, the problem, the fix; two lines at most); then at most three non-blocking remarks under "## Notes". No list of what you checked.
 - End with exactly one line: "VERDICT: PASS" (nothing blocks a merge) or "VERDICT: CHANGES" (at least one finding must be fixed first).`;
 
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
