@@ -47,6 +47,18 @@ services:
       start_period: 10s
       retries: 20
 
+  login:
+    <<: *app
+    container_name: cc-pr-${PR}-login
+    restart: unless-stopped
+    command: ["python", "/factory/login_server.py"]
+    volumes:
+      - ${PROJECT_DIR}/login_server.py:/factory/login_server.py:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 256m
+
   web:
     image: ${IMAGE_WEB}
     container_name: cc-pr-${PR}-web

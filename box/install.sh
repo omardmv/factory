@@ -28,6 +28,8 @@ fi
 
 docker network inspect factory >/dev/null 2>&1 || docker network create factory
 docker compose -f /opt/factory/compose.yaml up -d --wait
+# the gateway mounts one file: a replaced inode is invisible until restart
+docker compose -f /opt/factory/compose.yaml restart gateway
 
 install -m 644 "$here/host-nginx/factory-previews.conf" /etc/nginx/sites-available/factory-previews.conf
 ln -sf /etc/nginx/sites-available/factory-previews.conf /etc/nginx/sites-enabled/factory-previews.conf
@@ -37,4 +39,6 @@ if ! nginx -t; then
   exit 1
 fi
 systemctl reload nginx
+install -m 644 "$here/factory.cron" /etc/cron.d/factory
+ln -sf /opt/factory-src/bin/factory-box /usr/local/bin/factory-box
 echo "factory installed"

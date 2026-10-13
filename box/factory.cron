@@ -1,0 +1,3 @@
+# /etc/cron.d/factory - the box clock is Tashkent time
+# 03:00: fresh disarmed snapshot of staging for new previews
+0 3 * * * factory /usr/local/bin/factory-box snapshot contentcoach >> /srv/factory/state/snapshot.log 2>&1

@@ -11,6 +11,7 @@
 set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 cmd="${1:-}"; shift || true
+cd /srv/factory  # compose stats its cwd, and root's home is not readable to us
 
 die() { echo "factory-box: $*" >&2; exit 1; }
 log() { echo "[$(date -u +%H:%M:%S)] $*" >&2; }
@@ -84,7 +85,7 @@ up() {
   log "start cc-pr-$n at https://$host"
   PR="$n" IMAGE_API="$IMAGE_API" IMAGE_WEB="$IMAGE_WEB" PREVIEW_HOST="$host" \
   DB_URL="postgresql+asyncpg://factory:$(pgpw)@factory-pg-1:5432/${PREFIX}_pr_$n" \
-  MEDIA_DIR="$(media_root)/pr-$n" SESSION_SECRET="$(cat "$secret_file")" \
+  MEDIA_DIR="$(media_root)/pr-$n" PROJECT_DIR="$PROJECT_DIR" SESSION_SECRET="$(cat "$secret_file")" \
     docker compose -f "$PROJECT_DIR/preview.compose.yaml" up -d --wait --remove-orphans >&2
   printf '%s\n' "$host" > "/srv/factory/state/$PREFIX-pr-$n.host"
   local code
