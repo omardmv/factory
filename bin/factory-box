@@ -264,12 +264,12 @@ coolify_watch() {
     sleep 10
     body="$(curl -fsS -H "Authorization: Bearer $(cat /opt/factory/coolify-token)" \
       "http://127.0.0.1:8000/api/v1/deployments/$dep" 2>/dev/null)" || continue
-    st="$(printf '%s' "$body" | grep -o '"status" *: *"[^"]*"' | head -1 | cut -d'"' -f4)"
+    st="$(printf '%s' "$body" | grep -o '"status" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
     case "$st" in
       finished) log "coolify: $app deployed"; return 0 ;;
       failed|cancelled*|error*)
         # an error-looking fragment from the build log, else the status itself
-        reason="$(printf '%s' "$body" | grep -oiE '[^\\"]*(error|timeout|timed out)[^\\"]*' | tail -1 | cut -c1-200)"
+        reason="$(printf '%s' "$body" | grep -oiE '[^\\"]*(error|timeout|timed out)[^\\"]*' | tail -1 | cut -c1-200 || true)"
         log "coolify: $app deploy failed: ${reason:-status $st}"; return 1 ;;
     esac
   done
@@ -307,7 +307,7 @@ self_update() {
       if resp="$(curl -fsS -X POST -H "Authorization: Bearer $(cat /opt/factory/coolify-token)" \
           "http://127.0.0.1:8000/api/v1/deploy?uuid=$uuid")"; then
         log "coolify: redeploying $dir"
-        dep="$(printf '%s' "$resp" | grep -o '"deployment_uuid" *: *"[^"]*"' | head -1 | cut -d'"' -f4)"
+        dep="$(printf '%s' "$resp" | grep -o '"deployment_uuid" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
         # the build can still fail after Coolify accepted it: watch it in the background
         if [ -n "$dep" ]; then coolify_watch "$dir" "$dep" </dev/null & else log "coolify: $dir deploy status unknown (no deployment_uuid in reply)"; fi
       else
