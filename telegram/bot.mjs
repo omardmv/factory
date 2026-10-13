@@ -7,7 +7,7 @@
 //  - "queue:" + one task per line starts a batch: every item runs without a
 //    brief to a reviewed PR; one summary arrives when the whole batch settled
 //  - ❓ marks a decision only you can make: reply with your choice
-//  - /tasks, /status
+//  - /tasks, /status, /help
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 
@@ -27,6 +27,11 @@ state.sent ??= {}; state.msgTask ??= {}; state.offset ??= 0; state.batches ??= {
 if (!state.owner && !state.pairing) { state.pairing = randomBytes(4).toString('hex'); }
 const persist = () => writeFileSync(STATE_FILE, JSON.stringify(state));
 persist();
+const HELP = `Plain message: start a task ("factory:" prefix for the factory repo)
+Reply to a task's message: continue that task
+queue: + one task per line: start a batch
+❓ message: the task waits for your choice, reply with it
+/tasks: active tasks · /status: factory status · /help: this`;
 if (!state.owner) log('pairing', { code: state.pairing, hint: 'send /start <code> to the bot' });
 
 async function tg(method, payload) {
@@ -60,6 +65,7 @@ async function onMessage(msg) {
   }
   if (msg.from.id !== state.owner) return;
   if (text === '/status') return send(statusLine());
+  if (text === '/help') return send(HELP);
   if (text === '/tasks' || text === '/start') {
     const tasks = (await agents('/tasks')).filter((t) => !['done', 'stopped'].includes(t.status)).slice(0, 10);
     return send(tasks.length ? tasks.map((t) => `#${t.id} · ${t.status}${t.pr ? ` · PR ${t.pr.url}` : ''}\n${t.title}`).join('\n\n') : 'No active tasks.');
