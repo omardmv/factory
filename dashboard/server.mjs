@@ -178,16 +178,17 @@ createServer(async (req, res) => {
     if (url.pathname === '/tasks' && req.method === 'POST') {
       const f = await readForm(req);
       if (!fromUs(req) || !['contentcoach', 'factory'].includes(f.project) || !String(f.text ?? '').trim()) return send(400, 'bad request');
-      const t = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project: f.project, text: f.text, auto: f.auto === 'on' }) });
+      const t = f.kind === 'program' ? await agents('/programs', { method: 'POST', body: JSON.stringify({ project: f.project, goal: f.text }) })
+        : await agents('/tasks', { method: 'POST', body: JSON.stringify({ project: f.project, text: f.text, auto: f.auto === 'on', kind: f.kind === 'report' ? 'report' : undefined }) });
       return send(303, '', { location: `/?task=${t.id}` });
     }
-    const tm = url.pathname.match(/^\/t\/([0-9]{6}-[0-9a-f]{6})\/(reply|stop|state)$/);
+    const tm = url.pathname.match(/^\/t\/([0-9]{6}-[0-9a-f]{6})\/(reply|stop|pause|state)$/);
     if (tm) {
       const [, id, act] = tm;
       if (act === 'state') { const t = await agents(`/tasks/${id}`); res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); return res.end(JSON.stringify({ n: t.messages.length, running: t.running })); }
       if (req.method !== 'POST' || !fromUs(req)) return send(400, 'bad request');
       if (act === 'reply') { const f = await readForm(req); if (String(f.text ?? '').trim()) await agents(`/tasks/${id}/messages`, { method: 'POST', body: JSON.stringify({ text: f.text }) }); }
-      if (act === 'stop') await agents(`/tasks/${id}/stop`, { method: 'POST' });
+      if (act === 'stop' || act === 'pause') await agents(`/tasks/${id}/${act}`, { method: 'POST' });
       return send(303, '', { location: `/?task=${id}` });
     }
     return send(404, 'not found');

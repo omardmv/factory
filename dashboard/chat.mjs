@@ -25,12 +25,15 @@ function md(text) {
   return h.replace(/\n/g, '<br>');
 }
 const ago = (t) => { const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 2880 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
-const NEEDS_YOU = ['waiting for you', 'decision needed', 'ready for you'];
+const NEEDS_YOU = ['waiting for you', 'decision needed', 'ready for you', 'waiting for merges'];
 const dot = (t) => t.running ? '<span class="dot live" title="working"></span>'
   : t.pr?.state === 'merged' || t.status === 'done' ? '<span class="dot done" title="done">✓</span>'
   : t.status === 'ready for you' ? '<span class="dot you" title="reviewed: ready for you">✓</span>'
   : t.status === 'decision needed' ? '<span class="dot you" title="decision needed">?</span>'
   : t.status === 'waiting for you' ? '<span class="dot you" title="waiting for you"></span>'
+  : t.status === 'waiting for merges' ? '<span class="dot you" title="waiting for your merges"></span>'
+  : t.status === 'done' ? '<span class="dot done" title="done">✓</span>'
+  : ['paused', 'pausing'].includes(t.status) ? '<span class="dot off" title="paused">⏸</span>'
   : t.status === 'stopped' ? '<span class="dot off" title="stopped"></span>' : '<span class="dot wait" title="waiting for checks"></span>';
 
 function e2eFor(project, pr) {
@@ -91,7 +94,7 @@ export const chatCss = `
 .meta{font-size:13px;color:#5f5e5a;margin-top:4px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
 .msgs{flex:1;overflow:auto;padding:18px 22px;display:flex;flex-direction:column;gap:12px}
 .m{max-width:760px;padding:10px 14px;border-radius:12px;font-size:14.5px;line-height:1.55;background:#fff;border:1px solid #e6e4dc}
-.m.you{align-self:flex-end;background:#e6effa;border-color:#b5d4f4} .m.factory{background:#f1efe8;font-size:13.5px} .m.review{background:#eeedfe;border-color:#cecbf6}
+.m.you{align-self:flex-end;background:#e6effa;border-color:#b5d4f4} .m.factory{background:#f1efe8;font-size:13.5px} .m.review{background:#eeedfe;border-color:#cecbf6} .m.coordinator{background:#e1f5ee;border-color:#9fe1cb} .dlog{font-size:12px;border-collapse:collapse;margin-top:6px} .dlog td{border-top:1px solid #e5e3da;padding:4px 6px;vertical-align:top}
 .m .who{font-size:11px;color:#888780;margin-bottom:3px} .m pre{white-space:pre-wrap;background:#f7f6f2;padding:8px;border-radius:6px;font-size:12.5px}
 .m code{background:#f1efe8;padding:1px 4px;border-radius:4px;font-size:13px}
 .compose{border-top:1px solid #e6e4dc;padding:12px 22px;background:#fff;display:flex;gap:8px}
@@ -132,9 +135,11 @@ export async function chatView({ taskId, healthy, list = false }) {
       pv && pr ? `<a href="${pv.host(pr)}/app/" target="_blank">preview</a><a href="${pv.host(pr)}/_factory/login" target="_blank">sign in</a><a href="${pv.host(pr)}/_factory/" target="_blank">videos</a>` : '',
       e2e ? `<span>${e2e.failed ? '❌' : '✅'} e2e ${e2e.passed} passed${e2e.failed ? `, ${e2e.failed} failed` : ''}</span>` : '',
       `<span class="hint">${esc(task.status)}${task.costUsd ? ` · $${task.costUsd.toFixed(2)}` : ''}</span>`,
+      task.running && task.status !== 'pausing' ? `<form method="post" action="/t/${task.id}/pause" style="display:inline"><button>Pause</button></form>` : '',
       task.running ? `<form method="post" action="/t/${task.id}/stop" style="display:inline"><button>Stop</button></form>` : '',
     ].join(' ');
-    const msgs = task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : m.from === 'review' ? 'reviewer' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
+    const dl = (task.decisions ?? []).length ? `<details class="m factory"><summary class="who">decision log · ${task.decisions.length} rows</summary><table class="dlog">${task.decisions.map((d) => `<tr><td>${esc(d.phase ?? '')}</td><td>${esc(d.decision ?? '')}<div class="hint">${esc(d.why ?? '')}</div></td><td><code>${esc(d.evidence ?? '')}</code></td><td>${esc(d.result ?? '')}</td></tr>`).join('')}</table></details>` : '';
+    const msgs = dl + task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : m.from === 'coordinator' ? 'coordinator' : m.from === 'review' ? 'reviewer' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
       + (task.running ? `<div class="hint"><span class="dot live"></span> the agent is working${task.activity?.length ? `<div class="activity">${task.activity.slice(-5).map((x) => `${ago(x.at)} · ${esc(x.tool)} · ${esc(x.detail)}`).join('<br>')}</div>` : ''}</div>` : '');
     const placeholder = task.phase === 'brief' && !task.running ? 'Reply to the brief: "go", or your answers' : 'Message the agent…';
     main = `<div class="head"><a href="/?list=1" class="hint back" style="font-size:12px">← tasks</a><h2>${esc(task.title)}</h2><div class="meta">${esc(task.project)} · ${links}</div></div>
@@ -148,6 +153,7 @@ export async function chatView({ taskId, healthy, list = false }) {
       <p class="hint">Describe what you want. The agent replies once with questions (if any), a plan and what "done" means. After your "go" it works until its PR is green, without asking.</p>
       <form method="post" action="/tasks" class="card" style="text-align:left">
         <select name="project">${['contentcoach', 'factory'].map((p) => `<option>${p}</option>`).join('')}</select>
+        <select name="kind"><option value="change">a change</option><option value="report">a bug report (triage)</option><option value="program">a program (phases of PRs)</option></select>
         <textarea name="text" required style="width:100%;min-height:110px;margin:10px 0;font:inherit;padding:9px;border:1px solid #d3d1c7;border-radius:10px" placeholder="e.g. Make the schedule sheet's Save button stay visible on phones"></textarea>
         <label class="hint" style="display:block;margin-bottom:12px"><input type="checkbox" name="auto">skip the brief, start right away</label><button>Start</button></form>
       ${err ? `<p class="pill bad">${esc(err)}</p>` : ''}</div></div>`;

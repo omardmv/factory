@@ -49,23 +49,36 @@ factory runner <name>      # a self-hosted runner for the repo
 ## Agents
 
 `agents/server.mjs` (systemd `factory-agents`) runs each task as Claude Code
-in its own locked-down container, on branch `agent/<task>`:
+in its own locked-down container. The ways of working come from Lauren Tan's
+pstack: never block on the human, a playbook per kind of work and a decision
+log (`agents/playbooks.md`), independent review, an audit trail you read in
+the morning.
 
-1. **Brief** (skipped for issues, queues and "skip brief"): questions, plan,
-   definition of done. You answer once.
-2. **Run**: no questions. The agent pauses only with a `DECISION NEEDED`
-   block (architecture, money, security, a product call) or before something
-   irreversible; everything else it decides and logs in the PR.
-3. **Checks**: `[factory]` reports from the preview + e2e drive it to green.
-4. **Review**: at a green head (or as soon as the PR exists, for a project
-   without previews) a fresh reviewer (`REVIEW_MODEL`, default opus; own
-   session, no GitHub token, no edit tools) reads the PR. PASS = ready for
-   you; CHANGES = back to the agent. At most 6 rounds, then it stops.
+- **change** (branch `agent/<task>`): brief (skipped for issues, queues and
+  "skip brief": questions, plan, definition of done) -> run (playbook: bug,
+  feature, refactor, performance, investigation, large; decision log in
+  `/workspace/decisions.tsv`; pauses only with `DECISION NEEDED` for
+  architecture, money, security or a product call) -> checks (`[factory]`
+  preview + e2e reports) -> review: a fresh reviewer (`REVIEW_MODEL`, own
+  session, no GitHub token, no edit tools) at a green head, or as soon as the
+  PR exists for a project without previews. PASS = ready for you, CHANGES =
+  back to the agent; at most 6 rounds.
+- **report** (benny-style triage): classify, find duplicates, reproduce twice
+  with the repo's own tools, file or update the issue and label it
+  `ready-for-agent` / `ready-for-human` / `needs-info`. A `ready-for-agent`
+  issue then becomes a change by itself.
+- **program** (orchestrate): a coordinator plans phases of independent
+  changes; you approve the plan once ("go"); each phase runs as a batch; when
+  you have merged a phase, the coordinator plans the next from what landed,
+  until `PROGRAM DONE`.
 
-Tasks come from the chat bot or dashboard, from issues labelled
-`ready-for-agent` (polled every 2 minutes, one task per issue), or as a
-queue (`queue:` + one task per line in Telegram; one summary when the
-whole batch has settled). Agents never merge.
+Tasks come from Telegram or the dashboard, from issues labelled
+`ready-for-agent` (change) or `needs-triage` (report; issues already labelled
+when triage first ran are left alone), polled every 2 minutes, or as a queue.
+The queue and the running jobs are on disk: after a restart (every deploy)
+an interrupted job resumes its session, told it was interrupted. `/pause`
+leaves a work-in-progress commit and a resume note. A summary arrives on
+Telegram at 08:00 Tashkent (`/digest` any time). Agents never merge.
 
 ## Commands
 
