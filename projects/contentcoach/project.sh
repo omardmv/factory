@@ -24,3 +24,19 @@ mint_preview() {  # $1 = PR number
   git -C "$CONTENTCOACH_DIR" show origin/dev:e2e/support/mint_login.py |
     ssh vps "docker exec -i cc-pr-$1-api python -" 2> >(grep -v '"web_link_minted"' >&2)
 }
+
+# ---- box side (bin/factory-box) ------------------------------------------
+PREFIX=cc                                  # containers cc-pr-<N>-*, DBs cc_pr_<N>
+SOURCE_DB_CONTAINER=staging-db-1           # read-only pg_dump source
+SOURCE_DB_NAME=contentcoach
+SOURCE_MEDIA_VOLUME=staging_media
+HEALTH_PATH=/app/api/health
+LOGIN_PATH=/app/
+
+# build both images for the checkout in $1 (a contentcoach working tree)
+build_images() {  # $1 checkout dir, $2 tag
+  docker build -q -t "factory/cc-api:$2" "$1/backend" >/dev/null
+  docker build -q -t "factory/cc-web:$2" -f "$PROJECT_DIR/web.Dockerfile" \
+    --build-context factory="$PROJECT_DIR" "$1" >/dev/null
+  IMAGE_API="factory/cc-api:$2"; IMAGE_WEB="factory/cc-web:$2"
+}

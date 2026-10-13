@@ -1,0 +1,25 @@
+server {
+    listen 80;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    root /usr/share/nginx/html;
+    client_max_body_size 64m;
+
+    location = / { return 302 /app/; }
+    location = /app { return 301 /app/; }
+
+    location /app/api/ {
+        set $api ${API_UPSTREAM};
+        rewrite ^/app/api/(.*)$ /api/$1 break;
+        proxy_pass http://$api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $http_x_real_ip;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }
+
+    location /app/ {
+        try_files $uri /app/index.html;
+    }
+}

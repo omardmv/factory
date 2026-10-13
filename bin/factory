@@ -15,7 +15,7 @@ set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
 project="${FACTORY_PROJECT:-contentcoach}"
 if [ "${1:-}" = "-p" ]; then project="$2"; shift 2; fi
-conf="$FACTORY_DIR/projects/$project.sh"
+conf="$FACTORY_DIR/projects/$project/project.sh"
 [ -f "$conf" ] || { echo "unknown project: $project (no $conf)" >&2; exit 2; }
 # shellcheck source=/dev/null
 . "$conf"

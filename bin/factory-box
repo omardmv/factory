@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# factory-box - the preview lifecycle, run ON the VPS (by the CI runner or by
+# hand as root/factory). Touches only factory-owned things: compose projects
+# <prefix>-pr-<N>, databases in the factory-pg container, /srv/factory.
+#
+#   factory-box snapshot <project>                  staging -> <prefix>_snapshot (disarmed) + media
+#   factory-box up   <project> <N> <checkout> <branch>   build + start/refresh PR N's preview
+#   factory-box down <project> <N>                  delete PR N's preview entirely
+#   factory-box reset <project> <N>                 re-copy PR N's DB + media from the snapshot
+#   factory-box ls                                  running previews
+set -euo pipefail
+FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+cmd="${1:-}"; shift || true
+
+die() { echo "factory-box: $*" >&2; exit 1; }
+log() { echo "[$(date -u +%H:%M:%S)] $*" >&2; }
+
+load_project() {
+  project="$1"; PROJECT_DIR="$FACTORY_DIR/projects/$project"
+  [ -f "$PROJECT_DIR/project.sh" ] || die "unknown project $project"
+  # shellcheck source=/dev/null
+  . "$PROJECT_DIR/project.sh"
+}
+
+pg()   { docker exec -i factory-pg-1 psql -v ON_ERROR_STOP=1 -U factory -d "${2:-postgres}" -qAtc "$1"; }
+pgf()  { docker exec -i factory-pg-1 psql -v ON_ERROR_STOP=1 -U factory -d "$1" -q; }
+pgpw() { sed -n 's/^POSTGRES_PASSWORD=//p' /opt/factory/.env; }
+media_root() { echo "/srv/factory/media/$PREFIX"; }
+
+# feature slug from a branch: drop feat/ fix/ ..., lowercase, a-z0-9-, 40 chars
+slug() {
+  local s="${1#*/}"; s="$(printf '%s' "$s" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+  s="${s:0:40}"; s="${s%-}"; printf '%s' "${s:-pr}"
+}
+
+snapshot() {
+  load_project "$1"
+  local next="${PREFIX}_snapshot_next" snap="${PREFIX}_snapshot" old="${PREFIX}_snapshot_old"
+  log "dump $SOURCE_DB_CONTAINER/$SOURCE_DB_NAME"
+  local user; user="$(docker exec "$SOURCE_DB_CONTAINER" printenv POSTGRES_USER)"
+  pg "DROP DATABASE IF EXISTS $next" ; pg "CREATE DATABASE $next"
+  pg "DO \$\$BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='cc_app') THEN CREATE ROLE cc_app NOLOGIN; END IF; END\$\$"
+  docker exec "$SOURCE_DB_CONTAINER" pg_dump -U "$user" -d "$SOURCE_DB_NAME" -Fc --no-owner --no-acl |
+    docker exec -i factory-pg-1 pg_restore -U factory -d "$next" --no-owner --no-acl --exit-on-error
+  log "disarm"
+  pgf "$next" < "$PROJECT_DIR/disarm.sql"
+  # nobody may connect to the template, or CREATE DATABASE ... TEMPLATE refuses
+  pg "DROP DATABASE IF EXISTS $old"
+  if [ "$(pg "SELECT 1 FROM pg_database WHERE datname='$snap'")" = 1 ]; then
+    pg "ALTER DATABASE $snap RENAME TO $old"
+  fi
+  pg "ALTER DATABASE $next RENAME TO $snap"
+  pg "DROP DATABASE IF EXISTS $old"
+  pg "COMMENT ON DATABASE $snap IS 'snapshot of $SOURCE_DB_CONTAINER taken $(date -u +%FT%TZ)'"
+  log "media from volume $SOURCE_MEDIA_VOLUME"
+  mkdir -p "$(media_root)/snapshot"
+  docker run --rm -v "$SOURCE_MEDIA_VOLUME:/src:ro" -v "$(media_root):/dst" alpine:3.20 \
+    sh -c 'apk add -q rsync >/dev/null && rsync -a --delete /src/ /dst/snapshot/'
+  log "snapshot ready: $snap"
+}
+
+copy_data() {  # N
+  local db="${PREFIX}_pr_$1"
+  [ "$(pg "SELECT 1 FROM pg_database WHERE datname='${PREFIX}_snapshot'")" = 1 ] ||
+    die "no snapshot yet: run factory-box snapshot $project"
+  pg "DROP DATABASE IF EXISTS $db WITH (FORCE)"
+  pg "CREATE DATABASE $db TEMPLATE ${PREFIX}_snapshot"
+  # hardlinks: instant and free; the app only ever writes new files
+  docker run --rm -v "$(media_root):/m" alpine:3.20 sh -c "rm -rf /m/pr-$1 && cp -al /m/snapshot /m/pr-$1"
+}
+
+up() {
+  load_project "$1"; local n="$2" checkout="$3" branch="${4:-pr}"
+  [ -d "$checkout" ] || die "no checkout at $checkout"
+  local host; host="$(slug "$branch")-pr$n.$DOMAIN"
+  log "build images for PR $n"
+  build_images "$checkout" "pr-$n"
+  if [ "$(pg "SELECT 1 FROM pg_database WHERE datname='${PREFIX}_pr_$n'")" != 1 ]; then
+    log "first push: copy data"; copy_data "$n"
+  fi
+  local secret_file="/srv/factory/state/$PREFIX-pr-$n.secret"
+  mkdir -p /srv/factory/state
+  [ -s "$secret_file" ] || (umask 077; openssl rand -hex 32 > "$secret_file")
+  log "start cc-pr-$n at https://$host"
+  PR="$n" IMAGE_API="$IMAGE_API" IMAGE_WEB="$IMAGE_WEB" PREVIEW_HOST="$host" \
+  DB_URL="postgresql+asyncpg://factory:$(pgpw)@factory-pg-1:5432/${PREFIX}_pr_$n" \
+  MEDIA_DIR="$(media_root)/pr-$n" SESSION_SECRET="$(cat "$secret_file")" \
+    docker compose -f "$PROJECT_DIR/preview.compose.yaml" up -d --wait --remove-orphans >&2
+  printf '%s\n' "$host" > "/srv/factory/state/$PREFIX-pr-$n.host"
+  local code
+  code="$(docker exec factory-gateway-1 wget -qS -O /dev/null --header "Host: $host" "http://127.0.0.1$HEALTH_PATH" 2>&1 | awk '/HTTP\//{print $2}' | tail -1)"
+  [ "$code" = 200 ] || die "preview is up but $HEALTH_PATH answered ${code:-nothing} through the gateway"
+  log "ready"
+  echo "https://$host$LOGIN_PATH"
+}
+
+down() {
+  load_project "$1"; local n="$2"
+  docker compose -p "$PREFIX-pr-$n" down --remove-orphans -t 10 >&2 2>/dev/null || true
+  pg "DROP DATABASE IF EXISTS ${PREFIX}_pr_$n WITH (FORCE)"
+  docker run --rm -v "$(media_root):/m" alpine:3.20 rm -rf "/m/pr-$n"
+  rm -rf "/srv/factory/artifacts/$PREFIX/pr-$n" "/srv/factory/state/$PREFIX-pr-$n".*
+  docker image rm "factory/$PREFIX-api:pr-$n" "factory/$PREFIX-web:pr-$n" >/dev/null 2>&1 || true
+  log "PR $n deleted"
+}
+
+case "$cmd" in
+  snapshot) [ $# -eq 1 ] || die "usage: snapshot <project>"; snapshot "$1" ;;
+  up)       [ $# -ge 3 ] || die "usage: up <project> <N> <checkout> [branch]"; up "$@" ;;
+  down)     [ $# -eq 2 ] || die "usage: down <project> <N>"; down "$@" ;;
+  reset)    [ $# -eq 2 ] || die "usage: reset <project> <N>"; load_project "$1"
+            docker compose -p "$PREFIX-pr-$2" stop -t 10 >&2; copy_data "$2"
+            docker compose -p "$PREFIX-pr-$2" start >&2 ;;
+  ls)       docker ps --filter name=-pr- --format '{{.Names}}\t{{.Status}}' | sort; ls /srv/factory/state 2>/dev/null ;;
+  *)        sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; [ -z "$cmd" ] || exit 2 ;;
+esac
