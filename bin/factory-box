@@ -277,6 +277,8 @@ self_update() {
   done < "$FACTORY_DIR/box/coolify/factory-apps"
   install -m 644 "$FACTORY_DIR/box/gateway/nginx.conf" /opt/factory/gateway/default.conf
   install -m 644 "$FACTORY_DIR/box/factory.cron" /etc/cron.d/factory
+  # host services that run straight from this checkout
+  if printf '%s\n' "$changed" | grep -q "^agents/"; then systemctl restart factory-agents && log "factory-agents restarted"; fi
   # the functions in memory are the old ones: sync with the script just pulled
   exec "$FACTORY_DIR/bin/factory-box" sync
 }

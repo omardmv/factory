@@ -174,7 +174,7 @@ createServer(async (req, res) => {
       return send(303, '', { location: '/' });
     }
     if (url.pathname === '/health') return send(200, (await dashboard()).replace('<header><h1>Factory</h1>', '<header><h1><a href="/" style="color:inherit">Factory</a> · health</h1>'));
-    if (url.pathname === '/') return send(200, appPage('Factory', await chatView({ taskId: url.searchParams.get('task'), healthy: healthy() })));
+    if (url.pathname === '/') return send(200, appPage('Factory', await chatView({ taskId: url.searchParams.get('task'), healthy: healthy(), list: url.searchParams.get('list') === '1' })));
     if (url.pathname === '/tasks' && req.method === 'POST') {
       const f = await readForm(req);
       if (!fromUs(req) || !['contentcoach', 'factory'].includes(f.project) || !String(f.text ?? '').trim()) return send(400, 'bad request');

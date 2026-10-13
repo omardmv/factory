@@ -35,6 +35,17 @@ const load = (id) => JSON.parse(readFileSync(`${dir(id)}/task.json`, 'utf8'));
 const save = (t) => { t.updatedAt = new Date().toISOString(); writeFileSync(`${dir(t.id)}/task.json`, JSON.stringify(t, null, 1)); };
 const say = (id, from, text, extra = {}) => appendFileSync(`${dir(id)}/messages.jsonl`, JSON.stringify({ at: new Date().toISOString(), from, text, ...extra }) + '\n');
 const messages = (id) => existsSync(`${dir(id)}/messages.jsonl`) ? readFileSync(`${dir(id)}/messages.jsonl`, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+// the last few things the agent did (tool calls), newest last
+function activity(id, n = 8) {
+  const f = `${dir(id)}/activity.log`;
+  if (!existsSync(f)) return [];
+  return readFileSync(f, 'utf8').trim().split('\n').slice(-n).map((l) => {
+    const [at, tool, ...rest] = l.split(' ');
+    let detail = rest.join(' ');
+    try { const i = JSON.parse(detail); detail = i.description ?? i.command ?? i.file_path ?? i.pattern ?? i.url ?? detail; } catch {}
+    return { at, tool, detail: String(detail).slice(0, 140) };
+  });
+}
 const allTasks = () => readdirSync(`${HOME}/tasks`).filter((d) => existsSync(`${dir(d)}/task.json`)).map(load).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
 // ---------- GitHub App: a one-hour installation token per run ----------
@@ -164,10 +175,10 @@ const handler = async (req, res) => {
     const m = url.pathname.match(/^\/tasks(?:\/([\w-]+))?(?:\/(messages|stop))?$/);
     if (!m) return send(404, { error: 'not found' });
     const [, id, sub] = m;
-    if (!id && req.method === 'GET') return send(200, allTasks().map((t) => ({ ...t, running: running.has(t.id) })));
+    if (!id && req.method === 'GET') return send(200, allTasks().map((t) => ({ ...t, running: running.has(t.id), lastActivity: running.has(t.id) ? activity(t.id, 1)[0] ?? null : null, lastAgent: messages(t.id).filter((m) => m.from === 'agent').at(-1)?.text ?? '' })));
     if (!id && req.method === 'POST') { const b = await body(req); return send(201, createTask(b.project, String(b.text ?? '').trim(), !!b.auto)); }
     if (!existsSync(`${dir(id)}/task.json`)) return send(404, { error: 'no such task' });
-    if (!sub && req.method === 'GET') return send(200, { ...load(id), running: running.has(id), messages: messages(id) });
+    if (!sub && req.method === 'GET') return send(200, { ...load(id), running: running.has(id), messages: messages(id), activity: activity(id) });
     if (sub === 'messages' && req.method === 'POST') { const b = await body(req); return send(200, post(id, b.from === 'factory' ? 'factory' : 'you', String(b.text ?? '').trim())); }
     if (sub === 'stop' && req.method === 'POST') { if (containers.has(id)) spawn('docker', ['kill', containers.get(id)], { stdio: 'ignore' }); running.get(id)?.kill('SIGTERM'); const t = load(id); t.status = 'stopped'; save(t); say(id, 'factory', '[factory] stopped by you.'); return send(200, t); }
     return send(405, { error: 'method not allowed' });

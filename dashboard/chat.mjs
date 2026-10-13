@@ -2,6 +2,7 @@
 // project, with each task's PR / preview / e2e pinned on top. Talks to
 // factory-agents server-side; the browser never sees its token.
 import { readFileSync } from 'node:fs';
+import { shipped, deploys, openPrs } from './github.mjs';
 
 const AGENTS = process.env.AGENTS_API ?? 'http://172.24.0.1:19300';
 const ARTIFACTS = process.env.ARTIFACTS_DIR ?? '/srv/factory/artifacts';
@@ -34,6 +35,45 @@ function e2eFor(project, pr) {
   try { const s = JSON.parse(readFileSync(`${ARTIFACTS}/${p.prefix}/pr-${pr}/latest/report.json`, 'utf8')).run.summary; return s; } catch { return null; }
 }
 
+const STATE = process.env.STATE_DIR ?? '/srv/factory/state';
+const settle = async (p, fallback) => { try { return await p; } catch (e) { return { error: e.message, fallback }; } };
+const card = (body, href, label = 'view more →', ext = false) => `<div class="ov">${body}${href ? `<a class="more" href="${href}"${ext ? ' target="_blank" rel="noopener"' : ''}>${label}</a>` : ''}</div>`;
+const quick = (id) => `<form method="post" action="/t/${id}/reply" class="qa"><input type="hidden" name="text" value="go"><button>Go</button></form>
+  <form method="post" action="/t/${id}/reply" class="qa"><input type="hidden" name="text" value="go. Skip any questions and use your best judgment; log the decisions."><button>Go without questions</button></form>`;
+
+async function overview(tasks, healthy) {
+  let facts = {}; try { facts = JSON.parse(readFileSync(`${STATE}/status.json`, 'utf8')); } catch {}
+  const [prs, ship, dep] = await Promise.all([settle(openPrs()), settle(shipped()), settle(deploys())]);
+  const working = tasks.filter((t) => t.running);
+  const needYou = tasks.filter((t) => !t.running && t.status === 'waiting for you');
+  const live = Array.isArray(prs) ? prs : [];
+  const head = `<div class="big">${working.length} agent${working.length === 1 ? '' : 's'} working · ${needYou.length} waiting for you · ${live.length} preview${live.length === 1 ? '' : 's'} live</div>
+    <div class="hint">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● the factory needs a look</span>'} · disk ${facts.disk_used_pct ?? '?'}% · data snapshot ${(facts.snapshots ?? []).map((x) => { const t = (x.note.match(/taken (\S+)/) ?? [])[1]; return t ? ago(t) + ' old' : '?'; }).join(', ')} · <a href="/health">health →</a> <a class="back" href="/?list=1">· all tasks →</a></div>`;
+
+  const needs = needYou.map((t) => card(`<b>${esc(t.title)}</b><div class="hint">${esc(t.project)} · ${t.phase === 'brief' ? 'brief ready' : 'stopped, needs you'} · ${ago(t.updatedAt)}</div>
+    <div class="snip">${esc((t.lastAgent ?? '').slice(0, 260))}</div>${t.phase === 'brief' ? `<div class="row">${quick(t.id)}</div>` : ''}`, `/?task=${t.id}`, 'open chat →')).join('') || '<div class="hint pad">Nothing waits for you.</div>';
+
+  const work = working.map((t) => card(`<span class="dot live"></span> <b>${esc(t.title)}</b><div class="hint">${esc(t.project)}${t.pr ? ` · PR #${t.pr.number}` : ''}${t.lastActivity ? ` · ${esc(t.lastActivity.tool)}: ${esc(t.lastActivity.detail)} · ${ago(t.lastActivity.at)} ago` : ''}</div>`, `/?task=${t.id}`, 'open chat →')).join('') || '<div class="hint pad">No agent is working right now. <a href="/?task=new">Start one →</a></div>';
+
+  const previews = live.map((p) => {
+    const e = e2eFor('contentcoach', p.number), host = PREVIEW.contentcoach.host(p.number);
+    const agentTask = p.branch.startsWith('agent/') ? p.branch.slice(6) : null;
+    return card(`<b>#${p.number}</b> ${esc(p.title)}<div class="hint">${esc(p.author ?? '')} · ${ago(p.at)} · ${e ? (e.failed ? `❌ e2e ${e.failed} failed` : `✅ e2e ${e.passed}`) : 'no e2e yet'}</div>
+      <div class="row links"><a href="${host}/app/" target="_blank">open</a><a href="${host}/_factory/login" target="_blank">sign in</a><a href="${host}/_factory/" target="_blank">videos</a>${agentTask ? `<a href="/?task=${agentTask}">agent chat</a>` : ''}</div>`, p.url, 'PR on GitHub →', true);
+  }).join('') || `<div class="hint pad">${prs?.error ? esc(prs.error) : 'No open pull requests.'}</div>`;
+
+  const shippedHtml = Array.isArray(ship) && ship.length ? ship.map((p) => `<li><a href="${p.url}" target="_blank">#${p.number} ${esc(p.title)}</a> <span class="hint">· ${esc(p.author ?? '')} · ${ago(p.at)} ago</span></li>`).join('') : `<li class="hint">${ship?.error ? esc(ship.error) : 'Nothing merged this week.'}</li>`;
+  const depHtml = Array.isArray(dep) && dep.length ? dep.map((d) => `<li>${d.status !== 'completed' ? '<span class="dot live"></span>' : d.conclusion === 'success' ? '✅' : d.conclusion === 'cancelled' ? '⏹' : '❌'} <b>${d.env}</b> <a href="${d.url}" target="_blank">${esc(d.title)}</a> <span class="hint">· ${d.sha} · ${ago(d.at)} ago</span></li>`).join('') : `<li class="hint">${dep?.error ? esc(dep.error) : 'No deploys found.'}</li>`;
+
+  return `<div class="overview">${head}
+    <h3>Needs you</h3>${needs}
+    <h3>Agents at work</h3>${work}
+    <h3>Live previews</h3><div class="grid2">${previews}</div>
+    <div class="grid2"><div><h3>Shipped to dev · 7 days</h3><ul class="list">${shippedHtml}</ul><a class="more" href="https://github.com/contentcoach/contentcoach/pulls?q=is%3Apr+is%3Amerged+base%3Adev" target="_blank">all merged →</a></div>
+    <div><h3>Deploys</h3><ul class="list">${depHtml}</ul><a class="more" href="https://github.com/contentcoach/contentcoach/actions" target="_blank">all runs →</a></div></div>
+  </div>`;
+}
+
 export const chatCss = `
 .app{display:grid;grid-template-columns:280px minmax(0,1fr);min-height:100vh}
 *{box-sizing:border-box} input[type=checkbox]{width:auto;margin-right:6px;vertical-align:middle}
@@ -56,12 +96,21 @@ export const chatCss = `
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:none} .dot.live{background:#378add;animation:p 1.4s infinite}
 .dot.you{background:#ef9f27} .dot.wait{background:#b4b2a9} .dot.off{background:#d3d1c7} .dot.done{width:auto;height:auto;background:none;color:#0f6e56;font-size:12px}
 @keyframes p{50%{opacity:.35}}
+.overview{padding:22px 28px;max-width:1100px;overflow:auto} .overview .big{font-size:26px;font-weight:500;margin:0 0 4px}
+.overview h3{font-size:13px;font-weight:500;color:#5f5e5a;margin:26px 0 8px;text-transform:uppercase;letter-spacing:.04em}
+.ov{background:#fff;border:1px solid #e6e4dc;border-radius:12px;padding:12px 14px;margin:8px 0;position:relative}
+.ov .more,.more{font-size:13px;display:inline-block;margin-top:6px} .ov .snip{font-size:13.5px;color:#444441;margin-top:6px;white-space:pre-wrap}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:0 18px} .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.links a{font-size:13px} .list{list-style:none;padding:0;margin:0} .list li{padding:6px 0;border-bottom:1px solid #efede6;font-size:14px}
+.pad{padding:6px 2px} form.qa{display:inline} form.qa button{background:#1f1f1d;color:#fff;border-color:#1f1f1d}
+.main{height:100vh} .activity{font-size:12.5px;color:#5f5e5a;background:#f7f6f2;border-radius:8px;padding:8px 10px;margin-top:8px;font-family:ui-monospace,Menlo,monospace}
+.actions{display:flex;gap:8px;padding:8px 22px 0;background:#fff;border-top:1px solid #e6e4dc}
 .hint{color:#888780;font-size:13px} .empty{margin:auto;text-align:center;color:#5f5e5a;max-width:420px}
 select,input[type=text]{font:inherit;padding:8px 10px;border:1px solid #d3d1c7;border-radius:8px}
 a.back{display:none}
 @media (max-width:760px){a.back{display:inline}.app{grid-template-columns:minmax(0,1fr)}.side{border-right:none}.app.has-task .side{display:none}.app:not(.has-task) .main{display:none}}`;
 
-export async function chatView({ taskId, facts, healthy }) {
+export async function chatView({ taskId, healthy, list = false }) {
   let tasks = [], task = null, err = '';
   try { tasks = await agents('/tasks'); if (taskId && taskId !== 'new') task = await agents(`/tasks/${encodeURIComponent(taskId)}`); }
   catch (e) { err = e.message; }
@@ -83,13 +132,16 @@ export async function chatView({ taskId, facts, healthy }) {
       task.running ? `<form method="post" action="/t/${task.id}/stop" style="display:inline"><button>Stop</button></form>` : '',
     ].join(' ');
     const msgs = task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
-      + (task.running ? '<div class="hint">● the agent is working…</div>' : '');
+      + (task.running ? `<div class="hint"><span class="dot live"></span> the agent is working${task.activity?.length ? `<div class="activity">${task.activity.slice(-5).map((x) => `${ago(x.at)} · ${esc(x.tool)} · ${esc(x.detail)}`).join('<br>')}</div>` : ''}</div>` : '');
     const placeholder = task.phase === 'brief' && !task.running ? 'Reply to the brief: "go", or your answers' : 'Message the agent…';
-    main = `<div class="head"><a href="/" class="hint back" style="font-size:12px">← tasks</a><h2>${esc(task.title)}</h2><div class="meta">${esc(task.project)} · ${links}</div></div>
+    main = `<div class="head"><a href="/?list=1" class="hint back" style="font-size:12px">← tasks</a><h2>${esc(task.title)}</h2><div class="meta">${esc(task.project)} · ${links}</div></div>
       <div class="msgs" id="msgs" data-task="${task.id}" data-n="${task.messages.length}" data-running="${task.running}">${msgs}</div>
+      ${task.phase === 'brief' && !task.running ? `<div class="actions">${quick(task.id)}</div>` : ''}
       <form class="compose" method="post" action="/t/${task.id}/reply"><textarea name="text" placeholder="${placeholder}" required></textarea><button>Send</button></form>`;
+  } else if (taskId !== 'new') {
+    main = await overview(tasks, healthy);
   } else {
-    main = `<div class="msgs"><div class="empty"><a href="/" class="hint back" style="font-size:12px">← tasks</a><h2 style="font-weight:500">New task</h2>
+    main = `<div class="msgs"><div class="empty"><a href="/?list=1" class="hint back" style="font-size:12px">← tasks</a><h2 style="font-weight:500">New task</h2>
       <p class="hint">Describe what you want. The agent replies once with questions (if any), a plan and what "done" means. After your "go" it works until its PR is green, without asking.</p>
       <form method="post" action="/tasks" class="card" style="text-align:left">
         <select name="project">${['contentcoach', 'factory'].map((p) => `<option>${p}</option>`).join('')}</select>
@@ -97,7 +149,7 @@ export async function chatView({ taskId, facts, healthy }) {
         <label class="hint" style="display:block;margin-bottom:12px"><input type="checkbox" name="auto">skip the brief, start right away</label><button>Start</button></form>
       ${err ? `<p class="pill bad">${esc(err)}</p>` : ''}</div></div>`;
   }
-  const html = `<div class="app ${task || taskId === 'new' ? 'has-task' : ''}"><aside class="side"><h1>Factory</h1><a class="newbtn" href="/?task=new">+ New task</a>${side || '<p class="hint">No tasks yet.</p>'}
+  const html = `<div class="app ${list ? '' : 'has-task'}"><aside class="side"><h1><a href="/" style="color:inherit;text-decoration:none">Factory</a></h1><a class="newbtn" href="/?task=new">+ New task</a>${side || '<p class="hint">No tasks yet.</p>'}
     <div class="health">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● needs a look</span>'} · <a href="/health">health</a> · <a href="/logout">sign out</a></div></aside>
     <section class="main">${main}</section></div>
     <script>

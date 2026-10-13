@@ -1,6 +1,6 @@
 ---
 name: factory-browse
-description: Look at and talk to a running ContentCoach environment (staging, or a PR preview at <feature>-pr<N>.contentcoach.org) as a signed-in user - call its API with auth, take screenshots at phone or desktop width, or drive a live browser (tester-army e2e) to click through a flow and record a video. Use when checking a change on staging or a preview, reproducing a UI bug, verifying an API response, or producing a screenshot/video for a PR.
+description: Look at and talk to a running ContentCoach environment (staging, or a PR preview at pr<N>.contentcoach.org) as a signed-in user - call its API with auth, take screenshots at phone or desktop width, or drive a live browser (tester-army e2e) to click through a flow and record a video. Use when checking a change on staging or a preview, reproducing a UI bug, verifying an API response, or producing a screenshot/video for a PR.
 ---
 
 # factory-browse
@@ -13,10 +13,9 @@ Two tools, both signed in as the founder's staging account (human
 - **e2e MCP live browser** (tester-army, `mcp__e2e__*` tools): click, type,
   navigate, observe, screenshot, record video. For flows with several steps.
 
-`<target>` is `staging` or a PR number (`458`). A preview's hostname is
-`<feature>-pr<N>.contentcoach.org`; routing only reads the number, so any
-`<anything>-pr458` reaches PR 458. Previews arrive with factory phase 2;
-until then only `staging` has an app behind it.
+`<target>` is `staging` or a PR number (`458`). A preview is a Coolify
+sandbox at `pr<N>.contentcoach.org` (containers `api-<coolify id>-pr-<N>`,
+`web-…`, `login-…` on the box); it exists while the PR is open.
 
 ## API calls
 
