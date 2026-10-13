@@ -164,8 +164,7 @@ server {
     server_tokens off;
     add_header X-Robots-Tag "noindex, nofollow" always;
     add_header X-Content-Type-Options nosniff always;
-    auth_basic "factory preview";
-    auth_basic_user_file /opt/factory/htpasswd;
+    include /opt/factory/src/box/nginx-factory-auth.inc;
     client_max_body_size 64m;
     location / {
         proxy_pass http://127.0.0.1:19100;
@@ -192,8 +191,7 @@ server {
     server_tokens off;
     add_header X-Robots-Tag "noindex, nofollow" always;
     add_header X-Content-Type-Options nosniff always;
-    auth_basic "factory sandbox";
-    auth_basic_user_file /opt/factory/htpasswd;
+    include /opt/factory/src/box/nginx-factory-auth.inc;
     client_max_body_size 64m;
     # e2e videos and reports live with the factory, not in the sandbox
     location ^~ /_factory/ {
