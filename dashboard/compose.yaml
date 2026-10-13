@@ -19,6 +19,12 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    # reaches Coolify's API as http://coolify:8080 (Coolify's own network)
+    networks: [default, coolify]
     mem_limit: 128m
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+
+networks:
+  coolify:
+    external: true

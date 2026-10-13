@@ -118,13 +118,13 @@ async function dashboard() {
   const tile = (label, value, ok = true) => `<div class="tile"><b>${esc(label)}</b>${ok ? esc(value) : `<span class="pill bad">${esc(value)}</span>`}</div>`;
   const okWord = (s) => ['active', 'running', 'healthy'].includes(s);
   const tiles = [
-    tile('Snapshot', (facts.snapshots ?? []).map((s) => s.note.replace(/^snapshot of /, '')).join(' · ') || 'none yet'),
+    tile('Data snapshot', (facts.snapshots ?? []).map((s) => { const t = (s.note.match(/taken (\S+)/) ?? [])[1]; return `${s.project}: ${t ? ago(t) : s.note}`; }).join(' · ') || 'none yet'),
     tile('Runners', `${(facts.runners ?? []).filter((r) => r.active === 'active').length} of ${(facts.runners ?? []).length} online`, (facts.runners ?? []).every((r) => r.active === 'active')),
     ...Object.entries(services).map(([k, s]) => tile(k.replace(/_/g, ' '), s, okWord(s))),
     tile('Disk', `${facts.disk_used_pct ?? '?'}% used`, (facts.disk_used_pct ?? 0) < 85),
     tile('Memory free', `${facts.mem_available_gb ?? '?'} GB`),
     tile('gVisor', facts.gvisor || 'not installed'),
-    tile('Factory version', facts.factory_commit ?? '?'),
+    tile('Factory version', (facts.factory_commit ?? '?').slice(0, 7)),
   ].join('');
 
   return page('Factory', `
