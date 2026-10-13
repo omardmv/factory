@@ -193,6 +193,15 @@ server {
     auth_basic "factory sandbox";
     auth_basic_user_file /opt/factory/htpasswd;
     client_max_body_size 64m;
+    # e2e videos and reports live with the factory, not in the sandbox
+    location ^~ /_factory/ {
+        proxy_pass http://127.0.0.1:19100;
+        proxy_set_header Host \$host;
+    }
+    location = /_factory/login {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_set_header Host \$host;
+    }
     location / {
         proxy_pass http://127.0.0.1:18080;
         proxy_set_header Host \$host;
