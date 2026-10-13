@@ -66,7 +66,7 @@ push to PR branch
        ├─ factory e2e contentcoach 123  → videos + report to /srv/factory/artifacts/…
        └─ factory comment               → one PR comment, edited on every push
 PR closed/merged ─▶ factory down contentcoach 123 (containers, DB, media, artifacts)
-nightly ─▶ factory snapshot contentcoach (prod → cc_snapshot, disarmed) + factory gc
+nightly ─▶ factory snapshot contentcoach (staging → cc_snapshot, disarmed) + factory gc
 ```
 
 ## Routing: one DNS record, then nothing per PR
@@ -98,27 +98,31 @@ per open PR.
 
 `CREATE DATABASE … TEMPLATE` refuses a template with open connections,
 which is why the snapshot is a database nothing ever connects to.
-At 2.9 GB a copy takes seconds on this disk.
+At 137 MB a copy takes under a second.
 
 ### Nightly snapshot (`factory snapshot contentcoach`)
 
-1. `pg_dump -Fc` of prod (read-only, from the prod db container).
+1. `pg_dump -Fc` of **staging** (read-only, from `staging-db-1`). Staging,
+   not prod: the founder works on staging with their own account
+   (`1000000000000001`), which on prod is a different, real creator, so a
+   prod copy would sign them in as someone else (founder 2026-10-13).
 2. Restore into `cc_snapshot_next` in `factory-pg`.
 3. **Disarm** (see below).
 4. Swap: rename `cc_snapshot` → `cc_snapshot_old`, `next` → `cc_snapshot`,
    drop old. Previews already running keep their own copy.
-5. Media: `rsync -a --link-dest` from the prod volume into
-   `/srv/factory/media/contentcoach/snapshot`: hardlinks, so 57 GB costs
+5. Media: `rsync -a --link-dest` from the `staging_media` volume (1.3 GB)
+   into `/srv/factory/media/contentcoach/snapshot`: hardlinks, so it costs
    nothing new and a run takes seconds after the first.
 
-Founder decision 2026-10-13: real data is fine, no anonymizing.
+Founder decision 2026-10-13: real data is fine, no anonymizing. Staging is
+never refreshed from prod (it holds the founder's working account).
 
 ### Disarm: real data, no real side effects
 
 Offline mode (`composition.build(offline=True)`) swaps in fakes for the
 model, scraper, downloader, understanding and embedding, but **not** for
-Telegram delivery or payments. A copy of prod with real card tokens and
-real Telegram ids is a loaded gun. Disarm runs on every snapshot, in SQL,
+Telegram delivery or payments. Staging runs `PAYLOV_CARDS_LIVE=true`, so its
+copy can hold real card tokens and real Telegram ids: a loaded gun. Disarm runs on every snapshot, in SQL,
 before anything can connect:
 
 | What | Action |
@@ -126,13 +130,14 @@ before anything can connect:
 | `jobs` | delete everything not finished (no inherited renewals, refreshes, deliveries) |
 | `paylov_cards` | null the card tokens; previews can never charge a real card |
 | `billing` / LS subscription ids | keep the rows (plans still show), but previews get no LS/Paylov keys |
-| `connect_tokens`, `web_login_tokens` | delete (prod sign-in links must not work on previews) |
+| `connect_tokens`, `web_login_tokens` | delete (staging sign-in links must not work on previews) |
 | OAuth tokens (Google, LinkedIn integrations) | delete |
 | `scheduled_posts` | keep the rows, no worker can post them (no keys) |
 
 On top of that, the preview **env is an allowlist**, not a copy of
 staging's env: no Telegram bot token, no Paylov/LS/Apify/Gemini keys, no
-PostHog write key unless we decide previews should record (see below).
+PostHog key (founder 2026-10-13: previews are recorded by the e2e runner
+only).
 A service with no key fails closed. The exact table and column list is
 fixed in the implementation PR by reading `tables.py`, and a
 `factory doctor` check refuses to start a preview if a known secret
@@ -155,9 +160,8 @@ column is non-null in its database.
 Data made in a preview is thrown away with the PR. Merging preview data
 back into staging collides on ids, carries columns of PRs that never
 merged, and fills staging with test junk. Data worth keeping becomes a
-seed or scenario script in the PR. Staging stays current by the nightly
-copy from prod, not from previews. (Refreshing *staging itself* from prod
-is a separate later decision; see open questions.)
+seed or scenario script in the PR. Staging stays what the founder makes
+it on staging itself; previews only ever read a copy of it.
 
 ## The preview stack (ContentCoach)
 
@@ -170,7 +174,18 @@ Compose project `cc-pr-<n>` on the `factory` network:
 | `work` | one `cc work` (its own DB, so it can't eat staging's jobs) |
 | `web` | nginx serving the branch's SPA build + `/app/api` → `api`, the same paths prod uses |
 
-No bot (web only, founder 2026-10-13), no admin, no webhook. Memory and CPU
+No bot (web only, founder 2026-10-13), no admin, no webhook.
+
+### Real model: only when necessary
+
+Every preview runs offline ($0) by default. A PR that can't be judged
+without the real model (prompt or coach-behaviour work) gets the `live`
+label: `factory up` then adds the Gemini key (and Apify only if the
+project's `live.keys` lists it) and the preview runs `offline=False`.
+Before switching on, it checks the day's spend across dev + staging +
+previews against the $10/day testing cap (Tashkent day) and refuses
+past it. Removing the label goes back to offline on the next push. The
+e2e suite stays model-free either way. Memory and CPU
 limits per container; at most 15 previews running, the rest queue.
 
 ### Signing in
@@ -195,12 +210,9 @@ basic auth anyway.
   runs per PR are kept.
 - Which tests: the whole model-free suite. Tests seed their own synthetic
   users in the preview DB, so they don't depend on what's in the snapshot.
-- Your own clicking around: PostHog session replay already records the
-  web app and tags every session with `$host`, so filtering PostHog by
-  `$host = pr-123-preview.contentcoach.org` shows exactly that preview's
-  sessions. That needs a PostHog key in the preview env, and those
-  sessions then sit next to real users' in the same project. Default: on,
-  filtered out of product dashboards by `$host`.
+- No PostHog on previews (founder 2026-10-13): the only recordings are the
+  e2e runner's (tester-army) videos. The preview's web build gets no
+  PostHog key, so it records nothing.
 
 ## The PR comment
 
@@ -211,7 +223,7 @@ Preview  https://pr-123-preview.contentcoach.org/app   (ready, sha 1a2b3c4)
 Sign in  <24h link>
 E2E      41 passed, 1 failed → https://pr-123-preview.contentcoach.org/_factory/
          ✗ web-entry › connect › keeps the round      ▶ video  ▶ trace
-Data     copied from prod snapshot of 2026-10-13 03:00 (Tashkent)
+Data     copied from staging snapshot of 2026-10-13 03:00 (Tashkent)
 ```
 
 Posted with a fine-grained token (the runner's `GITHUB_TOKEN` works for
@@ -239,7 +251,7 @@ agents push. Limits:
 - the runner is its own Linux user `factory`, not root, ephemeral (fresh
   for every job, systemd restarts it);
 - it can read nothing in `/opt/contentcoach`, `/opt/contentcoach-staging`
-  or the prod/staging docker volumes; prod dump access goes through one
+  or the prod/staging docker volumes; staging dump access goes through one
   root-owned script the runner may run with `sudo` (sudoers allows exactly
   that path);
 - docker group membership is effectively root, so later we move to rootless
@@ -266,7 +278,7 @@ agents push. Limits:
    `pr-0-preview.contentcoach.org`.
 2. **Previews**: `factory up/down`, snapshot + disarm, ContentCoach's
    `.factory/preview.yml`, PR comment with URL + sign-in link. Proof: a
-   real PR opens, signs in, shows prod-copied data, closes clean.
+   real PR opens, signs in as the founder's staging account, closes clean.
 3. **E2E + recordings**: `preview` target, `factory e2e`, `/_factory/`
    gallery. Proof: a PR comment with playing videos.
 4. **CI moves home**: `ci.yml` on the self-hosted runner, GitHub-hosted
@@ -274,14 +286,11 @@ agents push. Limits:
 5. **Second project** (sayra or satstation): whatever turned out to be
    ContentCoach-specific gets fixed here.
 
-## Open questions
+## Decided 2026-10-13
 
-1. Refresh **staging** from prod nightly too, or leave staging as is? (The
-   founder's staging account `1000000000000001` is a real creator on prod,
-   so a refresh overwrites the staging account with that creator's data.)
-2. Previews with a real model, behind a `live` label (Gemini, $10/day cap)?
-   Default is offline for every preview.
-3. PostHog on previews: on (filtered by `$host`) or off?
+1. Staging is not refreshed from prod; previews copy staging.
+2. Real model only behind the `live` label, when a PR truly needs it.
+3. No PostHog on previews; tester-army e2e videos are the recordings.
 
 ## One-time DNS step (founder)
 
