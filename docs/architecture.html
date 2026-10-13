@@ -8,193 +8,257 @@
   .h { font-size:22px; fill:#222; }
   .t { font-size:17px; fill:#333; }
   .s { font-size:15px; fill:#666; }
-  .p { fill:#7a4bd1; } .g { fill:#0f8a6a; } .r { fill:#c0392b; } .b { fill:#2b6cb0; } .o { fill:#b7651a; }
+  .m { font-family: ui-monospace, Menlo, monospace; font-size:13px; fill:#444; }
+  .p { fill:#7a4bd1; } .g { fill:#0f8a6a; } .r { fill:#c0392b; } .b { fill:#2b6cb0; } .o { fill:#b7651a; } .k { fill:#4b4b9a; }
   .frame { fill:none; stroke:#9a9a9a; stroke-width:1.4; stroke-dasharray:6 5; }
   .arr { stroke:#333; stroke-width:1.8; fill:none; marker-end:url(#a); }
   .arrR { stroke:#c0392b; stroke-width:1.5; fill:none; stroke-dasharray:5 4; marker-end:url(#ar); }
   .arrG { stroke:#0f8a6a; stroke-width:1.6; fill:none; marker-end:url(#ag); }
+  .arrB { stroke:#2b6cb0; stroke-width:1.6; fill:none; marker-end:url(#ab); }
 </style></head><body>
-<svg width="1900" height="1180" viewBox="0 0 1900 1180" xmlns="http://www.w3.org/2000/svg">
+<svg width="1900" height="1560" viewBox="0 0 1900 1560" xmlns="http://www.w3.org/2000/svg">
 <defs>
   <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#333" stroke-width="1.6"/></marker>
   <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#c0392b" stroke-width="1.6"/></marker>
   <marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#0f8a6a" stroke-width="1.6"/></marker>
+  <marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#2b6cb0" stroke-width="1.6"/></marker>
 </defs>
 
 <text class="title" x="30" y="74">The Software Factory</text>
-<text class="s" x="34" y="106">every pull request becomes a live preview, tested and recorded, on our own server · any number of projects · $0</text>
+<text class="s" x="34" y="106">every pull request becomes its own live preview environment, tested and recorded, on our own server · any number of projects · $0</text>
 
-<circle cx="1440" cy="40" r="8" fill="#f1e9ff" stroke="#7a4bd1"/><text class="t p" x="1456" y="46">AI agent</text>
-<circle cx="1440" cy="68" r="8" fill="#e3f6ef" stroke="#0f8a6a"/><text class="t g" x="1456" y="74">Factory (our server)</text>
-<circle cx="1440" cy="96" r="8" fill="#fde8e6" stroke="#c0392b"/><text class="t r" x="1456" y="102">Human gate</text>
-<circle cx="1680" cy="40" r="8" fill="#e6effa" stroke="#2b6cb0"/><text class="t b" x="1696" y="46">GitHub</text>
-<circle cx="1680" cy="68" r="8" fill="#fff1e0" stroke="#b7651a"/><text class="t o" x="1696" y="74">Environments</text>
+<circle cx="1420" cy="40" r="8" fill="#f1e9ff" stroke="#7a4bd1"/><text class="t p" x="1436" y="46">AI agent</text>
+<circle cx="1420" cy="68" r="8" fill="#e3f6ef" stroke="#0f8a6a"/><text class="t g" x="1436" y="74">Factory (our scripts)</text>
+<circle cx="1420" cy="96" r="8" fill="#ececfb" stroke="#4b4b9a"/><text class="t k" x="1436" y="102">Coolify (maintained, self-hosted)</text>
+<circle cx="1700" cy="40" r="8" fill="#fde8e6" stroke="#c0392b"/><text class="t r" x="1716" y="46">Human gate</text>
+<circle cx="1700" cy="68" r="8" fill="#e6effa" stroke="#2b6cb0"/><text class="t b" x="1716" y="74">GitHub</text>
+<circle cx="1700" cy="96" r="8" fill="#fff1e0" stroke="#b7651a"/><text class="t o" x="1716" y="102">Data / environments</text>
 
-<!-- ============ ROW 1 ============ -->
+<!-- ============ ROW 1: the loop ============ -->
 <text class="h" x="30" y="160">Code from anywhere</text>
-<rect class="frame" x="22" y="172" width="330" height="270" rx="6"/>
-<rect x="44" y="194" width="130" height="62" rx="10" fill="#fde8e6" stroke="#c0392b"/>
-<text class="t r" x="109" y="220" text-anchor="middle">You</text><text class="s" x="109" y="242" text-anchor="middle">laptop · phone</text>
-<rect x="196" y="194" width="136" height="62" rx="10" fill="#f1e9ff" stroke="#7a4bd1"/>
-<text class="t p" x="264" y="220" text-anchor="middle">Coding agents</text><text class="s" x="264" y="242" text-anchor="middle">a worktree each</text>
-<rect x="44" y="272" width="288" height="62" rx="10" fill="#f1e9ff" stroke="#7a4bd1"/>
-<text class="t p" x="188" y="298" text-anchor="middle">Background agents</text><text class="s" x="188" y="320" text-anchor="middle">open PRs while you are away</text>
-<text class="s" x="44" y="364">steer from the phone: Remote Control</text>
-<text class="s" x="44" y="386">agents check their own work as a real user:</text>
-<text class="s" x="44" y="408">API calls, screenshots, live browser</text>
-<text class="s" x="44" y="430">(skill: factory-browse)</text>
-<path class="arr" d="M356 306 L420 306"/>
+<rect class="frame" x="22" y="172" width="300" height="230" rx="6"/>
+<rect x="40" y="192" width="120" height="58" rx="10" fill="#fde8e6" stroke="#c0392b"/>
+<text class="t r" x="100" y="216" text-anchor="middle">You</text><text class="s" x="100" y="237" text-anchor="middle">laptop · phone</text>
+<rect x="176" y="192" width="128" height="58" rx="10" fill="#f1e9ff" stroke="#7a4bd1"/>
+<text class="t p" x="240" y="216" text-anchor="middle">Coding agents</text><text class="s" x="240" y="237" text-anchor="middle">a worktree each</text>
+<rect x="40" y="264" width="264" height="58" rx="10" fill="#f1e9ff" stroke="#7a4bd1"/>
+<text class="t p" x="172" y="288" text-anchor="middle">Background agents</text><text class="s" x="172" y="309" text-anchor="middle">open PRs while you are away</text>
+<text class="s" x="40" y="350">phone: Remote Control</text>
+<text class="s" x="40" y="372">agents check their work as a user:</text>
+<text class="s" x="40" y="394">API · screenshots · live browser</text>
+<path class="arr" d="M326 286 L374 286"/>
 
-<text class="h b" x="430" y="160">Pull requests</text>
-<rect x="424" y="172" width="250" height="270" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
-<rect x="440" y="192" width="218" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="454" y="215">#41 feat/checkout</text>
-<rect x="440" y="236" width="218" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="454" y="259">#40 fix/login-redirect</text>
-<rect x="440" y="280" width="218" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="454" y="303">#39 feat/search</text>
-<rect x="440" y="324" width="218" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="454" y="347">#38 fix/mobile-menu</text>
-<text class="s" x="440" y="396">into the integration branch</text>
-<text class="s" x="440" y="418">never straight to production</text>
-<path class="arr" d="M678 306 L740 306"/>
+<text class="h b" x="384" y="160">Pull request</text>
+<rect x="378" y="172" width="220" height="230" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
+<rect x="394" y="192" width="188" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="406" y="215">#41 feat/checkout</text>
+<text class="s" x="394" y="256">into the integration branch</text>
+<text class="s" x="394" y="278">one push fires two things:</text>
+<text class="s b" x="394" y="306">① webhook → Coolify</text>
+<text class="s b" x="394" y="330">② workflow → our runners</text>
+<text class="s" x="394" y="370">never straight to production</text>
+<path class="arr" d="M602 250 L654 250"/>
+<path class="arr" d="M602 330 L654 330"/>
 
-<text class="h g" x="750" y="160">CI on our server</text>
-<rect class="frame" x="744" y="172" width="470" height="270" rx="6"/>
-<rect x="766" y="194" width="196" height="76" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
-<text class="t g" x="864" y="222" text-anchor="middle">Self-hosted runners</text>
-<text class="s" x="864" y="244" text-anchor="middle">several in parallel</text>
-<text class="s" x="864" y="262" text-anchor="middle">0 GitHub minutes</text>
-<path class="arr" d="M966 232 L996 232"/>
-<rect x="1000" y="194" width="194" height="76" rx="8" fill="#fff" stroke="#888"/>
-<text class="t" x="1016" y="220">static checks</text>
-<text class="s" x="1016" y="242">lint · guards · build</text>
-<text class="s" x="1016" y="262">migrations from scratch</text>
-<rect x="766" y="290" width="428" height="62" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
-<text class="t g" x="784" y="316">build the branch into images</text>
-<text class="s" x="784" y="338">on the server, layer cache, about a minute</text>
-<text class="s" x="766" y="386">own Linux user, own folders</text>
-<text class="s" x="766" y="408">same scripts work under any CI</text>
-<text class="s" x="766" y="430">(GitHub Actions today, Woodpecker possible)</text>
-<path class="arr" d="M1218 306 L1280 306"/>
+<text class="h k" x="664" y="160">① Coolify builds the preview</text>
+<rect x="658" y="172" width="400" height="120" rx="8" fill="#ececfb" stroke="#4b4b9a"/>
+<text class="t k" x="676" y="200">GitHub App webhook → build the branch</text>
+<text class="s" x="676" y="224">reads the repo's preview.compose.yaml</text>
+<text class="s" x="676" y="246">one compose project per PR, own network + volumes</text>
+<text class="s" x="676" y="268">routes pr41.&lt;domain&gt; · deletes it all on close</text>
+<text class="h g" x="664" y="320">② CI on our server</text>
+<rect x="658" y="330" width="400" height="72" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="676" y="358">self-hosted runners, several in parallel</text>
+<text class="s" x="676" y="382">0 GitHub minutes · wait for ① then test</text>
+<path class="arr" d="M1062 232 L1110 232"/>
+<path class="arr" d="M1062 366 L1110 366"/>
 
-<text class="h g" x="1290" y="160">A preview per PR</text>
-<rect class="frame" x="1284" y="172" width="590" height="270" rx="6"/>
-<rect x="1306" y="194" width="262" height="104" rx="8" fill="#fff1e0" stroke="#b7651a"/>
-<text class="t o" x="1322" y="220">its own copy of the data</text>
-<text class="s" x="1322" y="244">database: template copy, &lt; 1 s</text>
-<text class="s" x="1322" y="266">files: hardlinks, 0 bytes</text>
-<text class="s" x="1322" y="288">kept across pushes</text>
-<rect x="1590" y="194" width="262" height="104" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
-<text class="t g" x="1606" y="220">its own containers</text>
-<text class="s" x="1606" y="244">migrate → app → web</text>
-<text class="s" x="1606" y="266">offline: no outside services</text>
-<text class="s" x="1606" y="288">real model only on request</text>
-<rect x="1306" y="314" width="546" height="108" rx="8" fill="#fff" stroke="#888"/>
-<text class="t" x="1322" y="340">https://&lt;feature&gt;-pr&lt;N&gt;.&lt;domain&gt;</text>
-<text class="s" x="1322" y="362">one wildcard DNS record per domain, set once</text>
-<text class="s" x="1322" y="384">password gate · gateway routes by PR number</text>
-<text class="s" x="1322" y="406">/_factory/login signs you in, one click</text>
+<text class="h p" x="1120" y="160">E2E tests on the preview</text>
+<rect class="frame" x="1114" y="172" width="360" height="230" rx="6"/>
+<rect x="1132" y="192" width="324" height="70" rx="8" fill="#f1e9ff" stroke="#7a4bd1"/>
+<text class="t p" x="1148" y="218">tester-army, model-free</text>
+<text class="s" x="1148" y="242">signs in like a real user, one click</text>
+<rect x="1132" y="276" width="324" height="106" rx="8" fill="#fff" stroke="#888"/>
+<rect x="1148" y="292" width="42" height="30" rx="3" fill="#eee" stroke="#999"/><path d="M1163 299 L1177 307 L1163 315 Z" fill="#999"/>
+<rect x="1198" y="292" width="42" height="30" rx="3" fill="#eee" stroke="#999"/><path d="M1213 299 L1227 307 L1213 315 Z" fill="#999"/>
+<rect x="1248" y="292" width="42" height="30" rx="3" fill="#eee" stroke="#999"/><path d="M1263 299 L1277 307 L1263 315 Z" fill="#999"/>
+<text class="s" x="1148" y="346">a video of every test, trace on failure</text>
+<text class="s" x="1148" y="368">gallery at /_factory/</text>
+<path class="arr" d="M1478 286 L1526 286"/>
 
-<path class="arrR" d="M1878 330 C 1898 440, 1898 480, 1878 560"/>
-<text class="s r" x="1606" y="492">red check → agent fixes → push again</text>
+<text class="h b" x="1536" y="160">One PR comment</text>
+<rect x="1530" y="172" width="344" height="230" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
+<text class="t" x="1548" y="208">Preview  pr41.&lt;domain&gt;</text>
+<text class="t" x="1548" y="236">Sign in  one click</text>
+<text class="t" x="1548" y="264">E2E  12 passed ▶ videos</text>
+<text class="t" x="1548" y="292">Data  snapshot of 03:00</text>
+<text class="s" x="1548" y="334">updated on every push</text>
+<text class="s" x="1548" y="356">check it on the phone</text>
+<text class="s r" x="1548" y="384">red → the agent fixes, pushes</text>
 
-<!-- ============ ROW 2 ============ -->
-<path class="arr" d="M1580 446 L1580 516"/>
+<!-- ============ ROW 2: inside one preview ============ -->
+<text class="h" x="30" y="456">Inside one preview environment · PR #41</text>
+<text class="s" x="440" y="456">(plain containers on our shared server, isolated by data, network and login · not a security sandbox)</text>
+<rect x="22" y="470" width="1852" height="560" rx="14" fill="#fbfbfe" stroke="#4b4b9a" stroke-width="1.6" stroke-dasharray="8 5"/>
 
-<text class="h p" x="1290" y="540">E2E tests · tester-army</text>
-<rect class="frame" x="1284" y="552" width="590" height="210" rx="6"/>
-<rect x="1306" y="576" width="262" height="80" rx="8" fill="#f1e9ff" stroke="#7a4bd1"/>
-<text class="t p" x="1322" y="602">the suite runs on the preview</text>
-<text class="s" x="1322" y="624">model-free, deterministic</text>
-<text class="s" x="1322" y="644">signs in as a real user</text>
-<rect x="1590" y="576" width="262" height="80" rx="8" fill="#fff" stroke="#888"/>
-<text class="t" x="1606" y="602">a video of every test</text>
-<text class="s" x="1606" y="624">trace page for failures</text>
-<text class="s" x="1606" y="644">gallery at /_factory/</text>
-<rect x="1306" y="672" width="546" height="70" rx="8" fill="#fff" stroke="#888"/>
-<rect x="1322" y="688" width="42" height="32" rx="3" fill="#eee" stroke="#999"/><path d="M1337 696 L1351 704 L1337 712 Z" fill="#999"/>
-<rect x="1374" y="688" width="42" height="32" rx="3" fill="#eee" stroke="#999"/><path d="M1389 696 L1403 704 L1389 712 Z" fill="#999"/>
-<rect x="1426" y="688" width="42" height="32" rx="3" fill="#eee" stroke="#999"/><path d="M1441 696 L1455 704 L1441 712 Z" fill="#999"/>
-<text class="s" x="1484" y="710">evidence you can watch on the phone</text>
-<path class="arr" d="M1280 656 L1222 656"/>
+<!-- request path -->
+<text class="t k" x="44" y="504">How a request reaches it</text>
+<rect x="44" y="518" width="150" height="62" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="119" y="544" text-anchor="middle">browser / e2e</text><text class="s" x="119" y="566" text-anchor="middle">pr41.&lt;domain&gt;</text>
+<path class="arr" d="M198 549 L228 549"/>
+<rect x="232" y="518" width="160" height="62" rx="8" fill="#e6effa" stroke="#2b6cb0"/>
+<text class="t b" x="312" y="544" text-anchor="middle">Cloudflare</text><text class="s" x="312" y="566" text-anchor="middle">one wildcard record, TLS</text>
+<path class="arr" d="M396 549 L426 549"/>
+<rect x="430" y="518" width="178" height="62" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="519" y="544" text-anchor="middle">host nginx</text><text class="s" x="519" y="566" text-anchor="middle">password · Cloudflare only</text>
+<path class="arr" d="M612 549 L642 549"/>
+<rect x="646" y="518" width="190" height="62" rx="8" fill="#ececfb" stroke="#4b4b9a"/>
+<text class="t k" x="741" y="544" text-anchor="middle">Coolify's Traefik</text><text class="s" x="741" y="566" text-anchor="middle">127.0.0.1 only, by host</text>
+<path class="arr" d="M840 549 L878 549"/>
 
-<text class="h b" x="750" y="540">One PR comment, updated every push</text>
-<rect x="744" y="552" width="474" height="210" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
-<text class="t" x="764" y="590">Preview   feature-pr41.&lt;domain&gt;</text>
-<text class="t" x="764" y="618">Sign in   one click</text>
-<text class="t" x="764" y="646">E2E       12 passed · 0 failed  ▶ videos</text>
-<text class="t" x="764" y="674">Data      snapshot of 03:00</text>
-<text class="s" x="764" y="716">nothing to set up, nothing to check by hand</text>
-<text class="s" x="764" y="738">closing the PR deletes everything</text>
-<path class="arr" d="M740 656 L640 656"/>
+<!-- containers -->
+<rect x="882" y="490" width="972" height="250" rx="10" fill="#f4f4fd" stroke="#4b4b9a"/>
+<text class="t k" x="900" y="516">containers of PR #41 · started in this order, each waits for the one before</text>
+<rect x="900" y="532" width="170" height="92" rx="8" fill="#fff1e0" stroke="#b7651a"/>
+<text class="t o" x="985" y="558" text-anchor="middle">1 · preview-init</text>
+<text class="s" x="985" y="580" text-anchor="middle">copies the data</text>
+<text class="s" x="985" y="600" text-anchor="middle">makes its own login</text>
+<text class="s" x="985" y="618" text-anchor="middle">runs once, then exits</text>
+<path class="arr" d="M1074 578 L1094 578"/>
+<rect x="1098" y="532" width="150" height="92" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1173" y="558" text-anchor="middle">2 · migrate</text>
+<text class="s" x="1173" y="580" text-anchor="middle">the branch's</text>
+<text class="s" x="1173" y="600" text-anchor="middle">schema changes,</text>
+<text class="s" x="1173" y="618" text-anchor="middle">on real data</text>
+<path class="arr" d="M1252 578 L1272 578"/>
+<rect x="1276" y="532" width="170" height="92" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="1361" y="558" text-anchor="middle">3 · api + worker</text>
+<text class="s" x="1361" y="580" text-anchor="middle">offline: fake model</text>
+<text class="s" x="1361" y="600" text-anchor="middle">no payments, no bot</text>
+<text class="s" x="1361" y="618" text-anchor="middle">health-checked</text>
+<path class="arr" d="M1450 578 L1470 578"/>
+<rect x="1474" y="532" width="170" height="92" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1559" y="558" text-anchor="middle">4 · web</text>
+<text class="s" x="1559" y="580" text-anchor="middle">the branch's app</text>
+<text class="s" x="1559" y="600" text-anchor="middle">/app/api → api</text>
+<text class="s" x="1559" y="618" text-anchor="middle">what Traefik reaches</text>
+<rect x="1664" y="532" width="172" height="92" rx="8" fill="#fde8e6" stroke="#c0392b"/>
+<text class="t r" x="1750" y="558" text-anchor="middle">4 · login</text>
+<text class="s" x="1750" y="580" text-anchor="middle">/_factory/login</text>
+<text class="s" x="1750" y="600" text-anchor="middle">fresh one-click link</text>
+<text class="s" x="1750" y="618" text-anchor="middle">as the test account</text>
+<text class="s" x="900" y="660">own Docker network per PR (+ the factory's database network) · every container refuses to start outside a PR preview</text>
+<text class="s" x="900" y="684">own volume for the database password · Linux capabilities dropped · no new privileges</text>
+<text class="s" x="900" y="708">every push: rebuilt and redeployed, the data you made is kept · close the PR: everything below is deleted</text>
+<text class="s" x="900" y="730">the factory's admin database password reaches preview-init only, from a root-only file, never as a variable</text>
 
-<text class="h r" x="430" y="540">Human gate</text>
-<rect x="424" y="580" width="210" height="150" rx="8" fill="#fde8e6" stroke="#c0392b" stroke-width="1.6"/>
-<text class="t r" x="529" y="618" text-anchor="middle">You check the preview</text>
-<text class="s" x="529" y="646" text-anchor="middle">good → merge</text>
-<text class="s" x="529" y="670" text-anchor="middle">not yet → comment,</text>
-<text class="s" x="529" y="692" text-anchor="middle">the agent pushes again</text>
-<path class="arr" d="M420 656 L362 656"/>
+<!-- data stores -->
+<text class="t o" x="44" y="630">What the preview gets copied (in about a second)</text>
+<rect x="44" y="648" width="270" height="168" rx="10" fill="#fff1e0" stroke="#b7651a"/>
+<text class="t o" x="60" y="676">relational database</text>
+<text class="s" x="60" y="700">Postgres: CREATE DATABASE</text>
+<text class="m" x="60" y="722">app_pr_41 TEMPLATE app_snapshot</text>
+<text class="s" x="60" y="746">a file-level copy, &lt; 1 s</text>
+<text class="s" x="60" y="770">owned by its own login app_pr_41,</text>
+<text class="s" x="60" y="792">which can connect nowhere else</text>
+<rect x="330" y="648" width="250" height="168" rx="10" fill="#fff1e0" stroke="#b7651a"/>
+<text class="t o" x="346" y="676">vector database</text>
+<text class="s" x="346" y="700">pgvector, inside the same</text>
+<text class="s" x="346" y="722">Postgres database</text>
+<text class="s" x="346" y="746">embeddings and search indexes</text>
+<text class="s" x="346" y="770">come along with the copy:</text>
+<text class="s" x="346" y="792">nothing separate to sync</text>
+<rect x="596" y="648" width="260" height="168" rx="10" fill="#fff1e0" stroke="#b7651a"/>
+<text class="t o" x="612" y="676">files (media)</text>
+<text class="s" x="612" y="700">cp -al snapshot → pr-41</text>
+<text class="s" x="612" y="722">hardlinks: instant, 0 bytes</text>
+<text class="s" x="612" y="746">new uploads land only in pr-41</text>
+<text class="s" x="612" y="770">(the app never edits a file</text>
+<text class="s" x="612" y="792">in place)</text>
+<path class="arrG" d="M856 700 L896 640"/>
 
-<text class="h o" x="30" y="540">Staging</text>
-<rect x="22" y="580" width="330" height="150" rx="8" fill="#fff1e0" stroke="#b7651a" stroke-width="1.6"/>
-<text class="t o" x="187" y="616" text-anchor="middle">every merge deploys here</text>
-<text class="s" x="187" y="642" text-anchor="middle">real data, real integrations</text>
-<text class="s" x="187" y="664" text-anchor="middle">where model behaviour is proven</text>
-<text class="s" x="187" y="686" text-anchor="middle">source of the nightly snapshot</text>
-<path class="arr" d="M187 734 L187 812"/>
-<rect x="22" y="816" width="330" height="56" rx="8" fill="#fde8e6" stroke="#c0392b" stroke-width="1.6"/>
-<text class="t r" x="187" y="850" text-anchor="middle">Your sign-off on staging</text>
-<path class="arr" d="M356 844 L420 844"/>
-<rect x="424" y="806" width="300" height="76" rx="8" fill="#e3f6ef" stroke="#0f8a6a" stroke-width="2"/>
-<text class="t g" x="574" y="836" text-anchor="middle">Production</text>
-<text class="s" x="574" y="860" text-anchor="middle">a merge to main is a release</text>
+<!-- what it does not get -->
+<rect x="882" y="756" width="972" height="60" rx="10" fill="#fde8e6" stroke="#c0392b"/>
+<text class="t r" x="900" y="782">What a preview never gets</text>
+<text class="s" x="900" y="804">model or scraping keys (unless a "live" label asks) · payment keys · bot token · production data · a way back into staging</text>
 
-<!-- ============ DATA ============ -->
-<text class="h" x="760" y="800">Data flows down, never back</text>
-<rect class="frame" x="744" y="812" width="1130" height="110" rx="6"/>
-<rect x="764" y="832" width="190" height="70" rx="8" fill="#fff1e0" stroke="#b7651a"/>
-<text class="t o" x="859" y="860" text-anchor="middle">source data</text><text class="s" x="859" y="882" text-anchor="middle">read only</text>
-<path class="arrG" d="M958 867 L1006 867"/>
-<rect x="1010" y="832" width="210" height="70" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
-<text class="t g" x="1115" y="860" text-anchor="middle">nightly snapshot</text><text class="s" x="1115" y="882" text-anchor="middle">into the factory's Postgres</text>
-<path class="arrG" d="M1224 867 L1272 867"/>
-<rect x="1276" y="832" width="250" height="70" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
-<text class="t g" x="1401" y="860" text-anchor="middle">disarm</text><text class="s" x="1401" y="882" text-anchor="middle">jobs, payment tokens, logins</text>
-<path class="arrG" d="M1530 867 L1578 867"/>
-<rect x="1582" y="832" width="272" height="70" rx="8" fill="#fff" stroke="#888"/>
-<text class="t" x="1718" y="860" text-anchor="middle">one database per PR</text><text class="s" x="1718" y="882" text-anchor="middle">gone when the PR closes</text>
+<!-- snapshot pipeline -->
+<text class="t g" x="44" y="862">Where the copy comes from · every night at 03:00</text>
+<rect x="44" y="878" width="220" height="70" rx="8" fill="#fff1e0" stroke="#b7651a"/>
+<text class="t o" x="154" y="906" text-anchor="middle">staging database</text><text class="s" x="154" y="928" text-anchor="middle">+ its files · read only</text>
+<path class="arrG" d="M268 913 L312 913"/>
+<rect x="316" y="878" width="240" height="70" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="436" y="906" text-anchor="middle">pg_dump → restore</text><text class="s" x="436" y="928" text-anchor="middle">into the factory's own Postgres</text>
+<path class="arrG" d="M560 913 L604 913"/>
+<rect x="608" y="878" width="330" height="70" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="773" y="906" text-anchor="middle">disarm</text><text class="s" x="773" y="928" text-anchor="middle">delete queued jobs · wipe payment tokens · drop logins</text>
+<path class="arrG" d="M942 913 L986 913"/>
+<rect x="990" y="878" width="300" height="70" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1140" y="906" text-anchor="middle">app_snapshot</text><text class="s" x="1140" y="928" text-anchor="middle">a template nobody connects to</text>
+<path class="arrG" d="M1294 913 L1338 913"/>
+<rect x="1342" y="878" width="512" height="70" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1598" y="906" text-anchor="middle">every new preview copies from here</text><text class="s" x="1598" y="928" text-anchor="middle">data flows down only · nothing from a preview goes back</text>
+<text class="s" x="44" y="986">one Postgres for all previews of a project, separate databases and logins · real data, no anonymizing, but nothing in it can act on the world</text>
+<text class="s" x="44" y="1010">Coolify's cleanup can't touch other images · its ports listen on 127.0.0.1 only · host nginx keeps 80/443 for every site on the server</text>
+
+<!-- ============ ROW 3: release ============ -->
+<text class="h r" x="30" y="1082">Release</text>
+<rect x="22" y="1094" width="250" height="96" rx="8" fill="#fde8e6" stroke="#c0392b" stroke-width="1.6"/>
+<text class="t r" x="147" y="1128" text-anchor="middle">You check the preview</text>
+<text class="s" x="147" y="1154" text-anchor="middle">good → merge</text>
+<text class="s" x="147" y="1176" text-anchor="middle">not yet → comment</text>
+<path class="arr" d="M276 1142 L320 1142"/>
+<rect x="324" y="1094" width="290" height="96" rx="8" fill="#fff1e0" stroke="#b7651a" stroke-width="1.6"/>
+<text class="t o" x="469" y="1128" text-anchor="middle">Staging</text>
+<text class="s" x="469" y="1154" text-anchor="middle">every merge deploys here</text>
+<text class="s" x="469" y="1176" text-anchor="middle">real integrations, model behaviour</text>
+<path class="arr" d="M618 1142 L662 1142"/>
+<rect x="666" y="1094" width="250" height="96" rx="8" fill="#fde8e6" stroke="#c0392b" stroke-width="1.6"/>
+<text class="t r" x="791" y="1150" text-anchor="middle">Your sign-off</text>
+<path class="arr" d="M920 1142 L964 1142"/>
+<rect x="968" y="1094" width="250" height="96" rx="8" fill="#e3f6ef" stroke="#0f8a6a" stroke-width="2"/>
+<text class="t g" x="1093" y="1136" text-anchor="middle">Production</text>
+<text class="s" x="1093" y="1162" text-anchor="middle">merge to main = release</text>
+
+<text class="h" x="1260" y="1082">Agents prove their own work</text>
+<rect x="1254" y="1094" width="620" height="96" rx="8" fill="#f1e9ff" stroke="#7a4bd1"/>
+<text class="s p" x="1272" y="1122">factory CLI: sign in · call the API · screenshot phone and desktop</text>
+<text class="s p" x="1272" y="1146">live browser (e2e MCP) with video · verification skill + feature map</text>
+<text class="s p" x="1272" y="1170">rule: no merge request without evidence from the PR's preview</text>
 
 <!-- ============ PLATFORM ============ -->
-<text class="h g" x="30" y="960">The platform: many projects, one factory</text>
-<rect class="frame" x="22" y="972" width="1852" height="180" rx="6"/>
-<rect x="44" y="994" width="300" height="136" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
-<text class="t g" x="60" y="1020">project registry</text>
-<text class="s" x="60" y="1044">one folder per project:</text>
-<text class="s" x="60" y="1066">domain · prefix · repo</text>
-<text class="s" x="60" y="1088">how to build, test, copy data</text>
-<text class="s" x="60" y="1110">factory init scaffolds it</text>
-<path class="arr" d="M348 1062 L392 1062"/>
-<rect x="396" y="994" width="330" height="136" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
-<text class="t g" x="412" y="1020">sync generates</text>
-<text class="s" x="412" y="1044">gateway routes per domain</text>
-<text class="s" x="412" y="1066">host vhosts (tested before reload)</text>
-<text class="s" x="412" y="1088">one docker network per project</text>
-<text class="s" x="412" y="1110">runners per repo: factory runner</text>
-<rect x="748" y="994" width="330" height="136" rx="8" fill="#fff" stroke="#888"/>
-<text class="t" x="764" y="1020">updates itself</text>
-<text class="s" x="764" y="1044">the factory is a git repo</text>
-<text class="s" x="764" y="1066">factory push → the server pulls</text>
-<text class="s" x="764" y="1088">within 5 minutes and re-syncs</text>
-<text class="s" x="764" y="1110">read-only deploy key</text>
-<rect x="1100" y="994" width="370" height="136" rx="8" fill="#fff" stroke="#888"/>
-<text class="t" x="1116" y="1020">isolation on a shared server</text>
-<text class="s" x="1116" y="1044">its own folders, user and Postgres</text>
-<text class="s" x="1116" y="1066">projects named apart by prefix</text>
-<text class="s" x="1116" y="1088">production is never touched</text>
-<text class="s" x="1116" y="1110">source data is only read</text>
-<rect x="1492" y="994" width="360" height="136" rx="8" fill="#fde8e6" stroke="#c0392b"/>
-<text class="t r" x="1508" y="1020">rules for every agent</text>
-<text class="s" x="1508" y="1044">prove each change on its preview</text>
-<text class="s" x="1508" y="1066">attach screenshots and videos</text>
-<text class="s" x="1508" y="1088">new feature → new e2e test</text>
-<text class="s" x="1508" y="1110">a red check is fixed before merge</text>
+<text class="h g" x="30" y="1250">The platform: many projects, one factory</text>
+<rect class="frame" x="22" y="1262" width="1852" height="190" rx="6"/>
+<rect x="44" y="1284" width="300" height="146" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="60" y="1310">project registry</text>
+<text class="s" x="60" y="1334">one folder per project:</text>
+<text class="s" x="60" y="1356">domain · prefix · repo</text>
+<text class="s" x="60" y="1378">data source · e2e command</text>
+<text class="s" x="60" y="1400">factory init scaffolds it</text>
+<path class="arr" d="M348 1356 L388 1356"/>
+<rect x="392" y="1284" width="330" height="146" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="408" y="1310">sync generates</text>
+<text class="s" x="408" y="1334">host vhosts per domain (tested first)</text>
+<text class="s" x="408" y="1356">routes, one network per project</text>
+<text class="s" x="408" y="1378">runners per repo: factory runner</text>
+<text class="s" x="408" y="1400">nightly snapshot per project</text>
+<rect x="744" y="1284" width="330" height="146" rx="8" fill="#ececfb" stroke="#4b4b9a"/>
+<text class="t k" x="760" y="1310">Coolify</text>
+<text class="s" x="760" y="1334">one app per project, previews only</text>
+<text class="s" x="760" y="1356">GitHub App, dashboard, logs</text>
+<text class="s" x="760" y="1378">installed by hand: no Docker restart</text>
+<text class="s" x="760" y="1400">maintained by its community</text>
+<rect x="1096" y="1284" width="370" height="146" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1112" y="1310">updates itself</text>
+<text class="s" x="1112" y="1334">the factory is a git repo</text>
+<text class="s" x="1112" y="1356">factory push → the server pulls</text>
+<text class="s" x="1112" y="1378">within 5 minutes and re-syncs</text>
+<text class="s" x="1112" y="1400">read-only deploy key</text>
+<rect x="1488" y="1284" width="364" height="146" rx="8" fill="#fde8e6" stroke="#c0392b"/>
+<text class="t r" x="1504" y="1310">rules for every agent</text>
+<text class="s" x="1504" y="1334">prove each change on its preview</text>
+<text class="s" x="1504" y="1356">attach screenshots and videos</text>
+<text class="s" x="1504" y="1378">new feature → new e2e test</text>
+<text class="s" x="1504" y="1400">a red check is fixed before merge</text>
+<text class="s" x="34" y="1500">Factory: github.com/omardmv/factory · Coolify dashboard behind Cloudflare + password + its own login · one server, production untouched</text>
 </svg>
 </body></html>
