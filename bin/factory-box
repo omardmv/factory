@@ -201,13 +201,15 @@ VHOST
 runner_add() {  # owner/repo token [index]: several per repo run jobs in parallel
   [ "$(id -u)" = 0 ] || die "runner-add needs root"
   local repo="$1" token="$2" name; name="$(echo "$1" | tr '/' '-')${3:+-$3}"
-  local dir="/opt/factory/runners/$name" src=/opt/factory/runner
-  [ -x "$src/config.sh" ] || die "no runner template at $src"
-  if [ ! -d "$dir" ]; then
-    install -d -o factory -g factory "$dir" "/srv/factory/runner-work/$name"
-    tar -C "$src" --exclude='_diag' --exclude='_work' --exclude='.runner' --exclude='.credentials*' \
-        --exclude='.service' --exclude='.env' --exclude='.path' -cf - . | tar -C "$dir" -xf -
-    chown -R factory:factory "$dir"
+  local dir="/opt/factory/runners/$name" ver=2.338.0
+  local tgz="/opt/factory/runner-dist/actions-runner-linux-x64-$ver.tar.gz"
+  if [ ! -f "$tgz" ]; then
+    install -d /opt/factory/runner-dist
+    curl -sfL -o "$tgz" "https://github.com/actions/runner/releases/download/v$ver/actions-runner-linux-x64-$ver.tar.gz"
+  fi
+  if [ ! -x "$dir/config.sh" ] || [ ! -f "$dir/.runner" ]; then
+    rm -rf "$dir"; install -d -o factory -g factory "$dir" "/srv/factory/runner-work/$name"
+    tar -xzf "$tgz" -C "$dir"; chown -R factory:factory "$dir"
   fi
   (cd "$dir" && sudo -u factory ./config.sh --unattended --url "https://github.com/$repo" --token "$token" \
      --name "factory-vps-$name" --labels factory --work "/srv/factory/runner-work/$name" --replace >&2 &&
