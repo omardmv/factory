@@ -12,6 +12,7 @@
 #   factory-box sync                               (root) networks, gateway routes, host vhosts from projects/*
 #   factory-box runner-add <owner/repo> <token> [i] (root) one more self-hosted runner, label factory
 #   factory-box self-update                        (root) pull the factory repo, sync if it changed
+#   factory-box status                            (root) write /srv/factory/state/status.json for the dashboard
 #   factory-box ls                                  running previews
 set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -271,7 +272,49 @@ self_update() {
   exec "$FACTORY_DIR/bin/factory-box" sync
 }
 
+status() {
+  # facts about the bootstrap layer, read by the dashboard (which has no docker access)
+  local out=/srv/factory/state/status.json tmp; tmp="$(mktemp)"
+  {
+    printf '{"at":"%s",' "$(date -u +%FT%TZ)"
+    printf '"factory_commit":"%s",' "$(git -C "$FACTORY_DIR" log -1 --format='%h %s' | sed 's/["\\]/ /g')"
+    printf '"disk_used_pct":%s,' "$(df --output=pcent / | tail -1 | tr -dc 0-9)"
+    printf '"mem_available_gb":%s,' "$(free -g | awk '/^Mem/{print $7}')"
+    printf '"runners":['
+    local first=1 u
+    for u in $(systemctl list-units --type=service --all --no-legend 'actions.runner.*' | awk '{print $1}'); do
+      [ $first = 1 ] || printf ','; first=0
+      printf '{"name":"%s","active":"%s"}' "${u#actions.runner.}" "$(systemctl is-active "$u")"
+    done
+    printf '],'
+    printf '"services":{'
+    printf '"firewall":"%s",' "$(systemctl is-active factory-sandbox-firewall 2>/dev/null)"
+    printf '"agent_shim":"%s",' "$(systemctl is-active open-inspect-sandbox-shim 2>/dev/null)"
+    printf '"gateway":"%s",' "$(docker inspect -f '{{.State.Status}}' factory-gateway-1 2>/dev/null || echo missing)"
+    printf '"preview_postgres":"%s",' "$(docker inspect -f '{{.State.Status}}' factory-pg-1 2>/dev/null || echo missing)"
+    printf '"coolify":"%s",' "$(docker inspect -f '{{.State.Health.Status}}' coolify 2>/dev/null || echo missing)"
+    printf '"coolify_proxy":"%s"' "$(docker inspect -f '{{.State.Status}}' coolify-proxy 2>/dev/null || echo missing)"
+    printf '},'
+    printf '"gvisor":"%s",' "$(runsc --version 2>/dev/null | head -1 | awk '{print $3}')"
+    printf '"agent_sandboxes_running":%s,' "$(docker ps -q --filter name=oi-sb- | wc -l)"
+    printf '"snapshots":['
+    first=1
+    local conf
+    for conf in "$FACTORY_DIR"/projects/*/project.sh; do
+      local pre; pre="$(sed -n 's/^PREFIX=\([a-z0-9]*\).*/\1/p' "$conf")"
+      [ -n "$pre" ] || continue
+      local c; c="$(pg "select shobj_description(oid, 'pg_database') from pg_database where datname = '${pre}_snapshot'" 2>/dev/null | sed 's/["\\]/ /g')"
+      [ $first = 1 ] || printf ','; first=0
+      printf '{"project":"%s","note":"%s"}' "$(basename "$(dirname "$conf")")" "$c"
+    done
+    printf ']}\n'
+  } > "$tmp"
+  python3 -m json.tool "$tmp" >/dev/null && install -m 644 "$tmp" "$out"
+  rm -f "$tmp"
+}
+
 case "$cmd" in
+  status)       status ;;
   snapshot-all)
     for conf in "$FACTORY_DIR"/projects/*/project.sh; do
       p="$(basename "$(dirname "$conf")")"
