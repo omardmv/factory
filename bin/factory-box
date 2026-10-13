@@ -257,6 +257,32 @@ runner_add() {  # owner/repo token [index]: several per repo run jobs in paralle
   log "runner factory-vps-$name online for $repo"
 }
 
+# deployment_uuid out of the deploy reply (empty if absent)
+coolify_dep_uuid() {
+  printf '%s' "$1" | grep -o '"deployment_uuid" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true
+}
+
+# Poll one Coolify deployment (max 10 min) and log how it ended. Run in the background.
+coolify_watch() {
+  local app="$1" dep="$2" body st reason
+  local end=$((SECONDS+600))
+  while [ "$SECONDS" -lt "$end" ]; do
+    sleep 10
+    body="$(curl -fsS -m 10 -H "Authorization: Bearer $(cat /opt/factory/coolify-token)" \
+      "http://127.0.0.1:8000/api/v1/deployments/$dep" 2>/dev/null)" || continue
+    st="$(printf '%s' "$body" | grep -o '"status" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    case "$st" in
+      finished) log "coolify: $app deployed"; return 0 ;;
+      failed|cancelled*|error*)
+        # an error-looking fragment from the build log, else the status itself
+        reason="$(printf '%s' "$body" | grep -oiE '[^\\"]*(error|timeout|timed out)[^\\"]*' | tail -1 | cut -c1-200 || true)"
+        log "coolify: $app deploy failed: ${reason:-status $st}"; return 1 ;;
+    esac
+  done
+  log "coolify: $app deploy failed: still ${st:-unknown} after 10 minutes"
+  return 1
+}
+
 self_update() {
   [ "$(id -u)" = 0 ] || die "self-update needs root"
   local before after
@@ -283,8 +309,16 @@ self_update() {
   while read -r dir uuid; do
     case "$dir" in ''|'#'*) continue ;; esac
     if printf '%s\n' "$changed" | grep -q "^$dir/"; then
-      curl -fsS -o /dev/null -X POST -H "Authorization: Bearer $(cat /opt/factory/coolify-token)" \
-        "http://127.0.0.1:8000/api/v1/deploy?uuid=$uuid" && log "coolify: redeploying $dir" || log "coolify: redeploy of $dir FAILED"
+      local resp dep
+      if resp="$(curl -fsS -X POST -H "Authorization: Bearer $(cat /opt/factory/coolify-token)" \
+          "http://127.0.0.1:8000/api/v1/deploy?uuid=$uuid")"; then
+        log "coolify: redeploying $dir"
+        dep="$(coolify_dep_uuid "$resp")"
+        # the build can still fail after Coolify accepted it: watch it in the background
+        if [ -n "$dep" ]; then coolify_watch "$dir" "$dep" </dev/null & else log "coolify: $dir deploy status unknown (no deployment_uuid in reply)"; fi
+      else
+        log "coolify: redeploy of $dir FAILED"
+      fi
     fi
   done < "$FACTORY_DIR/box/coolify/factory-apps"
   install -m 644 "$FACTORY_DIR/box/gateway/nginx.conf" /opt/factory/gateway/default.conf
