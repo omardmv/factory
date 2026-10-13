@@ -261,9 +261,21 @@ self_update() {
   [ "$(id -u)" = 0 ] || die "self-update needs root"
   local before after
   before="$(git -C "$FACTORY_DIR" rev-parse HEAD)"
-  GIT_SSH_COMMAND="ssh -i /opt/factory/deploy_key -o IdentitiesOnly=yes" git -C "$FACTORY_DIR" pull -q --ff-only
-  after="$(git -C "$FACTORY_DIR" rev-parse HEAD)"
+  GIT_SSH_COMMAND="ssh -i /opt/factory/deploy_key -o IdentitiesOnly=yes" git -C "$FACTORY_DIR" fetch -q
+  after="$(git -C "$FACTORY_DIR" rev-parse '@{u}')"
   [ "$before" = "$after" ] && return 0
+  # a shell file that does not parse would run here within minutes: stay on the
+  # old commit until main is fixed (logged once per refused commit)
+  local f bad=""
+  for f in $(git -C "$FACTORY_DIR" ls-tree -r --name-only "$after" | grep -E '^bin/[^/]+$|\.sh$'); do
+    git -C "$FACTORY_DIR" show "$after:$f" | bash -n 2>/dev/null || bad="$bad $f"
+  done
+  if [ -n "$bad" ]; then
+    [ "$(cat /srv/factory/state/refused 2>/dev/null)" = "$after" ] ||
+      { log "factory $after REFUSED, shell syntax error in:$bad"; echo "$after" > /srv/factory/state/refused; }
+    return 0
+  fi
+  git -C "$FACTORY_DIR" merge -q --ff-only "$after"
   log "factory $before -> $after"
   # factory apps in Coolify (box/coolify/factory-apps): redeploy the ones whose folder changed
   local changed; changed="$(git -C "$FACTORY_DIR" diff --name-only "$before" "$after")"

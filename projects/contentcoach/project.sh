@@ -15,7 +15,7 @@ CONTENTCOACH_DIR="${CONTENTCOACH_DIR:-$HOME/Documents/projects/contentcoach}"
 # staging account. mint_login.py refuses anything but CC_ENV=staging and the
 # founder's own human id. Read from origin/dev, never the stale local main.
 mint_staging() {
-  git -C "$CONTENTCOACH_DIR" fetch -q origin dev
+  git -C "$CONTENTCOACH_DIR" fetch -q origin dev || { echo "could not fetch origin/dev for mint_login.py" >&2; return 1; }
   git -C "$CONTENTCOACH_DIR" show origin/dev:e2e/support/mint_login.py |
     ssh vps 'c=$(docker ps -q --filter name=contentcoach-api-staging-web | head -1); \
              docker exec -i "${c:-staging-api-1}" python -' 2> >(grep -v '"web_link_minted"' >&2)
@@ -32,7 +32,7 @@ mint_preview() {  # $1 = PR number
     export DATABASE_URL=postgresql+asyncpg://cc_pr_$PR:$(cat /secrets/db-password)@factory-pg-1:5432/cc_pr_$PR
     export MIGRATE_DATABASE_URL=$DATABASE_URL CC_APP_DATABASE_URL=$DATABASE_URL
     export WEB_BASE_URL=https://pr$PR.contentcoach.org/app MEDIA_DIR=/srv/media/pr-$PR'
-  git -C "$CONTENTCOACH_DIR" fetch -q origin dev
+  git -C "$CONTENTCOACH_DIR" fetch -q origin dev || { echo "could not fetch origin/dev for mint_login.py" >&2; return 1; }
   git -C "$CONTENTCOACH_DIR" show origin/dev:e2e/support/mint_login.py |
     ssh vps "docker exec -i $c sh -c '$env
     exec python -'" 2> >(grep -v '"web_link_minted"' >&2)
