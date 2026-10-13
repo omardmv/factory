@@ -37,7 +37,58 @@ async function agents(path, init = {}) {
   const r = await fetch(`${AGENTS}${path}`, { ...init, headers: { authorization: `Bearer ${secret('agents-token')}`, 'content-type': 'application/json' }, signal: AbortSignal.timeout(10000) });
   const j = await r.json(); if (!r.ok) throw new Error(j.error ?? r.status); return j;
 }
-const clip = (s, n = 3500) => (s.length > n ? s.slice(0, n) + '\n…' : s);
+// ---- formatting for a phone: Telegram HTML instead of raw Markdown, short
+// messages, the full text one tap away on the dashboard
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const short = (s, n = 60) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
+// cut at a line break, so a code span or a tag is never cut in half
+function clip(s, n) {
+  if (s.length <= n) return { text: s, cut: false };
+  const at = s.lastIndexOf('\n', n);
+  return { text: s.slice(0, at > n / 2 ? at : n).trimEnd(), cut: true };
+}
+function html(md) {
+  const blocks = [];
+  let h = md.replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, c) => `\u0000${blocks.push(c.trimEnd()) - 1}\u0000`);
+  h = esc(h)
+    .replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, '$1<i>$2</i>')
+    .replace(/^(\s*)[-*]\s+/gm, (_, sp) => `${sp}• `)
+    .replace(/\n{3,}/g, '\n\n');
+  return h.replace(/\u0000(\d+)\u0000/g, (_, i) => `<pre>${esc(blocks[i])}</pre>`);
+}
+const taskLink = (id) => `${DASHBOARD}/?task=${id}`;
+async function sendHtml(text, taskId) {
+  let m;
+  try { m = await tg('sendMessage', { chat_id: state.owner, text, parse_mode: 'HTML', disable_web_page_preview: true }); }
+  catch (e) { log('html.rejected', { error: e.message }); return send(text.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'), taskId); }
+  if (taskId) state.msgTask[m.message_id] = taskId;
+  persist();
+}
+// one task message, ready to send
+function render(t, m) {
+  const head = (icon, label) => `${icon} <b>${esc(label)}</b>\n${esc(short(t.title))} · <code>${t.id}</code>`;
+  const links = [t.pr ? `<a href="${t.pr.url}">PR #${t.pr.number}</a>` : '', `<a href="${taskLink(t.id)}">full conversation</a>`].filter(Boolean).join(' · ');
+  if (m.from === 'review') {
+    const verdict = /VERDICT:\s*(PASS|CHANGES)/i.exec(m.text)?.[1]?.toUpperCase();
+    // the phone gets the conclusion and what must be fixed; notes stay on the PR
+    const [main, notes = ''] = m.text.replace(/^\s*VERDICT:.*$/gim, '').trim().split(/^#{1,6}\s*Notes\b.*$/im);
+    const n = (notes.match(/^\s*[-*]\s/gm) ?? []).length;
+    const body = clip(main.trim() + (n ? `\n\n_${n} non-blocking note${n === 1 ? '' : 's'} on the PR._` : ''), 900);
+    const label = verdict === 'PASS' ? 'Review passed: ready for you to merge' : verdict === 'CHANGES' ? 'Reviewer asked for changes: the agent is on it' : 'Review finished without a verdict';
+    return `${head(verdict === 'PASS' ? '✅' : verdict === 'CHANGES' ? '🔁' : '⚠️', label)}\n\n${html(body.text)}${body.cut ? '\n…' : ''}\n\n${links}`;
+  }
+  if (m.from === 'factory') {
+    const text = m.text.replace(/^\[factory\]\s*/, '');
+    return `🏭 ${html(clip(text.split('\n')[0], 400).text)}\n${esc(short(t.title))} · <code>${t.id}</code>`;
+  }
+  const decision = /^\s*DECISION NEEDED\b/m.test(m.text);
+  const body = clip(m.text, decision ? 2500 : 1200);
+  const label = decision ? 'Decision needed' : t.phase === 'brief' && t.status !== 'working' ? 'Brief: reply "go" or answer' : 'Agent';
+  return `${head(decision ? '❓' : '🤖', label)}\n\n${html(body.text)}${body.cut ? '\n…' : ''}\n\n${links}${decision ? '\n\n<i>Reply to this message with your choice.</i>' : ''}`;
+}
 async function send(text, taskId) {
   for (let i = 0; i < text.length; i += 3800) {
     const m = await tg('sendMessage', { chat_id: state.owner, text: text.slice(i, i + 3800), disable_web_page_preview: true });
@@ -73,7 +124,7 @@ async function onMessage(msg) {
     state.batches[b.batch] = { ids: b.tasks.map((t) => t.id), project, reported: false };
     for (const t of b.tasks) state.sent[t.id] = 1;
     persist();
-    return send(`Queue ${b.batch} (${project}): ${b.tasks.length} tasks, no briefs, each to a reviewed PR. I'll write when all of them are done.\n\n${b.tasks.map((t) => `#${t.id} · ${t.title}`).join('\n')}`);
+    return sendHtml(`📦 <b>Queue started: ${b.tasks.length} tasks</b> (${project})\nEach one runs to a reviewed PR. One summary comes when all are done.\n\n${b.tasks.map((t) => `• ${esc(short(t.title, 70))}`).join('\n')}`);
   }
   const replyTo = msg.reply_to_message?.message_id;
   const taskId = replyTo && state.msgTask[replyTo];
@@ -104,12 +155,7 @@ async function pushUpdates() {
     const full = await agents(`/tasks/${t.id}`);
     const from = state.sent[t.id] ?? 0;
     const fresh = full.messages.slice(from).filter((m) => m.from !== 'you');
-    for (const m of fresh) {
-      const decision = m.from === 'agent' && /^\s*DECISION NEEDED\b/m.test(m.text);
-      const who = decision ? '❓' : m.from === 'agent' ? '🤖' : m.from === 'review' ? '🔍' : '🏭';
-      const tail = (full.pr && m.from !== 'factory' ? `\nPR: ${full.pr.url}` : '') + (decision ? '\n\nReply to this message with your choice.' : '');
-      await send(`${who} #${t.id} · ${t.title}\n\n${clip(m.text)}${tail}`, t.id);
-    }
+    for (const m of fresh) await sendHtml(render(full, m), t.id);
     state.sent[t.id] = full.messages.length; persist();
   }
   await batchSummaries();
@@ -124,9 +170,9 @@ async function batchSummaries() {
   for (const [id, b] of open) {
     const mine = tasks.filter((t) => b.ids.includes(t.id));
     if (mine.length < b.ids.length || mine.some((t) => t.running || !(SETTLED.includes(t.status) || t.pr?.state === 'merged'))) continue;
-    const line = (t) => `${t.status === 'ready for you' ? '✅' : t.status === 'decision needed' ? '❓' : t.status === 'stopped' ? '⏹' : '⚠️'} #${t.id} · ${t.title}${t.pr ? `\n   ${t.pr.url}` : ''}`;
+    const line = (t) => `${t.status === 'ready for you' ? '✅' : t.status === 'decision needed' ? '❓' : t.status === 'stopped' ? '⏹' : '⚠️'} ${esc(short(t.title, 50))}\n      ${t.pr ? `<a href="${t.pr.url}">PR #${t.pr.number}</a> · ` : ''}<a href="${taskLink(t.id)}">${t.status}</a>`;
     const ready = mine.filter((t) => t.status === 'ready for you').length;
-    await send(`Queue ${id} done: ${ready}/${mine.length} reviewed and ready to merge.\n\n${mine.map(line).join('\n')}`);
+    await sendHtml(`📦 <b>Queue done: ${ready} of ${mine.length} ready to merge</b>\n\n${mine.map(line).join('\n\n')}`);
     b.reported = true; persist();
   }
 }
