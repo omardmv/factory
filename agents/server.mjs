@@ -433,7 +433,7 @@ async function digest(hours) {
       tokens[t.repo] ??= await githubToken(t.repo);
       const body = (await gh(tokens[t.repo], `/repos/${t.repo}/pulls/${t.pr.number}`)).body ?? '';
       const m = /^#{1,6}\s*Attention\b[^\n]*\n([\s\S]*?)(?=^#{1,6}\s|$(?![\s\S]))/im.exec(body);
-      return (m?.[1] ?? '').trim().slice(0, 500);
+      return (m?.[1] ?? '').split('\n').filter((l) => !/Generated with|Co-Authored-By/i.test(l)).join('\n').trim().slice(0, 500);
     } catch { return ''; }
   };
   const brief = (t) => ({ id: t.id, title: t.title, kind: t.kind, status: t.status, pr: t.pr ?? null, verdict: t.verdict ?? null, reviews: t.reviews ?? 0 });
