@@ -1,0 +1,24 @@
+# The factory dashboard, deployed by Coolify (project "factory").
+# Loopback port only: host nginx serves factory.contentcoach.org and asks
+# GET /auth for every preview. Secrets from root-owned files, never Coolify
+# variables (Coolify hands every variable to every container).
+services:
+  dashboard:
+    build: .
+    restart: unless-stopped
+    # secrets are root:10010 0640; gid 10010 (factory-dash) has no members on the host
+    group_add: ["10010"]
+    ports:
+      - "127.0.0.1:19200:8080"
+    volumes:
+      - /opt/factory/dashboard:/run/factory:ro
+      - /srv/factory/state:/srv/factory/state:ro
+      - /srv/factory/artifacts:/srv/factory/artifacts:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    mem_limit: 128m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
