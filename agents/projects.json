@@ -1,4 +1,10 @@
 {
-  "contentcoach": { "repo": "contentcoach/contentcoach", "base": "dev" },
-  "factory": { "repo": "omardmv/factory", "base": "main" }
+  "contentcoach": {
+    "repo": "contentcoach/contentcoach", "base": "dev",
+    "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, private, owned by the contentcoach org" }
+  },
+  "factory": {
+    "repo": "omardmv/factory", "base": "main",
+    "githubApp": { "id": "4941357", "key": "github-app.pem", "note": "openinspectv1, private, owned by omardmv" }
+  }
 }

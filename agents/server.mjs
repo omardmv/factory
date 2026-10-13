@@ -16,7 +16,6 @@ const PORT = Number(process.env.PORT ?? 19300);
 const BIND = (process.env.BIND_ADDRESSES ?? '127.0.0.1').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 3);
 const MAX_FACTORY_ROUNDS = Number(process.env.MAX_FACTORY_ROUNDS ?? 6);
-const GITHUB_APP_ID = process.env.GITHUB_APP_ID ?? '4941357';
 const PROJECTS = JSON.parse(readFileSync(new URL('./projects.json', import.meta.url), 'utf8'));
 
 const RULES = `You are a factory agent working unattended. No person is watching.
@@ -40,10 +39,12 @@ const allTasks = () => readdirSync(`${HOME}/tasks`).filter((d) => existsSync(`${
 
 // ---------- GitHub App: a one-hour installation token per run ----------
 async function githubToken(repo) {
+  const app = Object.values(PROJECTS).find((p) => p.repo === repo)?.githubApp;
+  if (!app) throw new Error(`no GitHub App configured for ${repo}`);
   const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
   const now = Math.floor(Date.now() / 1000);
-  const unsigned = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({ iat: now - 60, exp: now + 540, iss: GITHUB_APP_ID })}`;
-  const jwt = `${unsigned}.${createSign('RSA-SHA256').update(unsigned).sign(secret('github-app.pem'), 'base64url')}`;
+  const unsigned = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({ iat: now - 60, exp: now + 540, iss: app.id })}`;
+  const jwt = `${unsigned}.${createSign('RSA-SHA256').update(unsigned).sign(secret(app.key), 'base64url')}`;
   const gh = async (url, method = 'GET', token = jwt) => {
     const r = await fetch(`https://api.github.com${url}`, { method, headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'factory-agents' } });
     if (!r.ok) throw new Error(`github ${url}: ${r.status} ${(await r.text()).slice(0, 200)}`);
