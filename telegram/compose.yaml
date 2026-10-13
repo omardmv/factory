@@ -1,0 +1,23 @@
+# @omarfactory_bot, deployed by Coolify (project "factory"). Outbound only
+# (Telegram long polling); reaches factory-agents over Coolify's network.
+# Secrets from root-owned files (root:10010 0640), never Coolify variables.
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    group_add: ["10010"]
+    volumes:
+      - /opt/factory/bot:/run/factory:ro
+      - /srv/factory/state:/srv/factory/state:ro
+      - bot-state:/data
+    networks: [default, coolify]
+    mem_limit: 128m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  bot-state:
+
+networks:
+  coolify:
+    external: true
