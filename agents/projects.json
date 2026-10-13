@@ -1,0 +1,4 @@
+{
+  "contentcoach": { "repo": "contentcoach/contentcoach", "base": "dev" },
+  "factory": { "repo": "omardmv/factory", "base": "main" }
+}

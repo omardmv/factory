@@ -1,0 +1,17 @@
+[Unit]
+Description=factory-agents: Claude Code tasks in locked-down containers (Brief -> Run -> Review)
+After=docker.service factory-sandbox-firewall.service
+Requires=docker.service
+Wants=factory-sandbox-firewall.service
+
+[Service]
+# root: it launches containers (docker is root-equivalent anyway) and hands
+# each task's folders to the image's unprivileged user
+WorkingDirectory=/opt/factory/src/agents
+EnvironmentFile=-/opt/factory/agents/env
+ExecStart=/opt/factory/node/bin/node /opt/factory/src/agents/server.mjs
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
