@@ -15,7 +15,7 @@ services:
       - /srv/factory/state:/srv/factory/state:ro
       - /srv/factory/artifacts:/srv/factory/artifacts:ro
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 5

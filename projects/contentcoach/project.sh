@@ -21,11 +21,29 @@ mint_staging() {
              docker exec -i "${c:-staging-api-1}" python -' 2> >(grep -v '"web_link_minted"' >&2)
 }
 
+# Coolify names a preview's containers <service>-<coolify id>-pr-<N>. The api's
+# entrypoint builds DATABASE_URL & co. before starting, so a bare docker exec
+# lacks them: rebuild them inline, the same way preview.compose.yaml does.
 mint_preview() {  # $1 = PR number
-  ssh vps "docker inspect cc-pr-$1-api >/dev/null 2>&1" ||
-    { echo "no preview container cc-pr-$1-api (previews arrive in phase 2)" >&2; return 1; }
+  local c env
+  c=$(ssh vps "docker ps --format '{{.Names}}' | grep -E '^api-.*-pr-$1\$' | head -1")
+  [ -n "$c" ] || { echo "no preview api container for PR $1 (api-*-pr-$1)" >&2; return 1; }
+  env='PR=${SERVICE_NAME_API##*-pr-}
+    export DATABASE_URL=postgresql+asyncpg://cc_pr_$PR:$(cat /secrets/db-password)@factory-pg-1:5432/cc_pr_$PR
+    export MIGRATE_DATABASE_URL=$DATABASE_URL CC_APP_DATABASE_URL=$DATABASE_URL
+    export WEB_BASE_URL=https://pr$PR.contentcoach.org/app MEDIA_DIR=/srv/media/pr-$PR'
+  git -C "$CONTENTCOACH_DIR" fetch -q origin dev
   git -C "$CONTENTCOACH_DIR" show origin/dev:e2e/support/mint_login.py |
-    ssh vps "docker exec -i cc-pr-$1-api python -" 2> >(grep -v '"web_link_minted"' >&2)
+    ssh vps "docker exec -i $c sh -c '$env
+    exec python -'" 2> >(grep -v '"web_link_minted"' >&2)
+}
+  git -C "$CONTENTCOACH_DIR" fetch -q origin dev
+  git -C "$CONTENTCOACH_DIR" show origin/dev:e2e/support/mint_login.py |
+    ssh vps "docker exec -i $c sh -c '"'PR=\${SERVICE_NAME_API##*-pr-}
+      export DATABASE_URL=postgresql+asyncpg://cc_pr_\$PR:\$(cat /secrets/db-password)@factory-pg-1:5432/cc_pr_\$PR
+      export MIGRATE_DATABASE_URL=\$DATABASE_URL CC_APP_DATABASE_URL=\$DATABASE_URL
+      export WEB_BASE_URL=https://pr\$PR.contentcoach.org/app MEDIA_DIR=/srv/media/pr-\$PR
+      exec python -'"'" 2> >(grep -v '"web_link_minted"' >&2)
 }
 
 # ---- box side (bin/factory-box) ------------------------------------------

@@ -5,6 +5,7 @@
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { chatView, chatCss, agents } from './chat.mjs';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const SECRETS = process.env.SECRETS_DIR ?? '/run/factory';
@@ -90,6 +91,8 @@ button{font:inherit;font-size:13px;padding:4px 12px;border-radius:8px;border:1px
 .tile b{display:block;font-weight:500;font-size:13px;color:#5f5e5a} header{display:flex;justify-content:space-between;align-items:baseline}
 input{font:inherit;padding:8px 10px;border:1px solid #d3d1c7;border-radius:8px;width:260px}`;
 const page = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${css}</style><main>${body}</main>`;
+const appPage = (title, body) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><style>${css}${chatCss}</style>${body}`;
+function healthy() { const f = readJson(`${STATE}/status.json`) ?? {}; const fresh = f.at && Date.now() - new Date(f.at) < 5 * 60000; return !!fresh && Object.values(f.services ?? {}).every((s) => ['active', 'running', 'healthy'].includes(s)) && (f.runners ?? []).every((r) => r.active === 'active'); }
 const pill = (text, kind = '') => `<span class="pill ${kind}">${esc(text)}</span>`;
 const ago = (t) => { if (!t) return ''; const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 60 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 
@@ -129,7 +132,7 @@ async function dashboard() {
   ].join('');
 
   return page('Factory', `
-  <header><h1>Factory</h1><span class="muted">${stale ? 'host facts are stale' : `updated ${esc(ago(facts.at))}`} · <a href="/logout">sign out</a></span></header>
+  <header><h1>Factory</h1><span class="muted">${stale ? 'host facts are stale' : `updated ${esc(ago(facts.at))}`} · <a href="/">tasks</a> · <a href="/logout">sign out</a></span></header>
   <div class="big">${live.length} preview${live.length === 1 ? '' : 's'} running</div>
   <div class="muted">${esc(headline)}${unhealthy.length ? `: ${esc(unhealthy.join(', '))}` : ''}</div>
   <h2>Pull requests</h2>${rows}
@@ -155,7 +158,7 @@ createServer(async (req, res) => {
   const send = (code, body, headers = {}) => { res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...headers }); res.end(body); };
   try {
     if (url.pathname === '/auth') return send(validSession(req) ? 204 : 401, '');
-    if (url.pathname === '/health') return send(200, 'ok');
+    if (url.pathname === '/healthz') return send(200, 'ok');
     if (url.pathname === '/login' && req.method === 'GET') return send(200, loginPage(url.searchParams.get('next') ?? SELF));
     if (url.pathname === '/login' && req.method === 'POST') {
       const f = await readForm(req);
@@ -170,7 +173,23 @@ createServer(async (req, res) => {
       await coolify(`/deploy?uuid=${f.app}&pr=${f.pr}`, { method: 'POST' });
       return send(303, '', { location: '/' });
     }
-    if (url.pathname === '/') return send(200, await dashboard());
+    if (url.pathname === '/health') return send(200, (await dashboard()).replace('<header><h1>Factory</h1>', '<header><h1><a href="/" style="color:inherit">Factory</a> · health</h1>'));
+    if (url.pathname === '/') return send(200, appPage('Factory', await chatView({ taskId: url.searchParams.get('task'), healthy: healthy() })));
+    if (url.pathname === '/tasks' && req.method === 'POST') {
+      const f = await readForm(req);
+      if (!fromUs(req) || !['contentcoach', 'factory'].includes(f.project) || !String(f.text ?? '').trim()) return send(400, 'bad request');
+      const t = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project: f.project, text: f.text, auto: f.auto === 'on' }) });
+      return send(303, '', { location: `/?task=${t.id}` });
+    }
+    const tm = url.pathname.match(/^\/t\/([0-9]{6}-[0-9a-f]{6})\/(reply|stop|state)$/);
+    if (tm) {
+      const [, id, act] = tm;
+      if (act === 'state') { const t = await agents(`/tasks/${id}`); res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); return res.end(JSON.stringify({ n: t.messages.length, running: t.running })); }
+      if (req.method !== 'POST' || !fromUs(req)) return send(400, 'bad request');
+      if (act === 'reply') { const f = await readForm(req); if (String(f.text ?? '').trim()) await agents(`/tasks/${id}/messages`, { method: 'POST', body: JSON.stringify({ text: f.text }) }); }
+      if (act === 'stop') await agents(`/tasks/${id}/stop`, { method: 'POST' });
+      return send(303, '', { location: `/?task=${id}` });
+    }
     return send(404, 'not found');
   } catch (e) {
     console.error(JSON.stringify({ event: 'error', path: url.pathname, error: e.message }));
