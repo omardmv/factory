@@ -73,14 +73,21 @@ nightly ─▶ factory snapshot contentcoach (staging → cc_snapshot, disarmed)
 
 - Cloudflare, once: `A  *  <VPS IP>  proxied`. Records set by name
   (`staging`, `admin`, `software`, …) keep winning over the wildcard.
-- Names are one level deep, `pr-123-preview.contentcoach.org`, because the
+- Names are `<feature>-pr<N>.contentcoach.org`, e.g.
+  `sidebar-no-telegram-link-pr458.contentcoach.org` (founder 2026-10-13).
+  `<feature>` is the branch name minus its `feat/`, `fix/`, … prefix,
+  lowercased, anything outside `a-z0-9` turned into `-`, cut to 40
+  characters (a DNS label tops out at 63). One level deep, because the
   free certificate covers only `*.contentcoach.org`.
+- Routing only trusts the number: `anything-pr458` reaches PR 458, and a
+  name that isn't the current one (branch renamed, typo) gets a 302 to the
+  right name. A host with no `-pr<N>` ending matches nothing and gets 404.
 - Host nginx, once: one server block,
-  `server_name ~^(?<pv>pr-\d+)-preview\.contentcoach\.org$;` with the
+  `server_name ~^(?<slug>[a-z0-9-]+)-pr(?<n>\d+)\.contentcoach\.org$;` with the
   existing origin cert, basic auth, `proxy_pass` to the gateway on
   `127.0.0.1:<port>`.
 - Gateway (an nginx container on the docker network `factory`, resolver
-  `127.0.0.11`): sends the request to `http://cc-$pv-web`. Docker's own DNS
+  `127.0.0.11`): sends the request to `http://cc-pr-$n-web`. Docker's own DNS
   finds the container by name, so there's no config to write per PR. A preview
   that doesn't exist returns a "no preview for this PR" page, not a 502.
 - `/_factory/` on each preview host is served by the gateway from the
@@ -204,7 +211,7 @@ basic auth anyway.
   `npx e2e run --target preview --video on --reporter list,json,markdown`.
   Chromium is installed once on the runner host.
 - Results are copied to `/srv/factory/artifacts/contentcoach/pr-<n>/<run>/`
-  and served at `https://pr-<n>-preview.contentcoach.org/_factory/`: an
+  and served at `https://<feature>-pr<n>.contentcoach.org/_factory/`: an
   index page built from `report.json`, with every test, its status, its
   WebM video playing inline, and the trace page on failure. The last 5
   runs per PR are kept.
@@ -219,9 +226,9 @@ basic auth anyway.
 One comment, edited on every push:
 
 ```
-Preview  https://pr-123-preview.contentcoach.org/app   (ready, sha 1a2b3c4)
+Preview  https://<feature>-pr123.contentcoach.org/app   (ready, sha 1a2b3c4)
 Sign in  <24h link>
-E2E      41 passed, 1 failed → https://pr-123-preview.contentcoach.org/_factory/
+E2E      41 passed, 1 failed → https://<feature>-pr123.contentcoach.org/_factory/
          ✗ web-entry › connect › keeps the round      ▶ video  ▶ trace
 Data     copied from staging snapshot of 2026-10-13 03:00 (Tashkent)
 ```
@@ -275,7 +282,7 @@ agents push. Limits:
 
 1. **Box setup, once**: DNS wildcard (founder, steps below), host nginx
    block, gateway, `factory-pg`, runner. Proof: a hello container at
-   `pr-0-preview.contentcoach.org`.
+   `hello-pr0.contentcoach.org`.
 2. **Previews**: `factory up/down`, snapshot + disarm, ContentCoach's
    `.factory/preview.yml`, PR comment with URL + sign-in link. Proof: a
    real PR opens, signs in as the founder's staging account, closes clean.
@@ -296,8 +303,8 @@ agents push. Limits:
 
 Cloudflare dashboard → `contentcoach.org` → DNS → Records → Add record:
 
-- Type `A`, Name `*`, IPv4: the same IP the `staging` record points to,
+- Type `CNAME`, Name `*`, Target `staging.contentcoach.org`,
   Proxy status: **Proxied** (orange cloud), TTL Auto → Save.
 
-Nothing changes for existing names. Check: `dig +short pr-0-preview.contentcoach.org`
+Nothing changes for existing names. Check: `dig +short hello-pr0.contentcoach.org`
 returns Cloudflare IPs.
