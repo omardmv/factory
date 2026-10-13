@@ -13,6 +13,7 @@
 #   factory-box runner-add <owner/repo> <token> [i] (root) one more self-hosted runner, label factory
 #   factory-box self-update                        (root) pull the factory repo, sync if it changed
 #   factory-box status                            (root) write /srv/factory/state/status.json for the dashboard
+#   factory-box agent-say <task-id>  < message      post a [factory] report into a factory-agents task
 #   factory-box ls                                  running previews
 set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -321,7 +322,17 @@ status() {
   rm -f "$tmp"
 }
 
+agent_say() {  # task id; message on stdin
+  local id="$1" body
+  [[ "$id" =~ ^[0-9]{6}-[0-9a-f]{6}$ ]] || die "not a task id: $id"
+  body="$(python3 -c 'import json,sys; print(json.dumps({"from": "factory", "text": sys.stdin.read()}))')"
+  curl -fsS -m 15 -X POST -H "Authorization: Bearer $(cat /opt/factory/agents-runner-token)" \
+    -H "Content-Type: application/json" --data "$body" "http://127.0.0.1:19300/tasks/$id/messages" >/dev/null
+  log "reported to agent task $id"
+}
+
 case "$cmd" in
+  agent-say)    [ $# -eq 1 ] || die "usage: agent-say <task-id> < message"; agent_say "$1" ;;
   status)       status ;;
   snapshot-all)
     for conf in "$FACTORY_DIR"/projects/*/project.sh; do
