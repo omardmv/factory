@@ -10,7 +10,7 @@
 #   factory-box reset <project> <N>                 re-copy PR N's DB + media from the snapshot
 #   factory-box e2e  <project> <N> <checkout> <sha>   run e2e with video, publish the gallery
 #   factory-box sync                               (root) networks, gateway routes, host vhosts from projects/*
-#   factory-box runner-add <owner/repo> <token>    (root) one more self-hosted runner, label factory
+#   factory-box runner-add <owner/repo> <token> [i] (root) one more self-hosted runner, label factory
 #   factory-box self-update                        (root) pull the factory repo, sync if it changed
 #   factory-box ls                                  running previews
 set -euo pipefail
@@ -198,9 +198,9 @@ VHOST
   log "synced"
 }
 
-runner_add() {  # owner/repo token
+runner_add() {  # owner/repo token [index]: several per repo run jobs in parallel
   [ "$(id -u)" = 0 ] || die "runner-add needs root"
-  local repo="$1" token="$2" name; name="$(echo "$1" | tr '/' '-')"
+  local repo="$1" token="$2" name; name="$(echo "$1" | tr '/' '-')${3:+-$3}"
   local dir="/opt/factory/runners/$name" src=/opt/factory/runner
   [ -x "$src/config.sh" ] || die "no runner template at $src"
   if [ ! -d "$dir" ]; then
@@ -236,7 +236,7 @@ case "$cmd" in
       ( snapshot "$p" ) || echo "snapshot $p failed" >&2
     done ;;
   sync)        sync ;;
-  runner-add)  [ $# -eq 2 ] || die "usage: runner-add <owner/repo> <registration token>"; runner_add "$@" ;;
+  runner-add)  [ $# -ge 2 ] || die "usage: runner-add <owner/repo> <registration token> [index]"; runner_add "$@" ;;
   self-update) self_update ;;
   e2e)      [ $# -ge 3 ] || die "usage: e2e <project> <N> <checkout> [sha]"; e2e "$@" ;;
   snapshot) [ $# -eq 1 ] || die "usage: snapshot <project>"; snapshot "$1" ;;

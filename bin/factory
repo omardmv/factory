@@ -8,7 +8,7 @@
 #
 #   factory init  <project> --domain D --prefix P --repo owner/repo [--repo-dir DIR]
 #                 scaffold projects/<project>/ and (with --repo-dir) the repo's workflow
-#   factory runner <project>                     a self-hosted runner on the VPS for its repo
+#   factory runner <project> [count]             more self-hosted runners on the VPS for its repo
 #   factory push                                 push this factory repo (the box pulls it in <=5 min)
 #
 # <target> is `staging` or a PR number (`458`, `pr458`). Project: -p <name>
@@ -57,12 +57,15 @@ scaffolded $dest. Next:
 NEXT
     exit 0 ;;
   runner)
-    name="${2:?usage: factory runner <project>}"
+    name="${2:?usage: factory runner <project> [count]}"; count="${3:-1}"
     # shellcheck source=/dev/null
     . "$FACTORY_DIR/projects/$name/project.sh"
     [ -n "${REPO:-}" ] || { echo "projects/$name has no REPO" >&2; exit 1; }
-    token="$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token)"
-    ssh vps "factory-box runner-add $REPO $token"
+    have="$(gh api "repos/$REPO/actions/runners" --jq '[.runners[] | select(.labels[].name == "factory")] | length')"
+    for i in $(seq $((have + 1)) $((have + count))); do
+      token="$(gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token)"
+      ssh vps "factory-box runner-add $REPO $token $i"
+    done
     exit 0 ;;
   push)
     git -C "$FACTORY_DIR" push -q && echo "pushed; the box pulls within 5 minutes (or: ssh vps factory-box self-update)"
