@@ -37,14 +37,6 @@ mint_preview() {  # $1 = PR number
     ssh vps "docker exec -i $c sh -c '$env
     exec python -'" 2> >(grep -v '"web_link_minted"' >&2)
 }
-  git -C "$CONTENTCOACH_DIR" fetch -q origin dev
-  git -C "$CONTENTCOACH_DIR" show origin/dev:e2e/support/mint_login.py |
-    ssh vps "docker exec -i $c sh -c '"'PR=\${SERVICE_NAME_API##*-pr-}
-      export DATABASE_URL=postgresql+asyncpg://cc_pr_\$PR:\$(cat /secrets/db-password)@factory-pg-1:5432/cc_pr_\$PR
-      export MIGRATE_DATABASE_URL=\$DATABASE_URL CC_APP_DATABASE_URL=\$DATABASE_URL
-      export WEB_BASE_URL=https://pr\$PR.contentcoach.org/app MEDIA_DIR=/srv/media/pr-\$PR
-      exec python -'"'" 2> >(grep -v '"web_link_minted"' >&2)
-}
 
 # ---- box side (bin/factory-box) ------------------------------------------
 SOURCE_DB_CONTAINER=staging-db-1           # read-only pg_dump source
