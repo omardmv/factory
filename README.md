@@ -46,6 +46,27 @@ factory runner <name>      # a self-hosted runner for the repo
 # commit .github/workflows/preview.yml in the repo, open a PR: it previews itself
 ```
 
+## Agents
+
+`agents/server.mjs` (systemd `factory-agents`) runs each task as Claude Code
+in its own locked-down container, on branch `agent/<task>`:
+
+1. **Brief** (skipped for issues, queues and "skip brief"): questions, plan,
+   definition of done. You answer once.
+2. **Run**: no questions. The agent pauses only with a `DECISION NEEDED`
+   block (architecture, money, security, a product call) or before something
+   irreversible; everything else it decides and logs in the PR.
+3. **Checks**: `[factory]` reports from the preview + e2e drive it to green.
+4. **Review**: at a green head (or as soon as the PR exists, for a project
+   without previews) a fresh reviewer (`REVIEW_MODEL`, default opus; own
+   session, no GitHub token, no edit tools) reads the PR. PASS = ready for
+   you; CHANGES = back to the agent. At most 6 rounds, then it stops.
+
+Tasks come from the chat bot or dashboard, from issues labelled
+`ready-for-agent` (polled every 2 minutes, one task per issue), or as a
+queue (`queue:` + one task per line in Telegram; one summary when the
+whole batch has settled). Agents never merge.
+
 ## Commands
 
 Laptop (`bin/factory`): `url`, `login`, `api`, `shot` against `staging` or a

@@ -25,8 +25,11 @@ function md(text) {
   return h.replace(/\n/g, '<br>');
 }
 const ago = (t) => { const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 2880 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+const NEEDS_YOU = ['waiting for you', 'decision needed', 'ready for you'];
 const dot = (t) => t.running ? '<span class="dot live" title="working"></span>'
   : t.pr?.state === 'merged' || t.status === 'done' ? '<span class="dot done" title="done">✓</span>'
+  : t.status === 'ready for you' ? '<span class="dot you" title="reviewed: ready for you">✓</span>'
+  : t.status === 'decision needed' ? '<span class="dot you" title="decision needed">?</span>'
   : t.status === 'waiting for you' ? '<span class="dot you" title="waiting for you"></span>'
   : t.status === 'stopped' ? '<span class="dot off" title="stopped"></span>' : '<span class="dot wait" title="waiting for checks"></span>';
 
@@ -45,7 +48,7 @@ async function overview(tasks, healthy) {
   let facts = {}; try { facts = JSON.parse(readFileSync(`${STATE}/status.json`, 'utf8')); } catch {}
   const [prs, ship, dep] = await Promise.all([settle(openPrs()), settle(shipped()), settle(deploys())]);
   const working = tasks.filter((t) => t.running);
-  const needYou = tasks.filter((t) => !t.running && t.status === 'waiting for you');
+  const needYou = tasks.filter((t) => !t.running && NEEDS_YOU.includes(t.status));
   const live = Array.isArray(prs) ? prs : [];
   const head = `<div class="big">${working.length} agent${working.length === 1 ? '' : 's'} working · ${needYou.length} waiting for you · ${live.length} preview${live.length === 1 ? '' : 's'} live</div>
     <div class="hint">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● the factory needs a look</span>'} · disk ${facts.disk_used_pct ?? '?'}% · data snapshot ${(facts.snapshots ?? []).map((x) => { const t = (x.note.match(/taken (\S+)/) ?? [])[1]; return t ? ago(t) + ' old' : '?'; }).join(', ')} · <a href="/health">health →</a> <a class="back" href="/?list=1">· all tasks →</a></div>`;
@@ -88,7 +91,7 @@ export const chatCss = `
 .meta{font-size:13px;color:#5f5e5a;margin-top:4px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
 .msgs{flex:1;overflow:auto;padding:18px 22px;display:flex;flex-direction:column;gap:12px}
 .m{max-width:760px;padding:10px 14px;border-radius:12px;font-size:14.5px;line-height:1.55;background:#fff;border:1px solid #e6e4dc}
-.m.you{align-self:flex-end;background:#e6effa;border-color:#b5d4f4} .m.factory{background:#f1efe8;font-size:13.5px}
+.m.you{align-self:flex-end;background:#e6effa;border-color:#b5d4f4} .m.factory{background:#f1efe8;font-size:13.5px} .m.review{background:#eeedfe;border-color:#cecbf6}
 .m .who{font-size:11px;color:#888780;margin-bottom:3px} .m pre{white-space:pre-wrap;background:#f7f6f2;padding:8px;border-radius:6px;font-size:12.5px}
 .m code{background:#f1efe8;padding:1px 4px;border-radius:4px;font-size:13px}
 .compose{border-top:1px solid #e6e4dc;padding:12px 22px;background:#fff;display:flex;gap:8px}
@@ -131,7 +134,7 @@ export async function chatView({ taskId, healthy, list = false }) {
       `<span class="hint">${esc(task.status)}${task.costUsd ? ` · $${task.costUsd.toFixed(2)}` : ''}</span>`,
       task.running ? `<form method="post" action="/t/${task.id}/stop" style="display:inline"><button>Stop</button></form>` : '',
     ].join(' ');
-    const msgs = task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
+    const msgs = task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : m.from === 'review' ? 'reviewer' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
       + (task.running ? `<div class="hint"><span class="dot live"></span> the agent is working${task.activity?.length ? `<div class="activity">${task.activity.slice(-5).map((x) => `${ago(x.at)} · ${esc(x.tool)} · ${esc(x.detail)}`).join('<br>')}</div>` : ''}</div>` : '');
     const placeholder = task.phase === 'brief' && !task.running ? 'Reply to the brief: "go", or your answers' : 'Message the agent…';
     main = `<div class="head"><a href="/?list=1" class="hint back" style="font-size:12px">← tasks</a><h2>${esc(task.title)}</h2><div class="meta">${esc(task.project)} · ${links}</div></div>

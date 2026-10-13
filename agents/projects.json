@@ -1,6 +1,6 @@
 {
   "contentcoach": {
-    "repo": "contentcoach/contentcoach", "base": "dev",
+    "repo": "contentcoach/contentcoach", "base": "dev", "checks": "preview",
     "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, private, owned by the contentcoach org" }
   },
   "factory": {

@@ -1,0 +1,229 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Kalam:wght@700&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#fff; }
+  svg { font-family:'Patrick Hand', 'Comic Sans MS', cursive; }
+  .title { font-family:'Kalam', cursive; font-size:54px; font-weight:700; fill:#1a1a1a; }
+  .h { font-size:21px; fill:#222; }
+  .t { font-size:16px; fill:#333; }
+  .s { font-size:14px; fill:#666; }
+  .p { fill:#7a4bd1; } .g { fill:#0f8a6a; } .r { fill:#c0392b; } .b { fill:#2b6cb0; } .o { fill:#b7651a; } .i { fill:#4b4bb0; }
+  .frame { fill:none; stroke:#9a9a9a; stroke-width:1.4; stroke-dasharray:6 5; }
+  .arr { stroke:#333; stroke-width:1.8; fill:none; marker-end:url(#a); }
+  .arrR { stroke:#c0392b; stroke-width:1.5; fill:none; stroke-dasharray:5 4; marker-end:url(#ar); }
+  .arrG { stroke:#0f8a6a; stroke-width:1.6; fill:none; marker-end:url(#ag); }
+  .P { fill:#f1e9ff; stroke:#7a4bd1; } .G { fill:#e3f6ef; stroke:#0f8a6a; } .R { fill:#fde8e6; stroke:#c0392b; }
+  .B { fill:#e6effa; stroke:#2b6cb0; } .O { fill:#fff1e0; stroke:#b7651a; } .I { fill:#ecebfb; stroke:#4b4bb0; } .W { fill:#fff; stroke:#888; }
+</style></head><body>
+<svg width="1900" height="1580" viewBox="0 0 1900 1580" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#333" stroke-width="1.6"/></marker>
+  <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#c0392b" stroke-width="1.6"/></marker>
+  <marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#0f8a6a" stroke-width="1.6"/></marker>
+</defs>
+
+<text class="title" x="30" y="72">The Software Factory</text>
+<text class="s" x="34" y="104">ask for a change from anywhere · an agent builds it · every pull request becomes a live preview, tested and recorded · one server · any number of projects · about $0</text>
+
+<circle cx="1420" cy="40" r="8" class="P"/><text class="t p" x="1436" y="45">AI agent</text>
+<circle cx="1420" cy="68" r="8" class="G"/><text class="t g" x="1436" y="73">Factory (our scripts)</text>
+<circle cx="1420" cy="96" r="8" class="I"/><text class="t i" x="1436" y="101">Coolify (self-hosted)</text>
+<circle cx="1660" cy="40" r="8" class="R"/><text class="t r" x="1676" y="45">Human gate (you)</text>
+<circle cx="1660" cy="68" r="8" class="B"/><text class="t b" x="1676" y="73">GitHub</text>
+<circle cx="1660" cy="96" r="8" class="O"/><text class="t o" x="1676" y="101">Data / environments</text>
+
+<!-- ============ ROW 1 ============ -->
+<text class="h" x="30" y="160">Ask from anywhere</text>
+<rect class="frame" x="22" y="175" width="380" height="260" rx="6"/>
+<rect x="44" y="198" width="160" height="60" rx="10" class="R"/>
+<text class="t r" x="124" y="224" text-anchor="middle">You</text><text class="s" x="124" y="244" text-anchor="middle">laptop · phone</text>
+<rect x="222" y="198" width="160" height="60" rx="10" class="G"/>
+<text class="t g" x="302" y="224" text-anchor="middle">Chat bot</text><text class="s" x="302" y="244" text-anchor="middle">new task · reply · stop</text>
+<rect x="44" y="274" width="338" height="60" rx="10" class="G"/>
+<text class="t g" x="213" y="300" text-anchor="middle">Dashboard</text><text class="s" x="213" y="320" text-anchor="middle">every task with its PR, preview, videos, cost</text>
+<text class="s" x="44" y="364">one sign-in covers the dashboard and every preview</text>
+<text class="s" x="44" y="386">or code on the laptop: one worktree per change</text>
+<text class="s" x="44" y="408">same rules either way</text>
+<path class="arr" d="M406 305 L444 305"/>
+
+<text class="h p" x="458" y="160">Agents</text>
+<rect class="frame" x="450" y="175" width="400" height="260" rx="6"/>
+<rect x="472" y="198" width="356" height="60" rx="10" class="P"/>
+<text class="t p" x="650" y="224" text-anchor="middle">Agent service</text><text class="s" x="650" y="244" text-anchor="middle">takes a task, keeps its conversation</text>
+<rect x="472" y="274" width="356" height="60" rx="10" class="P"/>
+<text class="t p" x="650" y="300" text-anchor="middle">One sandbox per task</text><text class="s" x="650" y="320" text-anchor="middle">own container · cannot reach the rest of the server</text>
+<text class="s" x="472" y="364">1 · brief: questions, a plan, what "done" means</text>
+<text class="s" x="472" y="386">2 · you answer once, then it runs alone</text>
+<text class="s" x="472" y="408">3 · its own branch, its own pull request</text>
+<path class="arr" d="M854 305 L894 305"/>
+
+<text class="h b" x="906" y="160">Pull request</text>
+<rect x="900" y="175" width="300" height="260" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
+<rect x="916" y="195" width="268" height="34" rx="4" class="W"/><text class="t" x="930" y="218">agent/42 · add search</text>
+<rect x="916" y="239" width="268" height="34" rx="4" class="W"/><text class="t" x="930" y="262">fix/login-redirect</text>
+<rect x="916" y="283" width="268" height="34" rx="4" class="W"/><text class="t" x="930" y="306">feat/mobile-menu</text>
+<text class="s" x="916" y="354">into the integration branch</text>
+<text class="s" x="916" y="376">never straight to production</text>
+<text class="s" x="916" y="398">every push: rebuild the preview + test it</text>
+<path class="arr" d="M1206 305 L1246 305"/>
+
+<text class="h o" x="1260" y="160">A preview environment per PR</text>
+<rect class="frame" x="1252" y="175" width="626" height="260" rx="6"/>
+<rect x="1274" y="198" width="290" height="96" rx="10" class="I"/>
+<text class="t i" x="1290" y="224">Coolify builds it</text>
+<text class="s" x="1290" y="248">reads the repo's preview recipe</text>
+<text class="s" x="1290" y="270">one app per PR, its own network</text>
+<rect x="1580" y="198" width="276" height="96" rx="10" class="O"/>
+<text class="t o" x="1596" y="224">its own copy of the data</text>
+<text class="s" x="1596" y="248">database copied in about a second</text>
+<text class="s" x="1596" y="270">files hardlinked: 0 extra bytes</text>
+<rect x="1274" y="310" width="582" height="104" rx="10" class="W"/>
+<text class="t" x="1290" y="336">https://pr&lt;N&gt;.&lt;domain&gt;</text>
+<text class="s" x="1290" y="360">one wildcard address per domain, set up once · behind the one sign-in</text>
+<text class="s" x="1290" y="382">offline by default: AI models, scrapers and payments are faked</text>
+<text class="s" x="1290" y="404">close the PR: containers, database and files are deleted</text>
+
+<!-- down to tests -->
+<path class="arr" d="M1565 440 L1565 548"/>
+<text class="s r" x="1585" y="500">red check → the agent fixes it → pushes again</text>
+<path class="arrR" d="M1300 552 C 1250 470, 900 500, 830 440"/>
+
+<!-- ============ ROW 2 (right to left) ============ -->
+<text class="h g" x="1260" y="540">Browser tests on the preview</text>
+<rect class="frame" x="1252" y="555" width="626" height="220" rx="6"/>
+<rect x="1274" y="578" width="290" height="80" rx="10" class="G"/>
+<text class="t g" x="1290" y="604">self-hosted runners</text>
+<text class="s" x="1290" y="628">on our server, several in parallel</text>
+<text class="s" x="1290" y="648">0 GitHub minutes</text>
+<rect x="1580" y="578" width="276" height="80" rx="10" class="P"/>
+<text class="t p" x="1596" y="604">a robot uses the preview</text>
+<text class="s" x="1596" y="628">signs in like a real user</text>
+<text class="s" x="1596" y="648">model-free, repeatable</text>
+<rect x="1274" y="674" width="582" height="82" rx="10" class="W"/>
+<rect x="1292" y="696" width="40" height="34" rx="4" fill="#ddd" stroke="#999"/><path d="M1306 704 L1322 713 L1306 722 Z" fill="#888"/>
+<rect x="1342" y="696" width="40" height="34" rx="4" fill="#ddd" stroke="#999"/><path d="M1356 704 L1372 713 L1356 722 Z" fill="#888"/>
+<rect x="1392" y="696" width="40" height="34" rx="4" fill="#ddd" stroke="#999"/><path d="M1406 704 L1422 713 L1406 722 Z" fill="#888"/>
+<text class="s" x="1452" y="710">a video of every test · trace on failure</text>
+<text class="s" x="1452" y="732">a gallery you can watch on the phone</text>
+<path class="arr" d="M1246 665 L1206 665"/>
+
+<text class="h b" x="906" y="540">One report</text>
+<rect x="900" y="555" width="300" height="220" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
+<text class="t" x="918" y="590">Preview pr42.&lt;domain&gt;</text>
+<text class="t" x="918" y="618">Sign in with one click</text>
+<text class="t" x="918" y="646">E2E 12 passed ▶ videos</text>
+<text class="t" x="918" y="674">Data snapshot of 03:00</text>
+<text class="s" x="918" y="714">a PR comment, updated every push</text>
+<text class="s" x="918" y="736">+ a message in the task's chat</text>
+<path class="arr" d="M894 665 L856 665"/>
+
+<text class="h r" x="30" y="540">Release (right to left)</text>
+<rect class="frame" x="22" y="555" width="828" height="220" rx="6"/>
+<rect x="650" y="598" width="180" height="128" rx="10" class="R"/>
+<text class="t r" x="740" y="630" text-anchor="middle">You check it</text>
+<text class="s" x="740" y="656" text-anchor="middle">good → merge</text>
+<text class="s" x="740" y="678" text-anchor="middle">not yet → comment,</text>
+<text class="s" x="740" y="700" text-anchor="middle">the agent pushes again</text>
+<path class="arr" d="M646 662 L630 662"/>
+<rect x="448" y="598" width="178" height="128" rx="10" class="O"/>
+<text class="t o" x="537" y="630" text-anchor="middle">Staging</text>
+<text class="s" x="537" y="656" text-anchor="middle">every merge deploys here</text>
+<text class="s" x="537" y="678" text-anchor="middle">real data, real services</text>
+<text class="s" x="537" y="700" text-anchor="middle">source of the snapshot</text>
+<path class="arr" d="M444 662 L428 662"/>
+<rect x="246" y="598" width="178" height="128" rx="10" class="R"/>
+<text class="t r" x="335" y="630" text-anchor="middle">Your sign-off</text>
+<text class="s" x="335" y="656" text-anchor="middle">after you try it</text>
+<text class="s" x="335" y="678" text-anchor="middle">on staging</text>
+<path class="arr" d="M242 662 L226 662"/>
+<rect x="44" y="598" width="178" height="128" rx="10" class="G" stroke-width="2"/>
+<text class="t g" x="133" y="630" text-anchor="middle">Production</text>
+<text class="s" x="133" y="656" text-anchor="middle">merge to main</text>
+<text class="s" x="133" y="678" text-anchor="middle">= a release</text>
+
+<!-- ============ ROW 3: data ============ -->
+<text class="h o" x="30" y="840">Data flows down, never back</text>
+<rect class="frame" x="22" y="855" width="1856" height="122" rx="6"/>
+<rect x="44" y="878" width="330" height="76" rx="10" class="O"/>
+<text class="t o" x="209" y="906" text-anchor="middle">staging data</text><text class="s" x="209" y="930" text-anchor="middle">read only · never production</text>
+<path class="arrG" d="M378 916 L410 916"/>
+<rect x="414" y="878" width="330" height="76" rx="10" class="G"/>
+<text class="t g" x="579" y="906" text-anchor="middle">nightly snapshot</text><text class="s" x="579" y="930" text-anchor="middle">into the factory's own database, 03:00</text>
+<path class="arrG" d="M748 916 L780 916"/>
+<rect x="784" y="878" width="330" height="76" rx="10" class="G"/>
+<text class="t g" x="949" y="906" text-anchor="middle">disarm</text><text class="s" x="949" y="930" text-anchor="middle">drop queued jobs, payment tokens, logins</text>
+<path class="arrG" d="M1118 916 L1150 916"/>
+<rect x="1154" y="878" width="330" height="76" rx="10" class="W"/>
+<text class="t" x="1319" y="906" text-anchor="middle">template</text><text class="s" x="1319" y="930" text-anchor="middle">nobody connects to it · previews copy it</text>
+<path class="arrG" d="M1488 916 L1520 916"/>
+<rect x="1524" y="878" width="332" height="76" rx="10" class="O"/>
+<text class="t o" x="1690" y="906" text-anchor="middle">one copy per PR</text><text class="s" x="1690" y="930" text-anchor="middle">own database + login · gone on close</text>
+
+<!-- ============ ROW 4: one server ============ -->
+<text class="h" x="30" y="1030">One server, three layers</text>
+<rect class="frame" x="22" y="1045" width="1856" height="200" rx="6"/>
+<rect x="44" y="1068" width="254" height="154" rx="10" class="B"/>
+<text class="t b" x="60" y="1096">Edge</text>
+<text class="s" x="60" y="1122">a CDN in front of every address</text>
+<text class="s" x="60" y="1144">one sign-in, one cookie</text>
+<text class="s" x="60" y="1166">the server's ports stay closed</text>
+<text class="s" x="60" y="1188">to the open internet</text>
+<path class="arr" d="M302 1145 L332 1145"/>
+<rect x="336" y="1068" width="500" height="154" rx="10" class="G"/>
+<text class="t g" x="352" y="1096">Control</text>
+<text class="s" x="352" y="1122">dashboard · chat bot · agent service</text>
+<text class="s" x="352" y="1144">agent sandboxes on their own locked network</text>
+<text class="s" x="352" y="1166">runs as apps inside Coolify</text>
+<text class="s" x="352" y="1188">a push to the factory repo redeploys it</text>
+<rect x="856" y="1068" width="480" height="154" rx="10" class="I"/>
+<text class="t i" x="872" y="1096">Previews (Coolify)</text>
+<text class="s" x="872" y="1122">builds, routes and deletes the PR apps</text>
+<text class="s" x="872" y="1144">maintained by its community</text>
+<text class="s" x="872" y="1166">installed by hand, never restarts Docker</text>
+<text class="s" x="872" y="1188">its ports listen on the server only</text>
+<rect x="1356" y="1068" width="500" height="154" rx="10" class="G"/>
+<text class="t g" x="1372" y="1096">Foundation (kept outside Coolify)</text>
+<text class="s" x="1372" y="1122">gateway · firewall · test runners</text>
+<text class="s" x="1372" y="1144">snapshot database · nightly jobs</text>
+<text class="s" x="1372" y="1166">no egg-in-egg: if Coolify breaks,</text>
+<text class="s" x="1372" y="1188">the base is still standing</text>
+
+<!-- ============ ROW 5: platform ============ -->
+<text class="h g" x="30" y="1300">The platform: many projects, one factory</text>
+<rect class="frame" x="22" y="1315" width="1856" height="182" rx="6"/>
+<rect x="44" y="1338" width="330" height="138" rx="10" class="G"/>
+<text class="t g" x="60" y="1364">project registry</text>
+<text class="s" x="60" y="1388">one folder per project:</text>
+<text class="s" x="60" y="1410">domain · short name · repo</text>
+<text class="s" x="60" y="1432">how to build, test, copy its data</text>
+<text class="s" x="60" y="1454">"factory init" scaffolds it</text>
+<path class="arr" d="M378 1407 L410 1407"/>
+<rect x="414" y="1338" width="330" height="138" rx="10" class="G"/>
+<text class="t g" x="430" y="1364">sync generates</text>
+<text class="s" x="430" y="1388">routes per domain</text>
+<text class="s" x="430" y="1410">one network per project</text>
+<text class="s" x="430" y="1432">runners per repo</text>
+<text class="s" x="430" y="1454">a nightly snapshot per project</text>
+<rect x="784" y="1338" width="330" height="138" rx="10" class="W"/>
+<text class="t" x="800" y="1364">updates itself</text>
+<text class="s" x="800" y="1388">the factory is a git repo</text>
+<text class="s" x="800" y="1410">push → the server pulls</text>
+<text class="s" x="800" y="1432">within 5 minutes, then re-syncs</text>
+<text class="s" x="800" y="1454">read-only deploy key</text>
+<rect x="1154" y="1338" width="330" height="138" rx="10" class="W"/>
+<text class="t" x="1170" y="1364">isolation on a shared server</text>
+<text class="s" x="1170" y="1388">own folders, user and database</text>
+<text class="s" x="1170" y="1410">everything named apart by prefix</text>
+<text class="s" x="1170" y="1432">production is never touched</text>
+<text class="s" x="1170" y="1454">source data is only read</text>
+<rect x="1524" y="1338" width="332" height="138" rx="10" class="R"/>
+<text class="t r" x="1540" y="1364">rules for every agent</text>
+<text class="s" x="1540" y="1388">ask once, then run without stopping</text>
+<text class="s" x="1540" y="1410">prove each change on its preview</text>
+<text class="s" x="1540" y="1432">new feature → new e2e test</text>
+<text class="s" x="1540" y="1454">a red check is fixed before merge</text>
+
+<text class="s" x="34" y="1540">one server · production untouched · about $0 a change (CI on our own runners; AI calls faked unless a PR asks for the real thing)</text>
+</svg>
+</body></html>
