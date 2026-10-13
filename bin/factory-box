@@ -257,7 +257,8 @@ self_update() {
   log "factory $before -> $after"
   install -m 644 "$FACTORY_DIR/box/gateway/nginx.conf" /opt/factory/gateway/default.conf
   install -m 644 "$FACTORY_DIR/box/factory.cron" /etc/cron.d/factory
-  sync
+  # the functions in memory are the old ones: sync with the script just pulled
+  exec "$FACTORY_DIR/bin/factory-box" sync
 }
 
 case "$cmd" in
