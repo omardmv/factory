@@ -264,6 +264,16 @@ self_update() {
   after="$(git -C "$FACTORY_DIR" rev-parse HEAD)"
   [ "$before" = "$after" ] && return 0
   log "factory $before -> $after"
+  # factory apps in Coolify (box/coolify/factory-apps): redeploy the ones whose folder changed
+  local changed; changed="$(git -C "$FACTORY_DIR" diff --name-only "$before" "$after")"
+  local dir uuid
+  while read -r dir uuid; do
+    case "$dir" in ''|'#'*) continue ;; esac
+    if printf '%s\n' "$changed" | grep -q "^$dir/"; then
+      curl -fsS -o /dev/null -X POST -H "Authorization: Bearer $(cat /opt/factory/coolify-token)" \
+        "http://127.0.0.1:8000/api/v1/deploy?uuid=$uuid" && log "coolify: redeploying $dir" || log "coolify: redeploy of $dir FAILED"
+    fi
+  done < "$FACTORY_DIR/box/coolify/factory-apps"
   install -m 644 "$FACTORY_DIR/box/gateway/nginx.conf" /opt/factory/gateway/default.conf
   install -m 644 "$FACTORY_DIR/box/factory.cron" /etc/cron.d/factory
   # the functions in memory are the old ones: sync with the script just pulled

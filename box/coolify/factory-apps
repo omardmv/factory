@@ -1,0 +1,3 @@
+# factory apps deployed by Coolify (project "factory"): <folder in this repo> <Coolify app uuid>
+# factory-box self-update redeploys an app when a pull changes its folder.
+dashboard 8ctummk1ywaczrw60qrole8j
