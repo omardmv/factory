@@ -1,0 +1,41 @@
+name: coolify-proxy
+networks:
+  coolify:
+    external: true
+services:
+  traefik:
+    container_name: coolify-proxy
+    image: "traefik:v3.7"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - coolify
+    # factory: this box is shared with production. Host nginx owns 80/443 and
+    # terminates TLS; Traefik only listens on loopback for preview routing.
+    ports:
+      - "127.0.0.1:18080:80"
+    healthcheck:
+      test: "wget -qO- http://localhost:80/ping || exit 1"
+      interval: 4s
+      timeout: 2s
+      retries: 5
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/data/coolify/proxy/:/traefik"
+    command:
+      - "--ping=true"
+      - "--ping.entrypoint=http"
+      - "--entrypoints.http.address=:80"
+      - "--entrypoints.https.address=:443"
+      - "--entrypoints.http.forwardedHeaders.trustedIPs=127.0.0.1/32,172.16.0.0/12"
+      - "--entrypoints.http.http.encodequerysemicolons=true"
+      - "--providers.file.directory=/traefik/dynamic/"
+      - "--providers.file.watch=true"
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+    labels:
+      - traefik.enable=false
+      - coolify.managed=true
+      - coolify.proxy=true

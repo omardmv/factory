@@ -1,0 +1,8 @@
+# factory: Coolify shares this box with production. Its ports are loopback
+# only (reached through host nginx / ssh tunnel), never 0.0.0.0.
+services:
+  coolify:
+    ports: !override
+      - "127.0.0.1:8000:8080"
+      - "127.0.0.1:6001:6001"
+      - "127.0.0.1:6002:6002"
