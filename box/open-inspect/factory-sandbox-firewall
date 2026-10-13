@@ -1,0 +1,17 @@
+#!/bin/sh
+# factory: agent sandboxes on the oi-sandboxes network may not OPEN connections
+# to the host itself (they reach the Open-Inspect app over the docker network).
+# Replies to connections the host opened (ESTABLISHED) must pass: the app
+# container is on this network too, and its replies to the host come from here.
+set -e
+docker network inspect oi-sandboxes >/dev/null 2>&1 || docker network create oi-sandboxes >/dev/null
+S=$(docker network inspect oi-sandboxes -f "{{(index .IPAM.Config 0).Subnet}}")
+EST="-s $S -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+case "$1" in
+  stop)
+    iptables -D INPUT -s "$S" -j DROP 2>/dev/null || true
+    iptables -D INPUT $EST 2>/dev/null || true ;;
+  *)
+    iptables -C INPUT -s "$S" -j DROP 2>/dev/null || iptables -I INPUT -s "$S" -j DROP
+    iptables -C INPUT $EST 2>/dev/null || iptables -I INPUT $EST ;;
+esac

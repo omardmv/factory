@@ -1,0 +1,13 @@
+[Unit]
+Description=factory: agent sandboxes (oi-sandboxes) may not reach the host itself
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/factory-sandbox-firewall start
+ExecStop=/usr/local/sbin/factory-sandbox-firewall stop
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,470 @@
+/**
+ * Self-hosted sandbox host: a drop-in replacement for the Modal data plane.
+ *
+ * Implements the control plane's sandbox-provider HTTP contract (the same
+ * surface packages/control-plane/test/smoke/fake-modal-host.mjs documents),
+ * but spawns REAL sandbox containers with the reference sandbox image via
+ * the local Docker daemon instead of faking the bridge.
+ *
+ * Supported:
+ *   GET  /api-health
+ *   POST /api-create-sandbox      -> docker run (fresh session, repo clone)
+ *   POST /api-restore-sandbox     -> docker run (fresh container; snapshot
+ *                                    contents are NOT restored — v1 treats
+ *                                    restore as a clean relaunch)
+ * Not supported (501, mirroring the container-host limitations):
+ *   POST /api-snapshot-sandbox, /api-create-build-sandbox,
+ *   POST /api-start-build-sandbox, /api-terminate-build-sandbox
+ *
+ * Auth: Bearer "<epoch-ms>.<hmac-sha256(MODAL_API_SECRET, epoch-ms)>" —
+ * identical to generateInternalToken() in the control plane.
+ *
+ * Env: PORT, MODAL_API_SECRET, SANDBOX_IMAGE,
+ *      GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_APP_INSTALLATION_ID
+ *      (optional) ANTHROPIC_API_KEY, CONTROL_PLANE_LOOPBACK, EXTRA_LLM_ENV
+ */
+
+import { createHmac, timingSafeEqual, createSign, createPrivateKey } from "node:crypto";
+import { createServer } from "node:http";
+import { spawn } from "node:child_process";
+
+const PORT = Number(process.env.PORT ?? 9900);
+const SECRET = process.env.MODAL_API_SECRET ?? "";
+const IMAGE = process.env.SANDBOX_IMAGE ?? "open-inspect-sandbox:local";
+const CP_LOOPBACK = process.env.CONTROL_PLANE_LOOPBACK ?? "http://127.0.0.1:8787";
+const APP_ID = process.env.GITHUB_APP_ID ?? "";
+const APP_KEY = (process.env.GITHUB_APP_PRIVATE_KEY ?? "").replace(/\\n/g, "\n");
+const INSTALLATION_ID = process.env.GITHUB_APP_INSTALLATION_ID ?? "";
+const DEFAULT_TIMEOUT_S = 7200;
+const TOKEN_VALIDITY_MS = 5 * 60 * 1000;
+
+function log(event, fields = {}) {
+  console.log(JSON.stringify({ component: "sandbox-shim", event, ...fields }));
+}
+
+/* ---------- control-plane request auth ---------- */
+
+function isValidInternalToken(header) {
+  const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
+  if (!token) return false;
+  const [timestamp, signature] = token.split(".");
+  if (!timestamp || !signature) return false;
+  if (Math.abs(Date.now() - Number(timestamp)) > TOKEN_VALIDITY_MS) return false;
+  const expected = createHmac("sha256", SECRET).update(timestamp).digest("hex");
+  if (expected.length !== signature.length) return false;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+
+/* ---------- GitHub App installation token (clone credential) ---------- */
+
+let cachedInstallationToken = null;
+let cachedTokenAt = 0;
+
+async function installationToken() {
+  if (cachedInstallationToken && Date.now() - cachedTokenAt < 50 * 60 * 1000) {
+    return cachedInstallationToken;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const header = b64({ alg: "RS256", typ: "JWT" });
+  const payload = b64({ iat: now - 60, exp: now + 300, iss: APP_ID });
+  const key = createPrivateKey(APP_KEY);
+  const jwt = `${header}.${payload}.${createSign("RSA-SHA256").update(`${header}.${payload}`).sign(key, "base64url")}`;
+  const r = await fetch(`https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "open-inspect-sandbox-shim",
+    },
+  });
+  if (!r.ok) throw new Error(`installation token failed: ${r.status}`);
+  const body = await r.json();
+  cachedInstallationToken = body.token;
+  cachedTokenAt = Date.now();
+  return body.token;
+}
+
+/* ---------- snapshots (docker commit) ---------- */
+
+const SNAP_PREFIX = "oi-snap";
+// Snapshots are multi-GB (toolchain + agent state in one filesystem), so
+// retention is sized against disk: 6 x ~7GB ~= 45GB worst case.
+const SNAP_KEEP = 6;
+
+function docker(...args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    child.stdout.on("data", (c) => { out += c; });
+    child.stderr.on("data", (c) => { err += c; });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.trim().slice(0, 300)))));
+  });
+}
+
+async function takeSnapshot(sandboxId) {
+  const imageId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  await docker("commit", containerName(sandboxId), `${SNAP_PREFIX}:${imageId}`);
+  gcSnapshots().catch((e) => log("snapshot.gc_failed", { error: e.message }));
+  return imageId;
+}
+
+/** Keep only the newest SNAP_KEEP snapshot images (each is a filesystem diff). */
+async function gcSnapshots() {
+  const out = await docker("images", SNAP_PREFIX, "--format", "{{.Tag}}\t{{.CreatedAt}}");
+  const images = out.trim().split("\n").filter((l) => l && !l.includes("<none>"))
+    .map((l) => { const [tag, created] = l.split("\t"); return { tag, created: new Date(created).getTime() || 0 }; })
+    .sort((a, b) => b.created - a.created);
+  for (const old of images.slice(SNAP_KEEP)) {
+    await docker("rmi", `${SNAP_PREFIX}:${old.tag}`).catch(() => {});
+    log("snapshot.gc_removed", { image: old.tag });
+  }
+}
+
+/** Remove stopped sandbox containers once they are no longer snapshotnable,
+ * capturing their last log lines so crashes stay diagnosable. */
+async function sweepContainers() {
+  const out = await docker("ps", "-a", "--filter", "name=oi-sb-", "--format", "{{.Names}}\t{{.State}}\t{{.Status}}");
+  for (const line of out.trim().split("\n").filter(Boolean)) {
+    const [name, state, status] = line.split("\t");
+    const finished = /Exited \((\d+)\) \(([^)]+)\)/.exec(status);
+    if (state !== "exited" || !finished) continue;
+    const exitedAt = new Date(finished[2]).getTime();
+    if (!exitedAt || Date.now() - exitedAt < 15 * 60 * 1000) continue;
+    const logs = await docker("logs", "--tail", "15", name).catch(() => "");
+    log("sandbox_removed", { container: name, exit_code: finished[1], last_logs: logs.trim().split("\n").slice(-5) });
+    await docker("rm", "-f", name).catch(() => {});
+  }
+}
+setInterval(() => {
+  sweepContainers().catch((e) => log("sweep.failed", { error: e.message }));
+}, 5 * 60 * 1000);
+
+/* ---------- SESSION_CONFIG builder ---------- */
+
+const SESSION_CONFIG_FIELDS = [
+  "session_id", "repo_owner", "repo_name", "branch", "base_sha",
+  "agent_session_id", "opencode_session_id", "harness", "provider", "model",
+  "mcp_servers", "repositories", "working_branch_name",
+];
+
+function buildSessionConfig(flat, { repoOwner, repoName }) {
+  const config = {};
+  for (const name of SESSION_CONFIG_FIELDS) {
+    if (flat[name] !== undefined && flat[name] !== null) config[name] = flat[name];
+  }
+  config.repo_owner = repoOwner ?? null;
+  config.repo_name = repoName ?? null;
+  return config;
+}
+
+/* ---------- container launch ---------- */
+
+const RESERVED_ENV = new Set([
+  "PYTHONUNBUFFERED", "SANDBOX_ID", "CONTROL_PLANE_URL", "SANDBOX_AUTH_TOKEN",
+  "SESSION_CONFIG", "REPO_OWNER", "REPO_NAME", "SANDBOX_TIMEOUT_SECONDS",
+  "VCS_HOST", "VCS_CLONE_USERNAME", "VCS_CLONE_TOKEN", "GITHUB_TOKEN",
+  "GH_TOKEN", "GITHUB_APP_TOKEN", "OI_GITHUB_TOKEN_IS_FALLBACK",
+  "FROM_REPO_IMAGE", "RESTORED_FROM_SNAPSHOT", "REPO_IMAGE_SHA",
+]);
+
+function containerName(sandboxId) {
+  return `oi-sb-${sandboxId.replace(/[^a-zA-Z0-9_.-]/g, "")}`.slice(0, 64);
+}
+
+/** Resolve the image to launch: a snapshot when restoring, else the base image. */
+async function resolveLaunchImage(snapshotImageId) {
+  if (!snapshotImageId) return IMAGE;
+  const ref = `${SNAP_PREFIX}:${snapshotImageId}`;
+  try {
+    await docker("image", "inspect", ref);
+    return ref;
+  } catch {
+    log("snapshot.missing_fallback", { image: snapshotImageId });
+    return IMAGE;
+  }
+}
+
+/** The runtime reports SANDBOX_VERSION in its ready event; the control plane
+ * rejects restores of snapshots whose runtime version is unknown or below its
+ * floor. The reference image bakes the value — extract and cache it per image. */
+const runtimeVersionCache = new Map();
+async function runtimeVersionFor(image) {
+  if (runtimeVersionCache.has(image)) return runtimeVersionCache.get(image);
+  try {
+    const out = await docker(
+      "run", "--rm", "--entrypoint", "/opt/openinspect/python/bin/python", image,
+      "-c", "from sandbox_runtime.runtime_manifest import RUNTIME_VERSION; print(RUNTIME_VERSION)",
+    );
+    const version = out.trim().split("\n").pop();
+    if (version) {
+      runtimeVersionCache.set(image, version);
+      log("runtime_version_detected", { image, version });
+      return version;
+    }
+  } catch (error) {
+    log("runtime_version_detection_failed", { image, error: error.message });
+  }
+  runtimeVersionCache.set(image, "");
+  return "";
+}
+
+async function launchSandbox({ sandboxId, env, image }) {
+  // No --rm: a stopped container's filesystem can still be snapshotted (docker
+  // commit works on stopped containers), so the cleanup sweep below — not the
+  // daemon — decides when a container disappears.
+  const args = [
+    "run", "-d",
+    "--name", containerName(sandboxId),
+    "--network", "host",
+    "--cpus", "6", "--memory", "8g", "--pids-limit", "2048",
+    "-w", "/workspace",
+  ];
+  for (const [key, value] of Object.entries(env)) {
+    args.push("-e", `${key}=${value}`);
+  }
+  args.push(image ?? IMAGE, "/opt/openinspect/python/bin/python", "-m", "sandbox_runtime.entrypoint");
+
+  const child = spawn("docker", args, { stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", (c) => { stderr += c.toString(); });
+  return await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`docker run exited ${code}: ${stderr.trim().slice(0, 400)}`));
+    });
+  });
+}
+
+async function handleCreate(body, restored) {
+  const sandboxId = body.sandbox_id ?? `sandbox-selfhost-${Date.now()}`;
+  const repoOwner = body.repo_owner || body.repo_owner === "" ? body.repo_owner : null;
+  const repoName = body.repo_name ?? null;
+  const hasRepository = Boolean(repoOwner && repoName);
+
+  const sessionConfig = restored
+    ? { ...body.session_config, session_id: body.session_config?.session_id ?? body.session_id }
+    : buildSessionConfig(body, { repoOwner, repoName });
+  if (!sessionConfig.session_id) throw new Error("request carried no session_id");
+
+  const env = {};
+  for (const [key, value] of Object.entries(body.user_env_vars ?? {})) {
+    if (!RESERVED_ENV.has(key) && typeof value === "string") env[key] = value;
+  }
+  if (process.env.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+
+  env.PYTHONUNBUFFERED = "1";
+  env.SANDBOX_ID = sandboxId;
+  // Host networking makes the loopback control plane reachable from the
+  // container, and the runtime allows plain-http loopback URLs.
+  env.CONTROL_PLANE_URL = CP_LOOPBACK;
+  env.SANDBOX_AUTH_TOKEN = restored ? body.sandbox_auth_token : body.sandbox_auth_token;
+  env.SANDBOX_TIMEOUT_SECONDS = String(body.timeout_seconds ?? DEFAULT_TIMEOUT_S);
+  // Long thinking phases and subscription rate-limit queues can legitimately
+  // stream nothing for minutes; the 300s default watchdog kills those turns.
+  env.BRIDGE_SSE_INACTIVITY_TIMEOUT = process.env.BRIDGE_SSE_INACTIVITY_TIMEOUT ?? "1800";
+  env.REPO_OWNER = repoOwner ?? "";
+  env.REPO_NAME = repoName ?? "";
+  env.SESSION_CONFIG = JSON.stringify(sessionConfig);
+  if (restored) env.RESTORED_FROM_SNAPSHOT = "true";
+
+  if (hasRepository) {
+    try {
+      const token = await installationToken();
+      env.VCS_HOST = "github.com";
+      env.VCS_CLONE_USERNAME = "x-access-token";
+      env.VCS_CLONE_TOKEN = token;
+      env.GITHUB_TOKEN = token;
+      env.GITHUB_APP_TOKEN = token;
+      env.OI_GITHUB_TOKEN_IS_FALLBACK = "1";
+    } catch (error) {
+      log("clone_token_failed", { error: error.message, session_id: sessionConfig.session_id });
+    }
+  }
+
+  const image = await resolveLaunchImage(restored ? body.snapshot_image_id : body.repo_image_id);
+  const sandboxVersion = await runtimeVersionFor(image);
+  if (sandboxVersion) env.SANDBOX_VERSION = sandboxVersion;
+  await launchSandbox({ sandboxId, env, image });
+  log(restored ? "sandbox_restored" : "sandbox_created", {
+    session_id: sessionConfig.session_id,
+    sandbox_id: sandboxId,
+    repo: hasRepository ? `${repoOwner}/${repoName}` : null,
+    harness: sessionConfig.harness ?? "opencode",
+    model: sessionConfig.model ?? null,
+    image,
+    restored,
+  });
+
+  return {
+    success: true,
+    // The control plane snapshots by provider object id, so it must map 1:1
+    // to the container name (oi-sb-<sandbox_id>).
+    data: { sandbox_id: sandboxId, modal_object_id: sandboxId, created_at: Date.now() },
+  };
+}
+
+/* ---------- sandbox dashboard (browser page) ---------- */
+
+function run(cmd, args) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (c) => { out += c; });
+    child.stderr.on("data", (c) => { out += c; });
+    child.on("error", () => resolve(""));
+    child.on("close", () => resolve(out));
+  });
+}
+
+async function listSandboxes() {
+  const out = await run("docker", [
+    "ps", "-a", "--filter", "name=oi-sb-",
+    "--format", "{{.Names}}\t{{.Status}}\t{{.RunningFor}}\t{{.Image}}",
+  ]);
+  return out.trim().split("\n").filter(Boolean).map((line) => {
+    const [name, status, age, image] = line.split("\t");
+    return { name, status, age, image };
+  });
+}
+
+async function dashboardPage(highlight) {
+  const [boxes, health, version] = await Promise.all([
+    listSandboxes(),
+    run("docker", ["version", "--format", "{{..Server.Version}}"]),
+    run("docker", ["images", "open-inspect-sandbox:local", "--format", "{{.Size}}"]),
+  ]);
+  const rows = boxes.map((b) => {
+    const running = b.status.startsWith("Up");
+    const match = highlight && b.name.includes(highlight);
+    return `<tr class="${match ? "hl" : ""}"><td class="mono">${b.name}</td>` +
+      `<td><span class="pill ${running ? "ok" : "off"}">${running ? "running" : "stopped"}</span></td>` +
+      `<td>${b.status}</td><td>${b.age}</td></tr>`;
+  }).join("") || `<tr><td colspan="4" class="empty">No sandboxes right now.</td></tr>`;
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sandbox dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23c8ff00'/%3E%3Ctext x='32' y='45' font-size='38' font-weight='800' text-anchor='middle' fill='%231a1a1a'%3ES%3C/text%3E%3C/svg%3E">
+<meta http-equiv="refresh" content="10">
+<style>
+  :root { color-scheme: light; }
+  body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #fafbf7; color: #1a1a1a; margin: 0; }
+  header { background: #c8ff00; padding: 18px 28px; display: flex; align-items: baseline; gap: 12px; }
+  header h1 { font-size: 20px; margin: 0; letter-spacing: -0.02em; }
+  header span { font-size: 13px; color: #1a1a1ab0; }
+  main { max-width: 880px; margin: 24px auto; padding: 0 20px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; border: 1px solid #e4e7dc; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; font-size: 14px; border-bottom: 1px solid #eef0e8; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6b7060; background: #f4f6ee; }
+  tr.hl { background: #fbffe0; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .pill.ok { background: #dcffc2; color: #1f5312; }
+  .pill.off { background: #f1f1f1; color: #666; }
+  .mono { font-family: ui-monospace, monospace; font-size: 13px; }
+  .empty { color: #8a8f7e; text-align: center; padding: 26px; }
+  .meta { font-size: 13px; color: #6b7060; margin: 14px 2px; }
+</style></head><body>
+<header><h1>Sandbox dashboard</h1><span>self-hosted · your VPS</span></header>
+<main>
+<div class="meta">Docker ${version.trim() || "?"} · image ${IMAGE} (${(version && "") || ""}${health ? "" : ""}${boxes.length} sandbox${boxes.length === 1 ? "" : "es"})</div>
+<table><thead><tr><th>Container</th><th>State</th><th>Status</th><th>Age</th></tr></thead>
+<tbody>${rows}</tbody></table>
+<div class="meta">Auto-refreshes every 10s. Sandboxes remove themselves when sessions end (docker --rm + idle timeout).</div>
+</main></body></html>`;
+}
+
+/* ---------- HTTP server ---------- */
+
+const ROUTES = {
+  "/api-create-sandbox": (body) => handleCreate(body, false),
+  "/api-restore-sandbox": (body) => {
+    if (!body.session_config?.session_id) throw new Error("restore request carried no session_config.session_id");
+    return handleCreate(body, true);
+  },
+  "/api-snapshot-sandbox": async (body) => {
+    if (!body.sandbox_id) throw new Error("snapshot request carried no sandbox_id");
+    const imageId = await takeSnapshot(body.sandbox_id);
+    log("snapshot_taken", { sandbox_id: body.sandbox_id, image_id: imageId });
+    return { success: true, data: { image_id: imageId, sandbox_id: body.sandbox_id } };
+  },
+};
+
+const NOT_SUPPORTED = new Set([
+  "/api-snapshot-build-sandbox", "/api-create-build-sandbox",
+  "/api-start-build-sandbox", "/api-terminate-build-sandbox",
+]);
+
+function sendJson(res, status, body) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("error", reject);
+    req.on("end", () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}")); }
+      catch (cause) { reject(cause); }
+    });
+  });
+}
+
+function handler(req, res) {
+  const url = new URL(req.url, "http://localhost");
+  const path = url.pathname;
+
+  if (req.method === "GET" && path === "/dashboard") {
+    dashboardPage(url.searchParams.get("sandbox"))
+      .then((html) => {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+        res.end(html);
+      })
+      .catch((error) => {
+        res.writeHead(500, { "content-type": "text/plain" });
+        res.end(`dashboard failed: ${error.message}`);
+      });
+    return;
+  }
+
+  if (req.method === "GET" && path === "/api-health") {
+    return sendJson(res, 200, { status: "ok", provider: "selfhost-docker" });
+  }
+
+  if (NOT_SUPPORTED.has(path)) {
+    return sendJson(res, 501, { success: false, error: `${path} is not supported by the self-hosted sandbox host` });
+  }
+
+  const handler = ROUTES[path];
+  if (!handler) return sendJson(res, 404, { success: false, error: `No handler for ${path}` });
+
+  if (!isValidInternalToken(req.headers.authorization)) {
+    log("auth.rejected", { path });
+    return sendJson(res, 401, { success: false, error: "Invalid internal token" });
+  }
+
+  readJsonBody(req)
+    .then(async (body) => sendJson(res, 200, await handler(body)))
+    .catch((error) => {
+      log("request.failed", { path, error: error.message });
+      sendJson(res, 500, { success: false, error: error.message });
+    });
+}
+
+if (!SECRET) {
+  console.error("MODAL_API_SECRET is required");
+ process.exit(1);
+}
+
+// Listen on loopback plus any extra bridge addresses (BIND_ADDRESSES) so the
+// control-plane container can reach the shim through its network gateway.
+const BIND_ADDRESSES = (process.env.BIND_ADDRESSES ?? "127.0.0.1")
+  .split(",")
+  .map((a) => a.trim())
+  .filter(Boolean);
+for (const address of BIND_ADDRESSES) {
+  createServer(handler).listen(PORT, address, () => log("listening", { port: PORT, address, image: IMAGE, cp: CP_LOOPBACK }));
+}
