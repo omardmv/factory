@@ -1,10 +1,10 @@
 {
   "contentcoach": {
-    "repo": "contentcoach/contentcoach", "base": "dev", "checks": "preview",
+    "repo": "contentcoach/contentcoach", "base": "dev", "checks": "preview", "autoMerge": "dev", "mergeMethod": "merge",
     "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, private, owned by the contentcoach org" }
   },
   "factory": {
-    "repo": "omardmv/factory", "base": "main",
+    "repo": "omardmv/factory", "base": "main", "autoMerge": "main", "mergeMethod": "squash",
     "githubApp": { "id": "4941357", "key": "github-app.pem", "note": "openinspectv1, private, owned by omardmv" }
   }
 }

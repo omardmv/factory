@@ -59,10 +59,11 @@ the morning.
   feature, refactor, performance, investigation, large; decision log in
   `/workspace/decisions.tsv`; pauses only with `DECISION NEEDED` for
   architecture, money, security or a product call) -> checks (`[factory]`
-  preview + e2e reports) -> review: a fresh reviewer (`REVIEW_MODEL`, own
-  session, no GitHub token, no edit tools) at a green head, or as soon as the
-  PR exists for a project without previews. PASS = ready for you, CHANGES =
-  back to the agent; at most 6 rounds.
+  preview + e2e reports) -> review panel at a green head (or as soon as the
+  PR exists for a project without previews): fresh sessions, no GitHub
+  token, no edit tools, one per model and angle (`REVIEW_PANEL`, default
+  `opus:correctness,sonnet:evidence`). Every reviewer must pass; CHANGES =
+  back to the agent; at most 6 rounds -> auto-merge (below).
 - **report** (benny-style triage): classify, find duplicates, reproduce twice
   with the repo's own tools, file or update the issue and label it
   `ready-for-agent` / `ready-for-human` / `needs-info`. A `ready-for-agent`
@@ -78,7 +79,16 @@ when triage first ran are left alone), polled every 2 minutes, or as a queue.
 The queue and the running jobs are on disk: after a restart (every deploy)
 an interrupted job resumes its session, told it was interrupted. `/pause`
 leaves a work-in-progress commit and a resume note. A summary arrives on
-Telegram at 08:00 Tashkent (`/digest` any time). Agents never merge.
+Telegram at 08:00 Tashkent (`/digest` any time).
+
+**Auto-merge** (`autoMerge` in `agents/projects.json`): when the whole panel
+passes, the factory merges the PR itself, but only into that one branch
+(contentcoach: `dev`, i.e. staging; the factory: `main`), only at the exact
+head the panel reviewed (GitHub's sha lock), and only through the branch's
+own protection (dev's required checks). A refused merge retries for about
+20 minutes, then waits for you. contentcoach `main` (production) is never
+merged by the factory: it keeps the staging sign-off. Self-update refuses a
+factory commit whose shell, JavaScript or projects.json does not parse.
 
 ## Commands
 

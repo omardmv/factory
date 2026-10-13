@@ -26,7 +26,12 @@ const PORT = Number(process.env.PORT ?? 19300);
 const BIND = (process.env.BIND_ADDRESSES ?? '127.0.0.1').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 3);
 const MAX_FACTORY_ROUNDS = Number(process.env.MAX_FACTORY_ROUNDS ?? 6);
-const REVIEW_MODEL = process.env.REVIEW_MODEL ?? 'opus';
+// the review panel: fresh sessions, each its own model and angle; every one must pass
+const REVIEW_PANEL = (process.env.REVIEW_PANEL ?? 'opus:correctness,sonnet:evidence').split(',').map((x) => { const [model, focus] = x.trim().split(':'); return { model, focus }; });
+const FOCUS = {
+  correctness: { name: 'Correctness', ask: 'Your angle is correctness: does it do everything the task asked and nothing unrelated; bugs (edge cases, errors, security, data loss, races); does it break something next to the change.' },
+  evidence: { name: 'Evidence', ask: 'Your angle is evidence: is every item of the definition of done backed by evidence; is new behaviour covered by a test that would fail without the change; do the decision log\'s claims hold up against their evidence; was any verification claimed without proof; does it follow the repository\'s own rules.' },
+};
 const INTAKE_LABEL = process.env.INTAKE_LABEL ?? 'ready-for-agent';
 const TRIAGE_LABEL = process.env.TRIAGE_LABEL ?? 'needs-triage';
 const POLL_EVERY_S = Number(process.env.INTAKE_EVERY_S ?? 120);
@@ -233,7 +238,10 @@ async function agentRun({ id, prompt, mode, from }) {
   pump();
 }
 
-// a fresh session (own Claude state, no resume, no GitHub token, no edit tools) judges the PR
+// the review panel: fresh sessions (own Claude state, no resume, no GitHub
+// token, no edit tools), one per model and angle, judge the PR head; the PR
+// passes only when every reviewer passes it
+const verdictOf = (text) => /VERDICT:\s*(PASS|CHANGES)/i.exec(text ?? '')?.[1]?.toUpperCase() ?? null;
 async function review({ id }) {
   const t = update(id, (x) => { x.status = 'reviewing'; });
   const token = await githubToken(t.repo);
@@ -241,7 +249,7 @@ async function review({ id }) {
   const msgs = messages(id);
   const brief = t.auto ? null : msgs.find((m) => m.from === 'agent')?.text;
   const n = (t.reviews ?? 0) + 1;
-  const prompt = `Review PR #${pr.number} of ${t.repo} (factory task ${id}, branch agent/${id} into ${t.base}). This is review round ${n}.
+  const base = `Review PR #${pr.number} of ${t.repo} (factory task ${id}, branch agent/${id} into ${t.base}). This is review round ${n}.
 
 THE TASK, as the person gave it:
 ${msgs[0]?.text ?? t.title}
@@ -250,28 +258,72 @@ THE PR: ${pr.title}
 ${(pr.body ?? '').slice(0, 20000)}
 
 The checkout in /workspace/repo is at the PR head (${pr.head.sha.slice(0, 7)}). See the change with \`git diff origin/${t.base}...HEAD\` and \`git log origin/${t.base}..HEAD\`; read the surrounding code and the repository's own rules (AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills). The agent's decision log is /workspace/decisions.tsv (it may be missing).
-Check: (1) does it do everything the task asked, and nothing unrelated; (2) is every item of the definition of done backed by evidence; (3) bugs: edge cases, errors, security, data loss, races; (4) is new behaviour covered by a test that would fail without the change; (5) does it break the repository's rules; (6) do the decision log's claims hold up against their evidence, and was any verification claimed without proof.
-Reply with your findings, then the verdict line.`;
-  const r = await container(id, { prompt, mode: 'bypassPermissions', claudeDir: `review-claude/${n}`, ghToken: '', system: REVIEW_RULES, model: REVIEW_MODEL, disallowed: ['AskUserQuestion', 'Edit', 'Write', 'NotebookEdit'] });
-  const verdict = /VERDICT:\s*(PASS|CHANGES)/i.exec(r.last)?.[1]?.toUpperCase() ?? null;
-  say(id, 'review', r.last || `the reviewer gave no answer. ${r.stderr.trim().slice(-400)}`);
-  gh(token, `/repos/${t.repo}/issues/${pr.number}/comments`, 'POST', { body: `**Independent review ${n}** (${REVIEW_MODEL}, fresh session, read-only) at \`${pr.head.sha.slice(0, 7)}\`\n\n${(r.last || 'no answer').slice(0, 60000)}` })
+Other reviewers look at this PR from other angles at the same time; stay on yours, but report anything that would block a merge.`;
+  const results = [];
+  for (const [i, member] of REVIEW_PANEL.entries()) {
+    const focus = FOCUS[member.focus] ?? { name: member.focus, ask: `Your angle: ${member.focus}.` };
+    const r = await container(id, { prompt: `${base}\n${focus.ask}\nReply with your findings, then the verdict line.`, mode: 'bypassPermissions', claudeDir: `review-claude/${n}-${i + 1}`, ghToken: '', system: REVIEW_RULES, model: member.model, disallowed: ['AskUserQuestion', 'Edit', 'Write', 'NotebookEdit'] });
+    results.push({ ...member, name: focus.name, verdict: verdictOf(r.last), text: r.last || `no answer. ${r.stderr.trim().slice(-300)}` });
+    if (['stopped', 'pausing'].includes(load(id).status)) break;
+  }
+  const verdict = results.length === REVIEW_PANEL.length && results.every((r) => r.verdict === 'PASS') ? 'PASS'
+    : results.some((r) => r.verdict === 'CHANGES') ? 'CHANGES' : null;
+  // one message: each reviewer's conclusion and must-fix, all notes at the end
+  const parts = results.map((r) => { const [main, notes = ''] = r.text.replace(/^\s*VERDICT:.*$/gim, '').trim().split(/^#{1,6}\s*Notes\b.*$/im); return { r, main: main.trim(), notes: notes.trim() }; });
+  const notes = parts.filter((p) => p.notes).map((p) => p.notes).join('\n');
+  const combined = `${parts.map(({ r, main }) => `**${r.name} (${r.model}): ${r.verdict ?? 'no verdict'}**\n${main}`).join('\n\n')}${notes ? `\n\n## Notes\n${notes}` : ''}\n\nVERDICT: ${verdict ?? 'INCONCLUSIVE'}`;
+  say(id, 'review', combined);
+  gh(token, `/repos/${t.repo}/issues/${pr.number}/comments`, 'POST', { body: `**Review panel, round ${n}** at \`${pr.head.sha.slice(0, 7)}\` (fresh read-only sessions: ${results.map((r) => `${r.name.toLowerCase()} on ${r.model}`).join(', ')})\n\n${results.map((r) => `### ${r.name} (${r.model}): ${r.verdict ?? 'no verdict'}\n\n${r.text}`).join('\n\n').slice(0, 60000)}` })
     .catch((e) => log('review.comment_failed', { task: id, error: e.message }));
   const x = load(id);
   x.reviews = n; x.reviewedSha = pr.head.sha; x.verdict = verdict;
   if (x.status === 'stopped') { save(x); return pump(); }
   if (x.status === 'pausing') { x.status = 'paused'; save(x); return pump(); }
-  if (verdict === 'PASS') { x.status = 'ready for you'; save(x); }
-  else if (verdict === 'CHANGES' && x.factoryRounds < MAX_FACTORY_ROUNDS) {
+  if (verdict === 'PASS') {
+    x.status = 'ready for you'; x.mergeWanted = !!PROJECTS[x.project]?.autoMerge; x.mergeTries = 0; save(x);
+    if (x.mergeWanted) autoMerge(id).catch((e) => log('merge.failed', { task: id, error: e.message }));
+  } else if (verdict === 'CHANGES' && x.factoryRounds < MAX_FACTORY_ROUNDS) {
     x.factoryRounds += 1; x.status = 'working'; save(x);
-    enqueue(id, `[review] An independent reviewer read your PR at ${pr.head.sha.slice(0, 7)} and asks for changes:\n\n${r.last}`, 'bypassPermissions', 'review');
+    enqueue(id, `[review] The review panel read your PR at ${pr.head.sha.slice(0, 7)} and asks for changes:\n\n${combined}`, 'bypassPermissions', 'review');
   } else {
     x.status = 'waiting for you'; save(x);
     if (verdict === 'CHANGES') say(id, 'factory', `[factory] round limit (${MAX_FACTORY_ROUNDS}) reached with review findings open: stopped. A person decides what next.`);
+    else say(id, 'factory', '[factory] the review panel gave no clear verdict: a person decides.');
   }
-  log('review.end', { task: id, round: n, verdict });
+  log('review.end', { task: id, round: n, verdict, panel: results.map((r) => `${r.model}:${r.verdict}`) });
   pump();
 }
+
+// ---------- auto-merge: only the reviewed head, only into the configured branch ----------
+// projects.json "autoMerge": the one branch this project may merge into by
+// itself (contentcoach: dev = staging; never main). GitHub's sha lock refuses
+// the merge if anything was pushed after the review; branch protection (dev's
+// required checks) still applies. Refused merges retry on the next polls,
+// then go back to the person.
+const MERGE_TRIES = 10;
+async function autoMerge(id) {
+  const t = load(id), p = PROJECTS[t.project];
+  if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
+  const token = await githubToken(t.repo);
+  const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
+  const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`); log('merge.refused', { task: id, why }); };
+  if (pr.merged_at) { update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; }); return; }
+  if (pr.state !== 'open') return giveUp('the PR is closed');
+  if (pr.base.ref !== p.autoMerge) return giveUp(`it targets ${pr.base.ref}; this project only merges into ${p.autoMerge} by itself`);
+  if (pr.head.sha !== t.reviewedSha) return giveUp(`its head moved to ${pr.head.sha.slice(0, 7)} after the review of ${t.reviewedSha.slice(0, 7)}`);
+  try {
+    await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: p.mergeMethod ?? 'merge', commit_title: `${pr.title} (#${pr.number})` });
+  } catch (e) {
+    const x = update(id, (x) => { x.mergeTries = (x.mergeTries ?? 0) + 1; });
+    log('merge.retry', { task: id, tries: x.mergeTries, error: e.message });
+    if (x.mergeTries >= MERGE_TRIES) giveUp(`GitHub refused ${MERGE_TRIES} times (${e.message.slice(0, 200)})`);
+    return;
+  }
+  update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; });
+  say(id, 'factory', `[factory] 🚀 merged into ${p.autoMerge} (PR #${pr.number}, reviewed head ${t.reviewedSha.slice(0, 7)}). ${p.autoMerge === 'dev' ? 'Staging deploys it now; production still waits for your sign-off.' : 'The server pulls it within 5 minutes.'}`);
+  log('merge.done', { task: id, pr: pr.number, into: p.autoMerge });
+}
+const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
 
 // ---------- programs: a coordinator plans phases, agents do the pieces, you merge ----------
 const phaseBlock = (text) => { const m = /```phase\s*([\s\S]*?)```/.exec(text ?? ''); if (!m) return null; try { const j = JSON.parse(m[1]); return Array.isArray(j.tasks) && j.tasks.length ? j : null; } catch { return null; } };
@@ -311,7 +363,7 @@ function afterCoordinator(t, mode, from, last, decision) {
   else { t.status = 'waiting for you'; save(t); say(t.id, 'factory', '[factory] the coordinator gave no phase block: reply to tell it what to do next.'); }
   pump();
 }
-const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done'];
+const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
 async function watchPrograms() {
   for (const t of allTasks().filter((x) => x.kind === 'program' && x.phase === 'run' && /^running phase|^waiting for merges/.test(x.status))) {
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
@@ -362,7 +414,7 @@ Write nothing anywhere except that one issue. End with exactly one line: \`TRIAG
 function post(id, from, text) {
   const t = load(id); say(id, from, text);
   if (from === 'factory') {
-    if (t.phase !== 'run' || ['stopped', 'paused', 'pausing'].includes(t.status) || t.kind !== 'change') return t;
+    if (t.phase !== 'run' || ['stopped', 'paused', 'pausing', 'merged'].includes(t.status) || t.kind !== 'change') return t;
     if (t.factoryRounds >= MAX_FACTORY_ROUNDS) { say(id, 'factory', `[factory] round limit (${MAX_FACTORY_ROUNDS}) reached: stopped. A person decides what next.`); t.status = 'waiting for you'; save(t); return t; }
     const green = text.includes('✅') && /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1];
     if (green) t.greenSha = green;
@@ -504,8 +556,10 @@ const handler = async (req, res) => {
     return send(405, { error: 'method not allowed' });
   } catch (e) { log('http.error', { error: e.message }); return send(400, { error: e.message }); }
 };
-for (const a of BIND) createServer(handler).listen(PORT, a, () => log('listening', { address: a, port: PORT, image: IMAGE, network: NETWORK, runtime: RUNTIME || 'runc', reviewModel: REVIEW_MODEL, labels: [INTAKE_LABEL, TRIAGE_LABEL] }));
+for (const a of BIND) createServer(handler).listen(PORT, a, () => log('listening', { address: a, port: PORT, image: IMAGE, network: NETWORK, runtime: RUNTIME || 'runc', reviewPanel: REVIEW_PANEL.map((r) => `${r.model}:${r.focus}`), autoMerge: Object.fromEntries(Object.entries(PROJECTS).map(([k, v]) => [k, v.autoMerge ?? null])), labels: [INTAKE_LABEL, TRIAGE_LABEL] }));
 pickup();
-const poll = () => intake().catch((e) => log('intake.failed', { error: e.message })).then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }));
+const poll = () => intake().catch((e) => log('intake.failed', { error: e.message }))
+  .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
+  .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }));
 setTimeout(poll, 15000);
 setInterval(poll, POLL_EVERY_S * 1000);

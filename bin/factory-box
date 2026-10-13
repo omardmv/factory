@@ -270,9 +270,19 @@ self_update() {
   for f in $(git -C "$FACTORY_DIR" ls-tree -r --name-only "$after" | grep -E '^bin/[^/]+$|\.sh$'); do
     git -C "$FACTORY_DIR" show "$after:$f" | bash -n 2>/dev/null || bad="$bad $f"
   done
+  # the services that run from this checkout (agents, bot, dashboard) are
+  # JavaScript + JSON: an agent's merge must not take them down either
+  local js; js="$(mktemp -d)"
+  for f in $(git -C "$FACTORY_DIR" ls-tree -r --name-only "$after" | grep -E '\.mjs$|^agents/projects\.json$'); do
+    case "$f" in
+      *.json) git -C "$FACTORY_DIR" show "$after:$f" | /opt/factory/node/bin/node -e 'JSON.parse(require("fs").readFileSync(0, "utf8"))' 2>/dev/null || bad="$bad $f" ;;
+      *) git -C "$FACTORY_DIR" show "$after:$f" > "$js/check.mjs" && /opt/factory/node/bin/node --check "$js/check.mjs" 2>/dev/null || bad="$bad $f" ;;
+    esac
+  done
+  rm -rf "$js"
   if [ -n "$bad" ]; then
     [ "$(cat /srv/factory/state/refused 2>/dev/null)" = "$after" ] ||
-      { log "factory $after REFUSED, shell syntax error in:$bad"; echo "$after" > /srv/factory/state/refused; }
+      { log "factory $after REFUSED, syntax error in:$bad"; echo "$after" > /srv/factory/state/refused; }
     return 0
   fi
   git -C "$FACTORY_DIR" merge -q --ff-only "$after"

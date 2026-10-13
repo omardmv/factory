@@ -202,7 +202,7 @@ async function pushUpdates() {
 }
 
 // a batch is settled when no task in it is still moving
-const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done'];
+const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
 async function batchSummaries() {
   const open = Object.entries(state.batches).filter(([, b]) => !b.reported);
   if (!open.length) return;
@@ -210,9 +210,9 @@ async function batchSummaries() {
   for (const [id, b] of open) {
     const mine = tasks.filter((t) => b.ids.includes(t.id));
     if (mine.length < b.ids.length || mine.some((t) => t.running || !(SETTLED.includes(t.status) || t.pr?.state === 'merged'))) continue;
-    const line = (t) => `${t.status === 'ready for you' ? '✅' : t.status === 'decision needed' ? '❓' : t.status === 'stopped' ? '⏹' : '⚠️'} ${esc(short(t.title, 50))}\n      ${t.pr ? `<a href="${t.pr.url}">PR #${t.pr.number}</a> · ` : ''}<a href="${taskLink(t.id)}">${t.status}</a>`;
-    const ready = mine.filter((t) => t.status === 'ready for you').length;
-    await sendHtml(`📦 <b>Queue done: ${ready} of ${mine.length} ready to merge</b>\n\n${mine.map(line).join('\n\n')}`);
+    const line = (t) => `${t.status === 'merged' || t.pr?.state === 'merged' ? '🚀' : t.status === 'ready for you' ? '✅' : t.status === 'decision needed' ? '❓' : t.status === 'stopped' ? '⏹' : '⚠️'} ${esc(short(t.title, 50))}\n      ${t.pr ? `<a href="${t.pr.url}">PR #${t.pr.number}</a> · ` : ''}<a href="${taskLink(t.id)}">${t.status}</a>`;
+    const merged = mine.filter((t) => t.status === 'merged' || t.pr?.state === 'merged').length, ready = mine.filter((t) => t.status === 'ready for you').length;
+    await sendHtml(`📦 <b>Queue done: ${merged ? `${merged} merged, ` : ''}${ready} ready for you, of ${mine.length}</b>\n\n${mine.map(line).join('\n\n')}`);
     b.reported = true; persist();
   }
 }
