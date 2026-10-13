@@ -108,7 +108,8 @@ async function dashboard() {
 
   const rows = all.slice(0, 20).map((v) => {
     const st = v.status === 'finished' ? pill(v.live ? 'running' : 'closed', v.live ? '' : 'off')
-      : v.status === 'failed' ? pill('deploy failed', 'bad') : pill(v.status, 'warn');
+      : v.status === 'failed' ? pill('deploy failed', 'bad')
+      : pill({ in_progress: 'deploying', queued: 'queued' }[v.status] ?? v.status, 'warn');
     const e2e = v.e2e ? pill(`e2e ${v.e2e.passed} passed${v.e2e.failed ? `, ${v.e2e.failed} failed` : ''}`, v.e2e.failed ? 'bad' : '') : '';
     return `<div class="card"><div class="row"><div class="grow"><b>PR #${v.pr}</b> <span class="muted">${esc(v.project.name)} · ${esc(v.commit)} · ${esc(ago(v.at))}</span><div class="muted">${esc(v.message)}</div></div>${st} ${e2e}</div>
       <div class="row links" style="margin-top:6px">${v.live ? `<a href="${v.url}/app/">open</a><a href="${v.url}/_factory/login">sign in</a><a href="${v.url}/_factory/">videos</a>` : ''}<a href="https://github.com/${v.project.repo}/pull/${v.pr}">pull request</a><a href="${LINKS.coolify}">coolify</a>
