@@ -40,3 +40,12 @@ build_images() {  # $1 checkout dir, $2 tag
     --build-context factory="$PROJECT_DIR" "$1" >/dev/null
   IMAGE_API="factory/cc-api:$2"; IMAGE_WEB="factory/cc-web:$2"
 }
+
+# run the project's e2e suite against a running preview; results in $1/e2e/.e2e
+run_e2e() {  # $1 checkout, $2 PR, $3 app URL
+  (cd "$1/e2e" && npm ci --silent --no-audit --no-fund &&
+   E2E_ON_BOX=1 E2E_PREVIEW_PR="$2" E2E_PREVIEW_URL="$3" \
+   E2E_PREVIEW_PASSWORD="$(cat /opt/factory/preview-password)" \
+   E2E_RUN_ARGS="--video on --trace on" ./run.sh preview)
+}
+E2E_OUT_DIR=e2e/.e2e

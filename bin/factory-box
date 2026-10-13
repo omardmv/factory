@@ -7,6 +7,7 @@
 #   factory-box up   <project> <N> <checkout> <branch>   build + start/refresh PR N's preview
 #   factory-box down <project> <N>                  delete PR N's preview entirely
 #   factory-box reset <project> <N>                 re-copy PR N's DB + media from the snapshot
+#   factory-box e2e  <project> <N> <checkout> <sha>   run e2e with video, publish the gallery
 #   factory-box ls                                  running previews
 set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -105,7 +106,30 @@ down() {
   log "PR $n deleted"
 }
 
+e2e() {
+  load_project "$1"; local n="$2" checkout="$3" sha="${4:-run}"
+  local host; host="$(cat "/srv/factory/state/$PREFIX-pr-$n.host" 2>/dev/null)" || die "PR $n has no preview"
+  export PATH="/opt/factory/node/bin:$PATH" PLAYWRIGHT_BROWSERS_PATH=/opt/factory/ms-playwright \
+         npm_config_cache=/opt/factory/npm-cache CI=1
+  local code=0
+  run_e2e "$checkout" "$n" "https://$host$APP_PATH" >&2 || code=$?
+  local root="/srv/factory/artifacts/$PREFIX/pr-$n" out="$checkout/$E2E_OUT_DIR"
+  local run="$root/runs/$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:7}"
+  mkdir -p "$run"
+  [ -f "$out/report.json" ] || { echo "no report (exit $code)"; return "$code"; }
+  cp -a "$out/." "$run/"
+  local summary
+  summary="$(node "$FACTORY_DIR/tools/gallery.mjs" "$run" "PR $n · ${sha:0:7} · e2e")"
+  # the newest run is what /_factory/ shows; keep the last 5
+  ln -sfn "runs/$(basename "$run")" "$root/latest"
+  printf '<meta http-equiv="refresh" content="0; url=latest/">\n' > "$root/index.html"
+  ls -1d "$root"/runs/* | sort | head -n -5 | xargs -r rm -rf
+  echo "$summary"
+  return "$code"
+}
+
 case "$cmd" in
+  e2e)      [ $# -ge 3 ] || die "usage: e2e <project> <N> <checkout> [sha]"; e2e "$@" ;;
   snapshot) [ $# -eq 1 ] || die "usage: snapshot <project>"; snapshot "$1" ;;
   up)       [ $# -ge 3 ] || die "usage: up <project> <N> <checkout> [branch]"; up "$@" ;;
   down)     [ $# -eq 2 ] || die "usage: down <project> <N>"; down "$@" ;;
