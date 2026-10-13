@@ -6,7 +6,7 @@ it with a video of every test, and one PR comment carries the link and the
 results. Closing the PR deletes everything. CI runs on self-hosted runners
 on the same box, so it uses no GitHub minutes.
 
-![overview](docs/overview.png)
+![architecture](docs/architecture.png)
 
 Design: [docs/spec.md](docs/spec.md).
 

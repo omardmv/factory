@@ -1,0 +1,200 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Kalam:wght@700&display=swap" rel="stylesheet">
+<style>
+  body { margin:0; background:#fff; }
+  svg { font-family:'Patrick Hand', 'Comic Sans MS', cursive; }
+  .title { font-family:'Kalam', cursive; font-size:56px; font-weight:700; fill:#1a1a1a; }
+  .h { font-size:22px; fill:#222; }
+  .t { font-size:17px; fill:#333; }
+  .s { font-size:15px; fill:#666; }
+  .p { fill:#7a4bd1; } .g { fill:#0f8a6a; } .r { fill:#c0392b; } .b { fill:#2b6cb0; } .o { fill:#b7651a; }
+  .frame { fill:none; stroke:#9a9a9a; stroke-width:1.4; stroke-dasharray:6 5; }
+  .arr { stroke:#333; stroke-width:1.8; fill:none; marker-end:url(#a); }
+  .arrR { stroke:#c0392b; stroke-width:1.5; fill:none; stroke-dasharray:5 4; marker-end:url(#ar); }
+  .arrG { stroke:#0f8a6a; stroke-width:1.6; fill:none; marker-end:url(#ag); }
+</style></head><body>
+<svg width="1900" height="1180" viewBox="0 0 1900 1180" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#333" stroke-width="1.6"/></marker>
+  <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#c0392b" stroke-width="1.6"/></marker>
+  <marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#0f8a6a" stroke-width="1.6"/></marker>
+</defs>
+
+<text class="title" x="30" y="74">The Software Factory</text>
+<text class="s" x="34" y="106">every pull request becomes a live preview, tested and recorded, on our own server · any number of projects · $0</text>
+
+<circle cx="1440" cy="40" r="8" fill="#f1e9ff" stroke="#7a4bd1"/><text class="t p" x="1456" y="46">AI agent</text>
+<circle cx="1440" cy="68" r="8" fill="#e3f6ef" stroke="#0f8a6a"/><text class="t g" x="1456" y="74">Factory (our server)</text>
+<circle cx="1440" cy="96" r="8" fill="#fde8e6" stroke="#c0392b"/><text class="t r" x="1456" y="102">Human gate</text>
+<circle cx="1680" cy="40" r="8" fill="#e6effa" stroke="#2b6cb0"/><text class="t b" x="1696" y="46">GitHub</text>
+<circle cx="1680" cy="68" r="8" fill="#fff1e0" stroke="#b7651a"/><text class="t o" x="1696" y="74">Environments</text>
+
+<!-- ============ ROW 1 ============ -->
+<text class="h" x="30" y="160">Code from anywhere</text>
+<rect class="frame" x="22" y="172" width="330" height="270" rx="6"/>
+<rect x="44" y="194" width="130" height="62" rx="10" fill="#fde8e6" stroke="#c0392b"/>
+<text class="t r" x="109" y="220" text-anchor="middle">You</text><text class="s" x="109" y="242" text-anchor="middle">laptop · phone</text>
+<rect x="196" y="194" width="136" height="62" rx="10" fill="#f1e9ff" stroke="#7a4bd1"/>
+<text class="t p" x="264" y="220" text-anchor="middle">Coding agents</text><text class="s" x="264" y="242" text-anchor="middle">a worktree each</text>
+<rect x="44" y="272" width="288" height="62" rx="10" fill="#f1e9ff" stroke="#7a4bd1"/>
+<text class="t p" x="188" y="298" text-anchor="middle">Background agents</text><text class="s" x="188" y="320" text-anchor="middle">open PRs while you are away</text>
+<text class="s" x="44" y="364">steer from the phone: Remote Control</text>
+<text class="s" x="44" y="386">agents check their own work as a real user:</text>
+<text class="s" x="44" y="408">API calls, screenshots, live browser</text>
+<text class="s" x="44" y="430">(skill: factory-browse)</text>
+<path class="arr" d="M356 306 L420 306"/>
+
+<text class="h b" x="430" y="160">Pull requests</text>
+<rect x="424" y="172" width="250" height="270" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
+<rect x="440" y="192" width="218" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="454" y="215">#41 feat/checkout</text>
+<rect x="440" y="236" width="218" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="454" y="259">#40 fix/login-redirect</text>
+<rect x="440" y="280" width="218" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="454" y="303">#39 feat/search</text>
+<rect x="440" y="324" width="218" height="34" rx="4" fill="#fff" stroke="#888"/><text class="t" x="454" y="347">#38 fix/mobile-menu</text>
+<text class="s" x="440" y="396">into the integration branch</text>
+<text class="s" x="440" y="418">never straight to production</text>
+<path class="arr" d="M678 306 L740 306"/>
+
+<text class="h g" x="750" y="160">CI on our server</text>
+<rect class="frame" x="744" y="172" width="470" height="270" rx="6"/>
+<rect x="766" y="194" width="196" height="76" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="864" y="222" text-anchor="middle">Self-hosted runners</text>
+<text class="s" x="864" y="244" text-anchor="middle">several in parallel</text>
+<text class="s" x="864" y="262" text-anchor="middle">0 GitHub minutes</text>
+<path class="arr" d="M966 232 L996 232"/>
+<rect x="1000" y="194" width="194" height="76" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1016" y="220">static checks</text>
+<text class="s" x="1016" y="242">lint · guards · build</text>
+<text class="s" x="1016" y="262">migrations from scratch</text>
+<rect x="766" y="290" width="428" height="62" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="784" y="316">build the branch into images</text>
+<text class="s" x="784" y="338">on the server, layer cache, about a minute</text>
+<text class="s" x="766" y="386">own Linux user, own folders</text>
+<text class="s" x="766" y="408">same scripts work under any CI</text>
+<text class="s" x="766" y="430">(GitHub Actions today, Woodpecker possible)</text>
+<path class="arr" d="M1218 306 L1280 306"/>
+
+<text class="h g" x="1290" y="160">A preview per PR</text>
+<rect class="frame" x="1284" y="172" width="590" height="270" rx="6"/>
+<rect x="1306" y="194" width="262" height="104" rx="8" fill="#fff1e0" stroke="#b7651a"/>
+<text class="t o" x="1322" y="220">its own copy of the data</text>
+<text class="s" x="1322" y="244">database: template copy, &lt; 1 s</text>
+<text class="s" x="1322" y="266">files: hardlinks, 0 bytes</text>
+<text class="s" x="1322" y="288">kept across pushes</text>
+<rect x="1590" y="194" width="262" height="104" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="1606" y="220">its own containers</text>
+<text class="s" x="1606" y="244">migrate → app → web</text>
+<text class="s" x="1606" y="266">offline: no outside services</text>
+<text class="s" x="1606" y="288">real model only on request</text>
+<rect x="1306" y="314" width="546" height="108" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1322" y="340">https://&lt;feature&gt;-pr&lt;N&gt;.&lt;domain&gt;</text>
+<text class="s" x="1322" y="362">one wildcard DNS record per domain, set once</text>
+<text class="s" x="1322" y="384">password gate · gateway routes by PR number</text>
+<text class="s" x="1322" y="406">/_factory/login signs you in, one click</text>
+
+<path class="arrR" d="M1878 330 C 1898 440, 1898 480, 1878 560"/>
+<text class="s r" x="1606" y="492">red check → agent fixes → push again</text>
+
+<!-- ============ ROW 2 ============ -->
+<path class="arr" d="M1580 446 L1580 516"/>
+
+<text class="h p" x="1290" y="540">E2E tests · tester-army</text>
+<rect class="frame" x="1284" y="552" width="590" height="210" rx="6"/>
+<rect x="1306" y="576" width="262" height="80" rx="8" fill="#f1e9ff" stroke="#7a4bd1"/>
+<text class="t p" x="1322" y="602">the suite runs on the preview</text>
+<text class="s" x="1322" y="624">model-free, deterministic</text>
+<text class="s" x="1322" y="644">signs in as a real user</text>
+<rect x="1590" y="576" width="262" height="80" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1606" y="602">a video of every test</text>
+<text class="s" x="1606" y="624">trace page for failures</text>
+<text class="s" x="1606" y="644">gallery at /_factory/</text>
+<rect x="1306" y="672" width="546" height="70" rx="8" fill="#fff" stroke="#888"/>
+<rect x="1322" y="688" width="42" height="32" rx="3" fill="#eee" stroke="#999"/><path d="M1337 696 L1351 704 L1337 712 Z" fill="#999"/>
+<rect x="1374" y="688" width="42" height="32" rx="3" fill="#eee" stroke="#999"/><path d="M1389 696 L1403 704 L1389 712 Z" fill="#999"/>
+<rect x="1426" y="688" width="42" height="32" rx="3" fill="#eee" stroke="#999"/><path d="M1441 696 L1455 704 L1441 712 Z" fill="#999"/>
+<text class="s" x="1484" y="710">evidence you can watch on the phone</text>
+<path class="arr" d="M1280 656 L1222 656"/>
+
+<text class="h b" x="750" y="540">One PR comment, updated every push</text>
+<rect x="744" y="552" width="474" height="210" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
+<text class="t" x="764" y="590">Preview   feature-pr41.&lt;domain&gt;</text>
+<text class="t" x="764" y="618">Sign in   one click</text>
+<text class="t" x="764" y="646">E2E       12 passed · 0 failed  ▶ videos</text>
+<text class="t" x="764" y="674">Data      snapshot of 03:00</text>
+<text class="s" x="764" y="716">nothing to set up, nothing to check by hand</text>
+<text class="s" x="764" y="738">closing the PR deletes everything</text>
+<path class="arr" d="M740 656 L640 656"/>
+
+<text class="h r" x="430" y="540">Human gate</text>
+<rect x="424" y="580" width="210" height="150" rx="8" fill="#fde8e6" stroke="#c0392b" stroke-width="1.6"/>
+<text class="t r" x="529" y="618" text-anchor="middle">You check the preview</text>
+<text class="s" x="529" y="646" text-anchor="middle">good → merge</text>
+<text class="s" x="529" y="670" text-anchor="middle">not yet → comment,</text>
+<text class="s" x="529" y="692" text-anchor="middle">the agent pushes again</text>
+<path class="arr" d="M420 656 L362 656"/>
+
+<text class="h o" x="30" y="540">Staging</text>
+<rect x="22" y="580" width="330" height="150" rx="8" fill="#fff1e0" stroke="#b7651a" stroke-width="1.6"/>
+<text class="t o" x="187" y="616" text-anchor="middle">every merge deploys here</text>
+<text class="s" x="187" y="642" text-anchor="middle">real data, real integrations</text>
+<text class="s" x="187" y="664" text-anchor="middle">where model behaviour is proven</text>
+<text class="s" x="187" y="686" text-anchor="middle">source of the nightly snapshot</text>
+<path class="arr" d="M187 734 L187 812"/>
+<rect x="22" y="816" width="330" height="56" rx="8" fill="#fde8e6" stroke="#c0392b" stroke-width="1.6"/>
+<text class="t r" x="187" y="850" text-anchor="middle">Your sign-off on staging</text>
+<path class="arr" d="M356 844 L420 844"/>
+<rect x="424" y="806" width="300" height="76" rx="8" fill="#e3f6ef" stroke="#0f8a6a" stroke-width="2"/>
+<text class="t g" x="574" y="836" text-anchor="middle">Production</text>
+<text class="s" x="574" y="860" text-anchor="middle">a merge to main is a release</text>
+
+<!-- ============ DATA ============ -->
+<text class="h" x="760" y="800">Data flows down, never back</text>
+<rect class="frame" x="744" y="812" width="1130" height="110" rx="6"/>
+<rect x="764" y="832" width="190" height="70" rx="8" fill="#fff1e0" stroke="#b7651a"/>
+<text class="t o" x="859" y="860" text-anchor="middle">source data</text><text class="s" x="859" y="882" text-anchor="middle">read only</text>
+<path class="arrG" d="M958 867 L1006 867"/>
+<rect x="1010" y="832" width="210" height="70" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="1115" y="860" text-anchor="middle">nightly snapshot</text><text class="s" x="1115" y="882" text-anchor="middle">into the factory's Postgres</text>
+<path class="arrG" d="M1224 867 L1272 867"/>
+<rect x="1276" y="832" width="250" height="70" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="1401" y="860" text-anchor="middle">disarm</text><text class="s" x="1401" y="882" text-anchor="middle">jobs, payment tokens, logins</text>
+<path class="arrG" d="M1530 867 L1578 867"/>
+<rect x="1582" y="832" width="272" height="70" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1718" y="860" text-anchor="middle">one database per PR</text><text class="s" x="1718" y="882" text-anchor="middle">gone when the PR closes</text>
+
+<!-- ============ PLATFORM ============ -->
+<text class="h g" x="30" y="960">The platform: many projects, one factory</text>
+<rect class="frame" x="22" y="972" width="1852" height="180" rx="6"/>
+<rect x="44" y="994" width="300" height="136" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="60" y="1020">project registry</text>
+<text class="s" x="60" y="1044">one folder per project:</text>
+<text class="s" x="60" y="1066">domain · prefix · repo</text>
+<text class="s" x="60" y="1088">how to build, test, copy data</text>
+<text class="s" x="60" y="1110">factory init scaffolds it</text>
+<path class="arr" d="M348 1062 L392 1062"/>
+<rect x="396" y="994" width="330" height="136" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
+<text class="t g" x="412" y="1020">sync generates</text>
+<text class="s" x="412" y="1044">gateway routes per domain</text>
+<text class="s" x="412" y="1066">host vhosts (tested before reload)</text>
+<text class="s" x="412" y="1088">one docker network per project</text>
+<text class="s" x="412" y="1110">runners per repo: factory runner</text>
+<rect x="748" y="994" width="330" height="136" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="764" y="1020">updates itself</text>
+<text class="s" x="764" y="1044">the factory is a git repo</text>
+<text class="s" x="764" y="1066">factory push → the server pulls</text>
+<text class="s" x="764" y="1088">within 5 minutes and re-syncs</text>
+<text class="s" x="764" y="1110">read-only deploy key</text>
+<rect x="1100" y="994" width="370" height="136" rx="8" fill="#fff" stroke="#888"/>
+<text class="t" x="1116" y="1020">isolation on a shared server</text>
+<text class="s" x="1116" y="1044">its own folders, user and Postgres</text>
+<text class="s" x="1116" y="1066">projects named apart by prefix</text>
+<text class="s" x="1116" y="1088">production is never touched</text>
+<text class="s" x="1116" y="1110">source data is only read</text>
+<rect x="1492" y="994" width="360" height="136" rx="8" fill="#fde8e6" stroke="#c0392b"/>
+<text class="t r" x="1508" y="1020">rules for every agent</text>
+<text class="s" x="1508" y="1044">prove each change on its preview</text>
+<text class="s" x="1508" y="1066">attach screenshots and videos</text>
+<text class="s" x="1508" y="1088">new feature → new e2e test</text>
+<text class="s" x="1508" y="1110">a red check is fixed before merge</text>
+</svg>
+</body></html>
