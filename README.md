@@ -55,6 +55,28 @@ Box (`factory-box`, runs from `/opt/factory/src`, pulled every 5 minutes):
 `up`, `e2e`, `down`, `reset`, `snapshot`, `snapshot-all` (nightly 03:00),
 `sync`, `runner-add`, `self-update`, `ls`.
 
+## Agents
+
+`agents/server.mjs` (service `agents/factory-agents.service`) runs software
+agents. A task is one conversation with Claude Code, run headless in a
+locked-down container built from `agents/image` (Node, Postgres, Chromium,
+`gh`; it clones the repo onto branch `agent/<id>`). The API listens on
+loopback and every call needs the API token.
+
+1. **Brief**: read-only. The agent answers once with its questions (or "no
+   questions"), a short plan, and a definition of done. It changes no file.
+   A task created with `auto` skips this phase.
+2. **Run**: after the person answers, the agent works without asking
+   anything, pushes `agent/<id>` and opens a PR (Done / Decisions / Attention).
+3. **Review**: every push gets a preview and e2e. The results are posted to
+   the task as `[factory]` messages, and each one starts another agent turn
+   to fix what failed. A ✅ marks the task `review`; after 6 rounds it stops
+   and waits for a person.
+
+Tasks live in `/srv/factory/agents/tasks/<id>/`: `task.json` (phase, status,
+rounds) and `messages.jsonl` (the conversation). Secrets stay in
+`/opt/factory/agents`.
+
 ## On the box
 
 `/opt/factory` (config, gateway, Node, Chromium, runners, this repo in
