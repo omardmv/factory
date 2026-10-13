@@ -14,7 +14,7 @@ Design: [docs/spec.md](docs/spec.md).
 
 | Project | Repo | Previews | Prefix |
 | --- | --- | --- | --- |
-| contentcoach | contentcoach/contentcoach | `<feature>-pr<N>.contentcoach.org` | `cc` |
+| contentcoach | contentcoach/contentcoach | `pr<N>.contentcoach.org` (Coolify, `preview.compose.yaml` in the repo) | `cc` |
 
 A project is a folder in `projects/`: `project.sh` (domain, prefix, repo,
 how to build, how to run e2e, where its data comes from), its
@@ -22,6 +22,17 @@ how to build, how to run e2e, where its data comes from), its
 helper). Everything on the box is named by the prefix: containers
 `<prefix>-pr-<N>-*`, databases `<prefix>_pr_<N>`, network `factory-<prefix>`,
 files under `/srv/factory/*/<prefix>/`.
+
+## Who does what
+
+- **Coolify** (box/coolify: manual install, loopback-only ports, Traefik on
+  127.0.0.1:18080, cleanup off) builds and runs each PR's preview from the
+  repo's `preview.compose.yaml`, routes it, deletes it on close, and is the
+  dashboard at https://coolify.contentcoach.org.
+- **The factory** keeps what Coolify doesn't do: the nightly disarmed snapshot,
+  each preview's own data and DB login (the compose's `preview-init`, admin
+  login from a root-only file), the e2e run with videos, the PR comment, the
+  data cleanup on close, runners, routing, and the agent tools.
 
 ## Onboarding a project
 
