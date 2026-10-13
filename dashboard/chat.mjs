@@ -35,8 +35,9 @@ function e2eFor(project, pr) {
 }
 
 export const chatCss = `
-.app{display:grid;grid-template-columns:280px 1fr;min-height:100vh}
-.side{border-right:1px solid #e6e4dc;padding:18px 14px;background:#f4f3ee;display:flex;flex-direction:column;gap:6px}
+.app{display:grid;grid-template-columns:280px minmax(0,1fr);min-height:100vh}
+*{box-sizing:border-box} input[type=checkbox]{width:auto;margin-right:6px;vertical-align:middle}
+.side{border-right:1px solid #e6e4dc;padding:18px 14px;background:#f4f3ee;display:flex;flex-direction:column;gap:6px;min-width:0}
 .side h1{font-size:18px;margin:0 0 6px} .side .grp{font-size:12px;color:#888780;margin:14px 6px 2px;text-transform:lowercase}
 .side a.t{display:flex;gap:8px;align-items:baseline;padding:7px 8px;border-radius:8px;color:#1f1f1d;text-decoration:none;font-size:14px}
 .side a.t:hover{background:#ebe9e1} .side a.t.on{background:#fff;border:1px solid #e6e4dc}
@@ -57,7 +58,7 @@ export const chatCss = `
 @keyframes p{50%{opacity:.35}}
 .hint{color:#888780;font-size:13px} .empty{margin:auto;text-align:center;color:#5f5e5a;max-width:420px}
 select,input[type=text]{font:inherit;padding:8px 10px;border:1px solid #d3d1c7;border-radius:8px}
-@media (max-width:760px){.app{grid-template-columns:1fr}.app.has-task .side{display:none}.app:not(.has-task) .main{display:none}}`;
+@media (max-width:760px){.app{grid-template-columns:minmax(0,1fr)}.side{border-right:none}.app.has-task .side{display:none}.app:not(.has-task) .main{display:none}}`;
 
 export async function chatView({ taskId, facts, healthy }) {
   let tasks = [], task = null, err = '';
@@ -92,11 +93,11 @@ export async function chatView({ taskId, facts, healthy }) {
       <form method="post" action="/tasks" class="card" style="text-align:left">
         <select name="project">${['contentcoach', 'factory'].map((p) => `<option>${p}</option>`).join('')}</select>
         <textarea name="text" required style="width:100%;min-height:110px;margin:10px 0;font:inherit;padding:9px;border:1px solid #d3d1c7;border-radius:10px" placeholder="e.g. Make the schedule sheet's Save button stay visible on phones"></textarea>
-        <label class="hint"><input type="checkbox" name="auto"> skip the brief, start right away</label><br><br><button>Start</button></form>
+        <label class="hint" style="display:block;margin-bottom:12px"><input type="checkbox" name="auto">skip the brief, start right away</label><button>Start</button></form>
       ${err ? `<p class="pill bad">${esc(err)}</p>` : ''}</div></div>`;
   }
   const html = `<div class="app ${task ? 'has-task' : ''}"><aside class="side"><h1>Factory</h1><a class="newbtn" href="/?task=new">+ New task</a>${side || '<p class="hint">No tasks yet.</p>'}
-    <div class="health">${healthy ? '● all healthy' : '<span style="color:#a32d2d">● needs a look</span>'} · <a href="/health">health</a> · <a href="/logout">sign out</a></div></aside>
+    <div class="health">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● needs a look</span>'} · <a href="/health">health</a> · <a href="/logout">sign out</a></div></aside>
     <section class="main">${main}</section></div>
     <script>
       const m = document.getElementById('msgs');
