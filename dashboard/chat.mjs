@@ -62,7 +62,7 @@ async function overview(tasks, healthy) {
       <div class="row links"><a href="${host}/app/" target="_blank">open</a><a href="${host}/_factory/login" target="_blank">sign in</a><a href="${host}/_factory/" target="_blank">videos</a>${agentTask ? `<a href="/?task=${agentTask}">agent chat</a>` : ''}</div>`, p.url, 'PR on GitHub →', true);
   }).join('') || `<div class="hint pad">${prs?.error ? esc(prs.error) : 'No open pull requests.'}</div>`;
 
-  const shippedHtml = Array.isArray(ship) && ship.length ? ship.map((p) => `<li><a href="${p.url}" target="_blank">#${p.number} ${esc(p.title)}</a> <span class="hint">· ${esc(p.author ?? '')} · ${ago(p.at)} ago</span></li>`).join('') : `<li class="hint">${ship?.error ? esc(ship.error) : 'Nothing merged this week.'}</li>`;
+  const shippedHtml = Array.isArray(ship) && ship.length ? ship.slice(0, 8).map((p) => `<li><a href="${p.url}" target="_blank">#${p.number} ${esc(p.title)}</a> <span class="hint">· ${esc(p.author ?? '')} · ${ago(p.at)} ago</span></li>`).join('') : `<li class="hint">${ship?.error ? esc(ship.error) : 'Nothing merged this week.'}</li>`;
   const depHtml = Array.isArray(dep) && dep.length ? dep.map((d) => `<li>${d.status !== 'completed' ? '<span class="dot live"></span>' : d.conclusion === 'success' ? '✅' : d.conclusion === 'cancelled' ? '⏹' : '❌'} <b>${d.env}</b> <a href="${d.url}" target="_blank">${esc(d.title)}</a> <span class="hint">· ${d.sha} · ${ago(d.at)} ago</span></li>`).join('') : `<li class="hint">${dep?.error ? esc(dep.error) : 'No deploys found.'}</li>`;
 
   return `<div class="overview">${head}
