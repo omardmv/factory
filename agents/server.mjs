@@ -415,10 +415,12 @@ function post(id, from, text) {
   const t = load(id); say(id, from, text);
   if (from === 'factory') {
     if (t.phase !== 'run' || ['stopped', 'paused', 'pausing', 'merged'].includes(t.status) || t.kind !== 'change') return t;
-    if (t.factoryRounds >= MAX_FACTORY_ROUNDS) { say(id, 'factory', `[factory] round limit (${MAX_FACTORY_ROUNDS}) reached: stopped. A person decides what next.`); t.status = 'waiting for you'; save(t); return t; }
+    // the round limit stops fix loops: only a red report counts (and review CHANGES); green never does
     const green = text.includes('✅') && /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1];
+    if (!green && t.factoryRounds >= MAX_FACTORY_ROUNDS) { say(id, 'factory', `[factory] round limit (${MAX_FACTORY_ROUNDS} failed rounds) reached: stopped. A person decides what next.`); t.status = 'waiting for you'; save(t); return t; }
     if (green) t.greenSha = green;
-    t.factoryRounds += 1; save(t);
+    else t.factoryRounds += 1;
+    save(t);
     enqueue(id, text, 'bypassPermissions', green ? 'green' : 'factory');
     return t;
   }
