@@ -14,6 +14,12 @@ RUN apt-get update -qq \
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 RUN npm install -g --silent @anthropic-ai/claude-code && claude --version
 
+# the QA tester's browser: e2e (tester-army) MCP against a PR preview, using
+# the base image's Chromium; qa-mcp starts it from the task's workspace
+COPY qa-tools /opt/qa-tools
+RUN cd /opt/qa-tools && npm ci --silent --no-audit --no-fund && node_modules/.bin/e2e --version
+COPY qa-mcp.sh /usr/local/bin/qa-mcp
+
 # the playwright image ships user pwuser (uid 1000); give it our name
 RUN usermod -l agent -d /home/agent -m pwuser && groupmod -n agent pwuser \
  && install -d -o agent -g agent /workspace /home/agent/.claude

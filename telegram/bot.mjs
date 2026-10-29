@@ -93,6 +93,12 @@ function render(t, m) {
     const label = verdict === 'PASS' ? 'Review passed: ready for you to merge' : verdict === 'CHANGES' ? 'Reviewer asked for changes: the agent is on it' : 'Review finished without a verdict';
     return `${head(verdict === 'PASS' ? '✅' : verdict === 'CHANGES' ? '🔁' : '⚠️', label)}\n\n${html(body.text)}${body.cut ? '\n…' : ''}\n\n${links}`;
   }
+  if (m.from === 'qa') {
+    const verdict = /QA VERDICT:\s*(PASS|FAIL|NOT APPLICABLE)/i.exec(m.text)?.[1]?.toUpperCase();
+    const body = clip(m.text.replace(/^\s*QA VERDICT:.*$/gim, '').trim(), 900);
+    const label = verdict === 'PASS' ? 'QA passed on the preview: on to review' : verdict === 'FAIL' ? 'QA found failures on the preview: the agent is on it' : verdict === 'NOT APPLICABLE' ? 'Nothing for QA to test: on to review' : 'QA finished without a verdict';
+    return `${head(verdict === 'PASS' ? '🧪' : verdict === 'FAIL' ? '🔁' : verdict === 'NOT APPLICABLE' ? '➖' : '⚠️', label)}\n\n${html(body.text)}${body.cut ? '\n…' : ''}\n\n${links}`;
+  }
   if (m.from === 'factory') {
     const text = m.text.replace(/^\[factory\]\s*/, '');
     return `🏭 ${html(clip(text.split('\n')[0], 400).text)}\n${esc(short(t.title))} · <code>${t.id}</code>`;
