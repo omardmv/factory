@@ -1,0 +1,10 @@
+{
+  "name": "factory-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.63.0",
+    "e2e": "0.17.0",
+    "@e2e-dev/web": "0.12.0"
+  }
+}

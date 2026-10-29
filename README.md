@@ -59,11 +59,30 @@ the morning.
   feature, refactor, performance, investigation, large; decision log in
   `/workspace/decisions.tsv`; pauses only with `DECISION NEEDED` for
   architecture, money, security or a product call) -> checks (`[factory]`
-  preview + e2e reports) -> review panel at a green head (or as soon as the
-  PR exists for a project without previews): fresh sessions, no GitHub
-  token, no edit tools, one per model and angle (`REVIEW_PANEL`, default
+  preview + e2e reports) -> independent QA at a green head (projects with
+  `"qa": true`, below) -> review panel (or as soon as the PR exists for a
+  project without previews): fresh sessions, no GitHub token, no edit
+  tools, one per model and angle (`REVIEW_PANEL`, default
   `opus:correctness,sonnet:evidence`). Every reviewer must pass; CHANGES =
-  back to the agent; at most 6 rounds -> auto-merge (below).
+  back to the agent; at most 6 failed rounds (red e2e, QA FAIL, review
+  CHANGES) -> auto-merge (below).
+
+**Independent QA** (`qa` in `agents/projects.json`): the agent's own tests
+prove the code does what *it* understood; the QA tester proves the product
+does what the *task* asked. A fresh session (`QA_MODEL`, default `sonnet`)
+with **no checkout, no GitHub token and no edit tools** gets only the task as
+the person gave it and the PR's preview. It writes the acceptance criteria
+itself, signs in through `/_factory/login`, drives the preview with the e2e
+(tester-army) MCP baked into the agent image (`agents/image/qa-tools`,
+`qa-mcp`), records a video per check and answers `QA VERDICT: PASS | FAIL |
+NOT APPLICABLE`. The report goes on the PR and to Telegram; videos at
+`https://pr<N>.<domain>/_factory/qa/<round>-<sha>/` (deleted with the
+preview). FAIL goes back to the agent as a failed round, told to turn each
+failure into an e2e test; if the agent keeps its code and disputes the
+finding, the head goes on to the review panel, which gets the QA report and
+judges. Each head is tested once. The image is not rebuilt by self-update:
+after a change in `agents/image`, run
+`docker build -t factory-agent:latest /opt/factory/src/agents/image` on the box.
 - **report** (benny-style triage): classify, find duplicates, reproduce twice
   with the repo's own tools, file or update the issue and label it
   `ready-for-agent` / `ready-for-human` / `needs-info`. A `ready-for-agent`

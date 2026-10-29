@@ -1,6 +1,6 @@
 {
   "contentcoach": {
-    "repo": "contentcoach/contentcoach", "base": "dev", "checks": "preview", "autoMerge": "dev", "mergeMethod": "merge",
+    "repo": "contentcoach/contentcoach", "base": "dev", "checks": "preview", "qa": true, "autoMerge": "dev", "mergeMethod": "merge",
     "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, private, owned by the contentcoach org" }
   },
   "factory": {

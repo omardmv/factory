@@ -2,8 +2,10 @@
 // a locked-down container. Kinds of task:
 //  - change: Brief (read-only, asks once) -> Run (playbook + decision log, no
 //    questions, pushes agent/<task>, opens a PR) -> Checks ([factory] reports
-//    drive it to green) -> Review (a fresh reviewer that did not write the code:
-//    PASS = ready for you, CHANGES = back to the agent)
+//    drive it to green) -> QA (projects with "qa": a fresh tester with no code
+//    tests the task on the preview like a user: FAIL = back to the agent) ->
+//    Review (a fresh reviewer that did not write the code: PASS = ready for
+//    you, CHANGES = back to the agent)
 //  - report: triage a bug report (classify, dedupe, reproduce twice, file or
 //    update the issue, label it); ready-for-agent issues then become changes
 //  - program: a coordinator plans phases of independent changes; you approve
@@ -15,7 +17,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync } from 'node:fs';
 
 const HOME = process.env.AGENTS_DIR ?? '/srv/factory/agents';
 const SECRETS = process.env.AGENTS_SECRETS ?? '/opt/factory/agents';
@@ -32,6 +34,11 @@ const FOCUS = {
   correctness: { name: 'Correctness', ask: 'Your angle is correctness: does it do everything the task asked and nothing unrelated; bugs (edge cases, errors, security, data loss, races); does it break something next to the change.' },
   evidence: { name: 'Evidence', ask: 'Your angle is evidence: is every item of the definition of done backed by evidence; is new behaviour covered by a test that would fail without the change; do the decision log\'s claims hold up against their evidence; was any verification claimed without proof; does it follow the repository\'s own rules.' },
 };
+// the QA tester: a fresh session with no code and no GitHub token that tests the
+// task (as the person gave it) on the PR's preview, like a user, with a video per check
+const QA_MODEL = process.env.QA_MODEL ?? 'sonnet';
+const PREVIEW_PASSWORD_FILE = process.env.PREVIEW_PASSWORD_FILE ?? '/opt/factory/preview-password';
+const ARTIFACTS = process.env.ARTIFACTS_DIR ?? '/srv/factory/artifacts';
 const INTAKE_LABEL = process.env.INTAKE_LABEL ?? 'ready-for-agent';
 const TRIAGE_LABEL = process.env.TRIAGE_LABEL ?? 'needs-triage';
 const POLL_EVERY_S = Number(process.env.INTAKE_EVERY_S ?? 120);
@@ -54,6 +61,15 @@ const REVIEW_RULES = `You are an independent code reviewer in the factory. You d
 - Report only real problems (wrong behaviour, missing parts of the task, bugs, security, data loss, a missing or toothless test, breaking the repository's own rules, a decision-log claim the evidence does not back). No style nits.
 - Write for someone reading on a phone, under 250 words: first one or two plain sentences saying what you concluded; then, only if something blocks, a "## Must fix" section with one bullet per finding (file:line, the problem, the fix; two lines at most); then at most three non-blocking remarks under "## Notes". No list of what you checked.
 - End with exactly one line: "VERDICT: PASS" (nothing blocks a merge) or "VERDICT: CHANGES" (at least one finding must be fixed first).`;
+
+const QA_RULES = `You are an independent QA tester in the factory. Someone else built a change; you check it the way its user would, on a live preview, knowing only what the person asked for.
+- You have no source code and no GitHub access, on purpose: judge the product, not the code. Do not look for the code, the PR or the tests.
+- Your only tools for the app are the e2e browser tools (mcp__e2e__*) and plain HTTP to the preview. Touch no other host.
+- The preview is a disarmed, offline copy of staging (fake model, no payments, nothing leaves it): click anything, create and delete freely.
+- Never print the preview password or a sign-in link.
+- Evidence or it did not happen: a check you could not actually see is UNTESTABLE, never PASS. Inconclusive is not a pass.
+- Write for someone reading on a phone, under 300 words: one or two sentences with your conclusion; a table | # | check | result | video |; for each FAIL, the exact steps to reproduce and what you saw vs. what the task implies.
+- End with exactly one line: "QA VERDICT: PASS" (every check passes or is UNTESTABLE for a reason the preview cannot show), "QA VERDICT: FAIL" (at least one check fails) or "QA VERDICT: NOT APPLICABLE" (nothing in the task is visible to a user of the web app).`;
 
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
 const secret = (n) => readFileSync(`${SECRETS}/${n}`, 'utf8').trim();
@@ -114,15 +130,19 @@ async function findPr(task) {
 }
 // projects whose PRs get a preview + e2e report back ([factory] ✅/❌); the rest are reviewed as soon as the PR exists
 const hasChecks = (t) => PROJECTS[t.project]?.checks === 'preview';
+// projects whose green PRs are also tested by the independent QA tester before review
+const hasQa = (t) => hasChecks(t) && PROJECTS[t.project]?.qa === true && t.kind === 'change';
 
 // ---------- the queue: persisted, so a restart (every deploy) loses nothing ----------
 const running = new Map();   // task id -> child process (docker run client)
 const containers = new Map(); // task id -> container name
 const QUEUE_FILE = `${HOME}/queue.json`;
-const queue = readJson(QUEUE_FILE, []); // { id, kind: 'agent' | 'review', prompt?, mode?, from? }
+const queue = readJson(QUEUE_FILE, []); // { id, kind: 'agent' | 'qa' | 'review', prompt?, mode?, from? }
 const saveQueue = () => writeFileSync(QUEUE_FILE, JSON.stringify(queue));
 function enqueue(id, prompt, mode, from) { queue.push({ id, kind: 'agent', prompt, mode, from }); saveQueue(); pump(); }
 function enqueueReview(id) { if (!queue.some((j) => j.id === id && j.kind === 'review')) queue.push({ id, kind: 'review' }); saveQueue(); pump(); }
+function enqueueQa(id) { if (!queue.some((j) => j.id === id && j.kind === 'qa')) queue.push({ id, kind: 'qa' }); saveQueue(); pump(); }
+const JOB_NAME = { agent: 'agent', qa: 'QA tester', review: 'reviewer' };
 function dropQueued(id) { for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === id) queue.splice(i, 1); saveQueue(); }
 function pump() {
   while (running.size < MAX_PARALLEL && queue.length) {
@@ -133,10 +153,10 @@ function pump() {
     update(job.id, (t) => { t.job = job; });
     // forget the job once it ended, unless the next job of this task already took its place
     const forget = (t) => { if (t.job?.seq === job.seq) delete t.job; };
-    (job.kind === 'review' ? review(job) : agentRun(job)).then(() => update(job.id, forget)).catch((e) => {
+    (job.kind === 'review' ? review(job) : job.kind === 'qa' ? qa(job) : agentRun(job)).then(() => update(job.id, forget)).catch((e) => {
       running.delete(job.id); containers.delete(job.id);
       log('run.crashed', { task: job.id, kind: job.kind, error: e.message });
-      say(job.id, 'factory', `[factory] the ${job.kind === 'review' ? 'reviewer' : 'agent'} could not run: ${e.message}`);
+      say(job.id, 'factory', `[factory] the ${JOB_NAME[job.kind] ?? job.kind} could not run: ${e.message}`);
       update(job.id, (t) => { forget(t); t.status = 'waiting for you'; });
       pump();
     });
@@ -149,7 +169,7 @@ function pickup() {
     if (!t.job || running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
     if (['stopped', 'paused'].includes(t.status)) { update(t.id, (x) => { delete x.job; }); continue; }
     const j = t.job;
-    if (j.kind === 'review') queue.push(j);
+    if (j.kind === 'review' || j.kind === 'qa') queue.push(j);
     else if (t.sessionId && j.from !== 'pause') queue.push({ ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup' });
     else queue.push(j);
     log('pickup', { task: t.id, kind: j.kind, from: j.from });
@@ -158,21 +178,25 @@ function pickup() {
 }
 
 // docker run ... claude -p; resolves with the last text the model wrote
-async function container(id, { prompt, mode, claudeDir, ghToken, system, model, disallowed, resume }) {
-  for (const d of ['workspace', claudeDir]) { mkdirSync(`${dir(id)}/${d}`, { recursive: true }); chownSync(`${dir(id)}/${d}`, 1001, 1001); }
+// workspace: the task folder mounted at /workspace; repo: false = no checkout
+// (the image clones only when REPO is set); env/mounts/extra: more for the
+// container and for claude (the QA tester's browser)
+async function container(id, { prompt, mode, claudeDir, ghToken, system, model, disallowed, resume, workspace = 'workspace', repo = true, env: more = {}, mounts = [], extra = [] }) {
+  for (const d of [workspace, claudeDir]) { mkdirSync(`${dir(id)}/${d}`, { recursive: true }); chownSync(`${dir(id)}/${d}`, 1001, 1001); }
   const t = load(id);
   const name = `fa-${id}-${Date.now().toString(36)}`;
   const args = ['run', '--rm', '--name', name, '--network', NETWORK,
     '--cpus', '4', '--memory', '8g', '--pids-limit', '2048', '--shm-size', '1g',
     '--security-opt', 'no-new-privileges:true', '--cap-drop', 'NET_RAW', '--cap-drop', 'MKNOD', '--cap-drop', 'SYS_CHROOT', '--cap-drop', 'AUDIT_WRITE', '--cap-drop', 'SETFCAP',
-    '-v', `${dir(id)}/workspace:/workspace`, '-v', `${dir(id)}/${claudeDir}:/home/agent/.claude`,
-    '-e', 'TASK_ID', '-e', 'REPO', '-e', 'BASE', '-e', 'GH_TOKEN', '-e', 'CLAUDE_CODE_OAUTH_TOKEN'];
+    '-v', `${dir(id)}/${workspace}:/workspace`, '-v', `${dir(id)}/${claudeDir}:/home/agent/.claude`,
+    ...mounts.flatMap((m) => ['-v', m]),
+    '-e', 'TASK_ID', '-e', 'REPO', '-e', 'BASE', '-e', 'GH_TOKEN', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', ...Object.keys(more).flatMap((k) => ['-e', k])];
   if (RUNTIME) args.push('--runtime', RUNTIME);
   args.push(IMAGE, 'claude', '-p', prompt, '--output-format', 'stream-json', '--verbose', '--max-turns', '300',
-    '--permission-mode', mode, '--disallowedTools', ...disallowed, '--append-system-prompt', system);
+    '--permission-mode', mode, '--disallowedTools', ...disallowed, '--append-system-prompt', system, ...extra);
   if (model) args.push('--model', model);
   if (resume) args.push('--resume', resume);
-  const env = { ...process.env, TASK_ID: id, REPO: t.repo, BASE: t.base, GH_TOKEN: ghToken, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') };
+  const env = { ...process.env, ...more, TASK_ID: id, REPO: repo ? t.repo : '', BASE: t.base, GH_TOKEN: ghToken, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') };
   const child = spawn('docker', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   running.set(id, child); containers.set(id, name);
   log('run.start', { task: id, mode, claudeDir, container: name });
@@ -229,12 +253,102 @@ async function agentRun({ id, prompt, mode, from }) {
     else if (decision) next = 'decision needed';
     else if (!head) next = 'waiting for you';
     else if (head === done.reviewedSha) next = done.verdict === 'PASS' ? 'ready for you' : 'waiting for you'; // nothing new since the review
-    else if (!hasChecks(done) || (done.greenSha && head.startsWith(done.greenSha))) next = 'reviewing';
+    // green: the QA tester first (once per head; a head the agent kept after a
+    // QA FAIL goes on to the panel, which sees the report and judges the dispute)
+    else if (!hasChecks(done) || (done.greenSha && head.startsWith(done.greenSha))) next = hasQa(done) && head !== done.qaTestedSha ? 'testing' : 'reviewing';
     else next = 'waiting for checks';
   }
   done.status = next; save(done);
   log('run.end', { task: id, kind: done.kind, mode, from, pr: done.pr?.number ?? null, status: next });
+  if (next === 'testing') enqueueQa(id);
   if (next === 'reviewing') enqueueReview(id);
+  pump();
+}
+
+// the QA tester: a fresh session (own Claude state and workspace, no checkout,
+// no GitHub token, no edit tools) gets only the task as the person gave it and
+// the preview, tests it like a user with a video per check, and says
+// PASS / FAIL / NOT APPLICABLE. FAIL goes back to the agent as a failed round;
+// PASS and NOT APPLICABLE go on to the review panel. Videos and the report are
+// published next to the e2e gallery: https://<preview>/_factory/qa/<round>-<sha>/
+const qaVerdictOf = (text) => /QA VERDICT:\s*(PASS|FAIL|NOT APPLICABLE)/i.exec(text ?? '')?.[1]?.toUpperCase() ?? null;
+const projectPrefix = (project) => /^PREFIX=(\w+)/m.exec(readFileSync(new URL(`../projects/${project}/project.sh`, import.meta.url), 'utf8'))?.[1] ?? null;
+function publishQa(t, ws, run, text) {
+  try {
+    const prefix = projectPrefix(t.project);
+    const root = `${ARTIFACTS}/${prefix}/pr-${t.pr.number}`;
+    if (!prefix || !existsSync(root)) return null;
+    const src = `${dir(t.id)}/${ws}/qa/.e2e/videos`, dest = `${root}/qa/${run}`;
+    mkdirSync(dest, { recursive: true });
+    const videos = existsSync(src) ? readdirSync(src, { recursive: true }).filter((f) => /\.(webm|mp4)$/.test(f)) : [];
+    for (const v of videos) cpSync(`${src}/${v}`, `${dest}/${v.replaceAll('/', '-')}`);
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    writeFileSync(`${dest}/index.html`, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>QA · PR ${t.pr.number} · ${esc(run)}</title>
+<style>body{font:15px/1.5 system-ui;margin:1rem auto;max-width:900px;padding:0 1rem}pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem}video{width:100%;margin:.25rem 0 1rem}</style>
+<h1>Independent QA · PR #${t.pr.number} · ${esc(run)}</h1><pre>${esc(text)}</pre>
+${videos.map((v) => `<h3>${esc(v)}</h3><video src="${esc(v.replaceAll('/', '-'))}#t=1" controls preload="metadata" playsinline></video>`).join('\n') || '<p>no videos</p>'}`);
+    // the e2e job (user factory) deletes this folder when the PR closes
+    const { uid, gid } = statSync(root);
+    for (const p of [`${root}/qa`, dest, ...readdirSync(dest).map((f) => `${dest}/${f}`)]) chownSync(p, uid, gid);
+    return `${t.previewHost}/_factory/qa/${run}/`;
+  } catch (e) { log('qa.publish_failed', { task: t.id, error: e.message }); return null; }
+}
+async function qa({ id }) {
+  const t = update(id, (x) => { x.status = 'testing'; });
+  if (!t.previewHost) {
+    say(id, 'factory', '[factory] no preview URL is known for this PR, so the QA tester could not run: on to the review panel.');
+    update(id, (x) => { x.status = 'reviewing'; });
+    return enqueueReview(id);
+  }
+  const token = await githubToken(t.repo);
+  const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
+  const head = pr.head.sha;
+  const n = (t.qaRounds ?? 0) + 1, run = `${n}-${head.slice(0, 7)}`;
+  const ws = `qa/${n}/workspace`;
+  // the previews' basic-auth password, for the container's user only
+  const secrets = `${dir(id)}/qa/${n}/secrets`;
+  mkdirSync(secrets, { recursive: true });
+  writeFileSync(`${secrets}/preview-password`, readFileSync(PREVIEW_PASSWORD_FILE, 'utf8'), { mode: 0o400 });
+  chownSync(`${secrets}/preview-password`, 1001, 1001);
+  const task = messages(id)[0]?.text ?? t.title;
+  const prompt = `QA of factory task ${id}: PR #${pr.number} in ${t.repo} at ${head.slice(0, 7)}, QA round ${n}.
+
+THE TASK, as the person gave it (all you know about the change):
+${task}
+
+THE PREVIEW of this change: ${t.previewHost}/app/
+Sign in: navigate to ${t.previewHost}/_factory/login; it signs you in as the test account and lands in the app.
+
+1. Write down the acceptance criteria first: what a user must be able to see or do once this task is done, each checkable on the preview, including the obvious neighbours (the thing the task names, everywhere a user would expect it). At most 8. If nothing in the task is visible to a user of the web app (backend only, refactor, infrastructure, docs, the Telegram bot), say so and end with "QA VERDICT: NOT APPLICABLE".
+2. Open the browser: mcp__e2e__open_session (no arguments), then sign in.
+3. For each criterion: start_recording with name c<k>-<two-word-slug>, do it as a user would, stop_recording, and judge PASS, FAIL or UNTESTABLE (only for what the offline preview cannot show, such as a real model's answer: say why). Screenshot what proves it.
+4. close_session, then reply.`;
+  const r = await container(id, {
+    prompt, mode: 'bypassPermissions', claudeDir: `qa-claude/${n}`, workspace: ws, repo: false, ghToken: '', system: QA_RULES, model: QA_MODEL,
+    disallowed: ['AskUserQuestion', 'Edit', 'Write', 'NotebookEdit', 'WebSearch'],
+    env: { QA_PREVIEW_URL: `${t.previewHost}/app/` }, mounts: [`${secrets}/preview-password:/run/factory/preview-password:ro`],
+    extra: ['--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { e2e: { command: 'qa-mcp', args: [] } } })],
+  });
+  const text = r.last || `no answer. ${r.stderr.trim().slice(-300)}`;
+  const verdict = qaVerdictOf(text);
+  const link = publishQa(load(id), ws, run, text);
+  const report = `${text.replace(/^\s*QA VERDICT:.*$/gim, '').trim()}${link ? `\n\nVideos: ${link}` : ''}\n\nQA VERDICT: ${verdict ?? 'INCONCLUSIVE'}`;
+  say(id, 'qa', report);
+  gh(token, `/repos/${t.repo}/issues/${pr.number}/comments`, 'POST', { body: `**Independent QA, round ${n}** at \`${head.slice(0, 7)}\` (fresh session on ${QA_MODEL}: no code, only the task and the preview)\n\n${report}`.slice(0, 60000) })
+    .catch((e) => log('qa.comment_failed', { task: id, error: e.message }));
+  const x = load(id);
+  x.qaRounds = n; x.qaTestedSha = head; x.qaVerdict = verdict;
+  if (x.status === 'stopped') { save(x); return pump(); }
+  if (x.status === 'pausing') { x.status = 'paused'; save(x); return pump(); }
+  if (verdict === 'PASS' || verdict === 'NOT APPLICABLE') { x.status = 'reviewing'; save(x); enqueueReview(id); }
+  else if (verdict === 'FAIL' && x.factoryRounds < MAX_FACTORY_ROUNDS) {
+    x.factoryRounds += 1; x.status = 'working'; save(x);
+    enqueue(id, `[qa] An independent QA tester (no code, only the task and your preview) tested PR #${pr.number} at ${head.slice(0, 7)} and found failures:\n\n${report}\n\nReproduce each failure on the preview or locally, fix the cause, and turn each failed check into an e2e test that fails without your fix; push. If you are sure the tester misread the task, push nothing for that point and say why in the PR under "Decisions": the review panel will read both sides.`, 'bypassPermissions', 'qa');
+  } else {
+    x.status = 'waiting for you'; save(x);
+    say(id, 'factory', verdict === 'FAIL' ? `[factory] round limit (${MAX_FACTORY_ROUNDS}) reached with QA failures open: stopped. A person decides what next.` : '[factory] the QA tester gave no clear verdict: a person decides.');
+  }
+  log('qa.end', { task: id, round: n, verdict, videos: link });
   pump();
 }
 
@@ -249,6 +363,7 @@ async function review({ id }) {
   const msgs = messages(id);
   const brief = t.auto ? null : msgs.find((m) => m.from === 'agent')?.text;
   const n = (t.reviews ?? 0) + 1;
+  const qaReport = t.qaTestedSha === pr.head.sha ? msgs.filter((m) => m.from === 'qa').at(-1)?.text : null;
   const base = `Review PR #${pr.number} of ${t.repo} (factory task ${id}, branch agent/${id} into ${t.base}). This is review round ${n}.
 
 THE TASK, as the person gave it:
@@ -256,7 +371,7 @@ ${msgs[0]?.text ?? t.title}
 ${brief ? `\nTHE AGENT'S BRIEF (its plan and definition of done):\n${brief}\n` : ''}
 THE PR: ${pr.title}
 ${(pr.body ?? '').slice(0, 20000)}
-
+${qaReport ? `\nTHE INDEPENDENT QA TESTER'S REPORT on this head (it tested the preview as a user, without the code):\n${qaReport.slice(0, 8000)}\nIf it says FAIL and the agent kept the code anyway, judge from the task and the code who is right; a real failure blocks the merge.\n` : ''}
 The checkout in /workspace/repo is at the PR head (${pr.head.sha.slice(0, 7)}). See the change with \`git diff origin/${t.base}...HEAD\` and \`git log origin/${t.base}..HEAD\`; read the surrounding code and the repository's own rules (AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills). The agent's decision log is /workspace/decisions.tsv (it may be missing).
 Other reviewers look at this PR from other angles at the same time; stay on yours, but report anything that would block a merge.`;
   const results = [];
@@ -279,8 +394,11 @@ Other reviewers look at this PR from other angles at the same time; stay on your
   x.reviews = n; x.reviewedSha = pr.head.sha; x.verdict = verdict;
   if (x.status === 'stopped') { save(x); return pump(); }
   if (x.status === 'pausing') { x.status = 'paused'; save(x); return pump(); }
+  // a head the QA tester failed and the agent kept never merges by itself: the person settles the dispute
+  const disputed = x.qaVerdict === 'FAIL' && x.qaTestedSha === pr.head.sha;
   if (verdict === 'PASS') {
-    x.status = 'ready for you'; x.mergeWanted = !!PROJECTS[x.project]?.autoMerge; x.mergeTries = 0; save(x);
+    x.status = 'ready for you'; x.mergeWanted = !!PROJECTS[x.project]?.autoMerge && !disputed; x.mergeTries = 0; save(x);
+    if (disputed) say(id, 'factory', '[factory] the review panel passed a head the QA tester failed (the agent disputes the finding): not merged automatically. Read both and decide.');
     if (x.mergeWanted) autoMerge(id).catch((e) => log('merge.failed', { task: id, error: e.message }));
   } else if (verdict === 'CHANGES' && x.factoryRounds < MAX_FACTORY_ROUNDS) {
     x.factoryRounds += 1; x.status = 'working'; save(x);
@@ -304,6 +422,7 @@ const MERGE_TRIES = 10;
 async function autoMerge(id) {
   const t = load(id), p = PROJECTS[t.project];
   if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
+  if (t.qaVerdict === 'FAIL' && t.qaTestedSha === t.reviewedSha) return;
   const token = await githubToken(t.repo);
   const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
   const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`); log('merge.refused', { task: id, why }); };
@@ -418,7 +537,7 @@ function post(id, from, text) {
     // the round limit stops fix loops: only a red report counts (and review CHANGES); green never does
     const green = text.includes('✅') && /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1];
     if (!green && t.factoryRounds >= MAX_FACTORY_ROUNDS) { say(id, 'factory', `[factory] round limit (${MAX_FACTORY_ROUNDS} failed rounds) reached: stopped. A person decides what next.`); t.status = 'waiting for you'; save(t); return t; }
-    if (green) t.greenSha = green;
+    if (green) { t.greenSha = green; t.previewHost = /preview ready at (https:\/\/[^\s/]+)/.exec(text)?.[1] ?? t.previewHost; }
     else t.factoryRounds += 1;
     save(t);
     enqueue(id, text, 'bypassPermissions', green ? 'green' : 'factory');
@@ -497,7 +616,7 @@ async function digest(hours) {
     ready: await Promise.all(by(['ready for you']).map(async (t) => ({ ...brief(t), attention: await attention(t) }))),
     decisions: by(['decision needed']).map(brief),
     waiting: by(['waiting for you', 'waiting for merges']).map(brief),
-    moving: recent.filter((t) => running.has(t.id) || ['queued', 'working', 'briefing', 'planning', 'reviewing', 'waiting for checks'].includes(t.status) || /^running phase/.test(t.status)).map(brief),
+    moving: recent.filter((t) => running.has(t.id) || ['queued', 'working', 'briefing', 'planning', 'testing', 'reviewing', 'waiting for checks'].includes(t.status) || /^running phase/.test(t.status)).map(brief),
     finished: by(['done']).map(brief),
     merged: recent.filter((t) => t.pr?.state === 'merged').map(brief),
     stopped: by(['stopped', 'paused']).map(brief),
