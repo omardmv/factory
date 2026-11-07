@@ -548,7 +548,8 @@ async function syncEpic(id, done = false) {
     const states = Object.fromEntries(t.plan.map((i) => [i.key, itemState(i)]));
     const r = await syncEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, states, goal: messages(id)[0]?.text ?? t.title, tasksUrl: `${DASHBOARD}/?task=${id}`, done });
     // saved either way: sub-issues opened before a failure must not be opened twice
-    update(id, (x) => { copyIssueFields(x.plan ?? [], t.plan); for (const k of ['epicSyncHash', 'epicDropped', 'epicClosed']) x[k] = t[k]; });
+    const synced = new Set((load(id).epicDropped ?? []).map((p) => p.key).filter((k) => !(t.epicDropped ?? []).some((p) => p.key === k)));
+    update(id, (x) => { copyIssueFields(x.plan ?? [], t.plan); for (const k of ['epicSyncHash', 'epicClosed']) x[k] = t[k]; x.epicDropped = (x.epicDropped ?? []).filter((p) => !synced.has(p.key)); });
     if (r.error) log('epic.sync.failed', { task: id, error: r.error }); else if (r.changed) log('epic.synced', { task: id });
   } catch (e) { log('epic.sync.failed', { task: id, error: e.message }); }
   finally { syncingEpic.delete(id); }
@@ -569,6 +570,8 @@ function afterCoordinator(t, mode, from, last, decision) {
 }
 const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
 async function watchPrograms() {
+  // a finished epic whose issue is still open: the close is retried until it works
+  for (const t of allTasks().filter((x) => x.kind === 'program' && x.status === 'done' && x.epicIssue?.number && !x.epicClosed)) await syncEpic(t.id, true);
   for (const t of allTasks().filter((x) => x.kind === 'program' && x.phase === 'run' && Array.isArray(x.plan) && x.plan.length && !['done', 'stopped', 'decision needed'].includes(x.status))) {
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
     for (const i of t.plan.filter((i) => i.taskId)) { // PR states can change on GitHub (merged, closed by hand)
