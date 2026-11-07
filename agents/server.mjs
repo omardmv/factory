@@ -22,9 +22,10 @@ import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RUL
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia, mediaFiles } from './media.mjs';
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
-import { spawn } from 'node:child_process';
+import { createDrain, startupPlan } from './drain.mjs';
+import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync } from 'node:fs';
 
 const HOME = process.env.AGENTS_DIR ?? '/srv/factory/agents';
 const SECRETS = process.env.AGENTS_SECRETS ?? '/opt/factory/agents';
@@ -145,6 +146,24 @@ const hasChecks = (t) => PROJECTS[t.project]?.checks === 'preview';
 const hasQa = (t) => hasChecks(t) && PROJECTS[t.project]?.qa === true && t.kind === 'change';
 
 // ---------- the queue: persisted, so a restart (every deploy) loses nothing ----------
+const DRAIN_FILE = `${HOME}/drain.json`;
+const DRAIN_TIMEOUT_MS = Number(process.env.DRAIN_TIMEOUT_S ?? 1800) * 1000;
+// jobs from start to the end of their handling (running only covers the container, not what follows: the PR lookup,
+// the next status, queueing the review). A drain waits for these, not just for containers.
+const inflight = new Map(); // job seq -> task id
+const drain = createDrain({
+  running: () => [...new Set([...running.keys(), ...inflight.values()])],
+  now: Date.now,
+  describe: (id) => ({ id, kind: (() => { try { return load(id).job?.kind; } catch { return undefined; } })() }),
+  // docker kill, not the client's death: the turn must be cut off for sure before node exits
+  killAll: (ids) => { const names = ids.map((i) => containers.get(i)).filter(Boolean); if (names.length) spawnSync('docker', ['kill', ...names], { stdio: 'ignore' }); },
+  writeRecord: (r) => writeFileSync(DRAIN_FILE, JSON.stringify(r, null, 1)),
+  exit: () => process.exit(0),
+  log,
+}, DRAIN_TIMEOUT_MS);
+process.on('SIGTERM', () => drain.start());
+process.on('SIGINT', () => drain.start());
+setInterval(() => drain.tick(), 2000);
 const running = new Map();   // task id -> child process (docker run client)
 const containers = new Map(); // task id -> container name
 const QUEUE_FILE = `${HOME}/queue.json`;
@@ -157,6 +176,7 @@ function enqueueQaFrom(id, from) { if (!queue.some((j) => j.id === id && j.kind 
 const JOB_NAME = { agent: 'agent', qa: 'QA tester', review: 'reviewer' };
 function dropQueued(id) { for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === id) queue.splice(i, 1); saveQueue(); }
 function pump() {
+  if (drain.draining) return; // a deploy is waiting for the running turns: nothing new starts
   while (running.size < MAX_PARALLEL && queue.length) {
     const i = queue.findIndex((j) => !running.has(j.id));
     if (i < 0) break;
@@ -165,13 +185,14 @@ function pump() {
     update(job.id, (t) => { t.job = job; jobStarted(t, job); });
     // forget the job once it ended, unless the next job of this task already took its place
     const forget = (t) => { if (t.job?.seq === job.seq) delete t.job; };
+    inflight.set(job.seq, job.id);
     (job.kind === 'review' ? review(job) : job.kind === 'qa' ? qa(job) : agentRun(job)).then(() => update(job.id, forget)).catch((e) => {
       running.delete(job.id); containers.delete(job.id);
       log('run.crashed', { task: job.id, kind: job.kind, error: e.message });
       say(job.id, 'factory', `[factory] the ${JOB_NAME[job.kind] ?? job.kind} could not run: ${e.message}`);
       update(job.id, (t) => { forget(t); t.status = 'waiting for you'; t.waitingOn = `your call: the ${JOB_NAME[job.kind] ?? job.kind} could not run (${String(e.message).replace(/\s+/g, ' ').slice(0, 120)})`; });
       pump();
-    });
+    }).finally(() => inflight.delete(job.seq));
   }
 }
 // session pickup: a job that was running when the factory stopped runs again,
@@ -847,14 +868,30 @@ const handler = async (req, res) => {
   } catch (e) { log('http.error', { error: e.message }); return send(400, { error: e.message }); }
 };
 for (const a of BIND) createServer(handler).listen(PORT, a, () => log('listening', { address: a, port: PORT, image: IMAGE, network: NETWORK, runtime: RUNTIME || 'runc', reviewPanel: REVIEW_PANEL.map((r) => `${r.model}:${r.focus}`), autoMerge: Object.fromEntries(Object.entries(PROJECTS).map(([k, v]) => [k, v.autoMerge ?? null])), labels: [INTAKE_LABEL, TRIAGE_LABEL] }));
+// ---------- drain (decisions in drain.mjs): SIGTERM = finish the running turns, then exit ----------
+// startup: containers left by a node that died without draining are orphans (their client is gone, nothing reads
+// their output): kill them; their tasks still carry a job, so pickup() below runs them again.
+{
+  const ps = spawnSync('docker', ['ps', '-q', '--filter', 'name=^fa-'], { encoding: 'utf8' });
+  const orphans = (ps.stdout ?? '').split('\n').filter(Boolean);
+  if (orphans.length) { spawnSync('docker', ['kill', ...orphans], { stdio: 'ignore' }); log('orphans.killed', { containers: orphans }); }
+  const rec = readJson(DRAIN_FILE, null);
+  if (rec) {
+    const plan = startupPlan(rec, Object.fromEntries(allTasks().map((t) => [t.id, t])));
+    for (const n of plan.notices) if (existsSync(dir(n.id))) say(n.id, 'factory', n.text, { ping: true });
+    log('drain.recovered', { cutOff: rec.cutOff.map((c) => c.id), requeue: plan.requeue });
+    unlinkSync(DRAIN_FILE);
+  }
+}
 pickup();
-const poll = () => intake().catch((e) => log('intake.failed', { error: e.message }))
+const poll = () => drain.draining ? Promise.resolve() : intake().catch((e) => log('intake.failed', { error: e.message }))
   .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
   .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }));
 // ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
 const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);
 const NUDGE_PROMPT = '[factory] Nudge: the factory saw no progress on this task for a while. Check `git status`, your decision log, your PR and its checks, then carry on with what you were doing. If you are blocked, say exactly on what.';
 function watchdog(now = Date.now()) {
+  if (drain.draining) return;
   for (const t of allTasks()) {
     const act = `${dir(t.id)}/activity.log`;
     const d = watchdogDecision(t, { now, running: running.has(t.id), anyRunning: running.size > 0, inQueue: queue.some((j) => j.id === t.id), slotsFull: running.size >= MAX_PARALLEL, lastActivityAt: existsSync(act) ? statSync(act).mtime.toISOString() : undefined });
