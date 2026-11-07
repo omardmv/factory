@@ -258,8 +258,6 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     return pump();
   }
   if (out.resetCrash) done.crashRetries = 0;
-  if (out.type === 'coordinator') { save(done); return afterCoordinator(done, mode, from, r.last, out.decision); }
-  if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
   // the person's answer to a decision carries the turn's origin, so a review-fix round still returns to the panel
   if (out.decision || asked.asks) done.askedFrom = [from, origin].includes('review') ? 'review' : (origin ?? from);
   if (asked.asks) {
@@ -267,6 +265,8 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     done.waitingOn = waitingOnLine(asked);
     log('unasked.caught', { task: id, question: asked.question });
   } else delete done.waitingOn;
+  if (out.type === 'coordinator') { save(done); return afterCoordinator(done, mode, from, r.last, out.decision); }
+  if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
   const next = out.status;
   done.status = next; save(done);
   if (done.pr?.state === 'open') publishTaskMedia(id).catch((e) => log('media.failed', { task: id, error: e.message }));

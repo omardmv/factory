@@ -12,7 +12,7 @@ export function unaskedPrompt(reply) {
 ${String(reply).slice(-6000)}
 """
 
-Does this message ask the person to decide, choose, confirm or answer something that the agent did not settle itself (for example "Two things need your call", "should we...?", "which do you prefer", "needs a person to decide")? A plain report of what was done, with notes or decisions the agent already took, is NOT a question. A "what to look at" list for a reviewer is NOT a question.
+Does this message ask the person to decide, choose, confirm or answer something that the agent did not settle itself (for example "Two things need your call", "should we...?", "which do you prefer", "needs a person to decide")? A plain report of what was done, with notes or decisions the agent already took, is NOT a question. A "what to look at" list for a reviewer is NOT a question. A question written for someone else (for example the reporter of a bug, in a triage reply) is NOT a question to the person.
 
 Answer with ONE line of JSON and nothing else: {"asks": true or false, "question": "<the question in one or two sentences>", "options": ["<each option the agent offered, short>"]}. Use "question": "" and "options": [] when asks is false.`;
 }
