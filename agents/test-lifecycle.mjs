@@ -299,4 +299,8 @@ await test('research handoff names the document and where the comments are', () 
   assert.doesNotMatch(researchHandoff({ doc: 'd.md', repo: 'o/r' }), /gh pr view/);
 });
 
+await test('CI reports are ignored for a research task', () => {
+  assert.equal(afterFactoryReport({ task: { phase: 'run', kind: 'change', type: 'research', status: 'research review', factoryRounds: 0 }, text: '❌ checks failed', maxRounds: 3 }).action, 'ignore');
+});
+
 console.log(`${n} groups passed`);

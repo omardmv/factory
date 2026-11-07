@@ -134,7 +134,7 @@ export function afterReview({ task, verdict, headSha, autoMerge, maxRounds }) {
 // toward the round limit; green never does.
 //  ignore | limit | run { green, greenSha, previewHost, factoryRounds }
 export function afterFactoryReport({ task, text, maxRounds }) {
-  if (task.phase !== 'run' || ['stopped', 'paused', 'pausing', 'merged'].includes(task.status) || task.kind !== 'change') return { action: 'ignore' };
+  if (task.phase !== 'run' || ['stopped', 'paused', 'pausing', 'merged'].includes(task.status) || task.kind !== 'change' || task.type === 'research') return { action: 'ignore' }; // a research PR has no code to check
   const greenSha = text.includes('✅') ? /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1] : undefined;
   if (!greenSha && task.factoryRounds >= maxRounds) return { action: 'limit', status: 'waiting for you', waitingOn: 'your call: the checks keep failing at the round limit', say: `[factory] round limit (${maxRounds} failed rounds) reached: stopped. A person decides what next.` };
   if (greenSha) return { action: 'run', green: true, greenSha, previewHost: /preview ready at (https:\/\/[^\s/]+)/.exec(text)?.[1] ?? task.previewHost };
