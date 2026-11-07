@@ -29,7 +29,16 @@ Telegram bot until Slack has proven itself; both talk to factory-agents.
 - Create a channel `sayra-<something>` (Sayra) or anything else (the factory)
   and write the idea as its first message.
 - Or DM the bot; it makes the channel.
-- Archived when the PR is merged or closed. A bot can archive, not delete;
+- Epics: DM the bot `epic: <a big goal>` (or `epic sayra: …`). It makes a
+  channel `epic-<title>-<id>` in *talk mode*: the coordinator discusses
+  options and trade-offs with you and writes no plan yet. Reply as often as
+  you like; write `plan` or press **Plan it** when you want the plan. The
+  plan then arrives with a **Go** button (reply instead to change it). On
+  Go the factory opens a GitHub epic issue with one sub-issue per task, and
+  the epic channel gets a plan summary (waves, issue link). Its topic shows
+  `M/T merged`, and the factory's reports (task merged, wave done, stuck)
+  arrive there; each task runs in its own channel.
+- Archived when the PR is merged or closed (an epic's channel: when the epic is done or stopped). A bot can archive, not delete;
   a workspace admin can delete archived channels if wanted.
 
 Test: `node slack/test.mjs` (fake Slack and fake factory-agents, no network).
