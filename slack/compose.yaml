@@ -1,0 +1,24 @@
+# The factory's Slack bot, deployed by Coolify (project "factory"). Outbound
+# only (Socket Mode); reaches factory-agents over Coolify's network.
+# Secrets from root-owned files in /opt/factory/slack (root:10010 0640):
+# slack-bot-token (xoxb-…), slack-app-token (xapp-…), agents-token.
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    group_add: ["10010"]
+    volumes:
+      - /opt/factory/slack:/run/factory:ro
+      - /srv/factory/state:/srv/factory/state:ro
+      - slack-state:/data
+    networks: [default, coolify]
+    mem_limit: 128m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  slack-state:
+
+networks:
+  coolify:
+    external: true

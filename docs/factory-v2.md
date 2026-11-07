@@ -173,7 +173,7 @@ hold these (list kept in `brain/knowledge/gates.md`) is never auto-merged.
 1. Brain: move playbooks + rules into `brain/`, mount into containers
    (done in this PR).
 2. Safety-gate file list + the auto-merge refusal for it.
-3. Slack adapter alongside Telegram.
+3. Slack adapter alongside Telegram (`slack/`).
 4. PR-first + researcher stage.
 5. Loops per project.
 6. Retro + metrics, then the replay benchmark (5).
