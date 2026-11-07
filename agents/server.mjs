@@ -15,6 +15,8 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
+import { nextStatusAfterAgentTurn } from './lifecycle.mjs';
+import { hasDecisionBlock, checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
@@ -246,27 +248,19 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     return pump();
   }
   if (r.last) done.crashRetries = 0;
-  const decision = /^\s*DECISION NEEDED\b/m.test(r.last);
+  const decision = hasDecisionBlock(r.last);
+  // a plain-text question to the person (no DECISION NEEDED block): one cheap check per turn, fails open
+  const asked = from === 'pause' || !r.last ? { asks: false } : await checkUnasked(r.last, { ask: oneShot, log });
+  if (asked.asks) {
+    say(id, 'agent', decisionMessage(asked), { unasked: true });
+    done.waitingOn = waitingOnLine(asked);
+    log('unasked.caught', { task: id, question: asked.question });
+  } else delete done.waitingOn;
   let next;
-  if (from === 'pause') next = 'paused';
-  else if (done.kind === 'report') next = decision ? 'decision needed' : mode === 'plan' ? 'waiting for you' : 'done';
-  else if (done.kind === 'program') { save(done); return afterCoordinator(done, mode, from, r.last, decision); }
-  else {
-    done.pr = (await findPr(done)) ?? done.pr ?? null;
-    const head = done.pr?.state === 'open' ? done.pr.head : null;
-    if (mode === 'plan') next = 'waiting for you';
-    else if (decision) next = 'decision needed';
-    else if (!head) next = 'waiting for you';
-    // an answer to review findings goes back to the panel even with no new commit:
-    // the finding may have asked for evidence (a run, a PR comment), not code.
-    // Bounded: every CHANGES verdict counts toward MAX_FACTORY_ROUNDS.
-    else if (head === done.reviewedSha && done.verdict !== 'PASS' && [from, origin].includes('review')) next = 'reviewing';
-    else if (head === done.reviewedSha) next = done.verdict === 'PASS' ? 'ready for you' : 'waiting for you'; // nothing new since the review
-    // green: the QA tester first (once per head; a head the agent kept after a
-    // QA FAIL goes on to the panel, which sees the report and judges the dispute)
-    else if (!hasChecks(done) || (done.greenSha && head.startsWith(done.greenSha))) next = hasQa(done) && head !== done.qaTestedSha ? 'testing' : 'reviewing';
-    else next = 'waiting for checks';
-  }
+  if (done.kind === 'program' && from !== 'pause') { save(done); return afterCoordinator(done, mode, from, r.last, decision || asked.asks); }
+  if (done.kind !== 'program' && done.kind !== 'report') done.pr = (await findPr(done)) ?? done.pr ?? null;
+  const head = done.pr?.state === 'open' ? done.pr.head : null;
+  next = nextStatusAfterAgentTurn({ task: done, mode, from, origin, head, decision, unasked: asked.asks, hasChecks: hasChecks(done), hasQa: hasQa(done) });
   done.status = next; save(done);
   if (done.pr?.state === 'open') publishTaskMedia(id).catch((e) => log('media.failed', { task: id, error: e.message }));
   log('run.end', { task: id, kind: done.kind, mode, from, pr: done.pr?.number ?? null, status: next });
@@ -681,18 +675,22 @@ function post(id, from, text) {
 // A small one-shot Claude call (no repository, no tools) reads the person's
 // words against each project's "about" and names one project, or says unsure.
 // Callers ask the person whenever it is unsure or fails.
-async function classify(text) {
-  const names = Object.keys(PROJECTS);
-  const prompt = `Projects:\n${names.map((n) => `- ${n}: ${PROJECTS[n].about ?? PROJECTS[n].repo}`).join('\n')}\n\nMessage from the founder:\n"""\n${text.slice(0, 4000)}\n"""\n\nWhich project is this message about? Answer with ONE line of JSON and nothing else: {"project": "<one of: ${names.join(', ')}>" or null if it could fit more than one or none, "why": "<at most 12 words>"}. Pick a project only when the message clearly points to it.`;
+// one-shot haiku call in a throwaway container (no repo, no tools): the model's text
+async function oneShot(prompt, timeoutMs = 90000) {
   const args = ['run', '--rm', '--network', NETWORK, '--memory', '1g', '--cpus', '1', '--security-opt', 'no-new-privileges:true', '-e', 'CLAUDE_CODE_OAUTH_TOKEN',
     ...(RUNTIME ? ['--runtime', RUNTIME] : []), IMAGE, 'claude', '-p', prompt, '--model', CLASSIFY_MODEL, '--max-turns', '1', '--output-format', 'json', '--disallowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task'];
   const out = await new Promise((resolve) => {
     const child = spawn('docker', args, { env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') }, stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = ''; child.stdout.on('data', (c) => { buf += c; });
-    const timer = setTimeout(() => child.kill('SIGKILL'), 90000);
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
     child.on('close', () => { clearTimeout(timer); resolve(buf); });
   });
-  let result = ''; try { result = JSON.parse(out).result ?? ''; } catch { return { project: null, why: 'classifier gave no answer' }; }
+  try { return JSON.parse(out).result ?? ''; } catch { throw new Error('the one-shot call gave no answer'); }
+}
+async function classify(text) {
+  const names = Object.keys(PROJECTS);
+  const prompt = `Projects:\n${names.map((n) => `- ${n}: ${PROJECTS[n].about ?? PROJECTS[n].repo}`).join('\n')}\n\nMessage from the founder:\n"""\n${text.slice(0, 4000)}\n"""\n\nWhich project is this message about? Answer with ONE line of JSON and nothing else: {"project": "<one of: ${names.join(', ')}>" or null if it could fit more than one or none, "why": "<at most 12 words>"}. Pick a project only when the message clearly points to it.`;
+  let result = ''; try { result = await oneShot(prompt); } catch { return { project: null, why: 'classifier gave no answer' }; }
   const j = /\{[^{}]*\}/.exec(result); let ans = {}; try { ans = JSON.parse(j?.[0] ?? '{}'); } catch {}
   const project = names.includes(ans.project) ? ans.project : null;
   log('classify', { project, why: ans.why });
