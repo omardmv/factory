@@ -26,6 +26,7 @@ import { REPORT_MARK, buildReport, mappingFrom, reportSummary, openFindings } fr
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
 import { evidenceSection } from './evidence.mjs';
+import { createMcp } from './mcp.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync } from 'node:fs';
@@ -881,11 +882,13 @@ async function digest(hours) {
 // ---------- http ----------
 const authOk = (req) => { const h = req.headers.authorization ?? ''; const want = `Bearer ${secret('api-token')}`; return h.length === want.length && timingSafeEqual(Buffer.from(h), Buffer.from(want)); };
 async function body(req) { let b = ''; for await (const c of req) { b += c; if (b.length > MAX_BODY_BYTES) throw new Error('body too large'); } return b ? JSON.parse(b) : {}; }
+const mcp = createMcp({ token: () => secret('api-token'), listTasks: allTasks, getTask: (id) => existsSync(`${dir(id)}/task.json`) ? load(id) : null, isRunning: (id) => running.has(id), messages, projects: () => Object.entries(PROJECTS).map(([name, p]) => ({ name, ...p })), startTask: (p, text, auto) => createTask(p, text, auto), startEpic: (p, goal) => createProgram(p, goal), reply: (id, text) => post(id, 'you', text), audit: (a) => log('mcp.call', a) });
 const handler = async (req, res) => {
   const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
   try {
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/health') return send(200, { ok: true, running: running.size, queued: queue.length });
+    if (url.pathname === '/mcp') return mcp(req, res);
     if (!authOk(req)) return send(401, { error: 'unauthorized' });
     if (url.pathname === '/digest' && req.method === 'GET') return send(200, await digest(Number(url.searchParams.get('hours') ?? 24)));
     // names and repos only: never the GitHub App ids or key files
