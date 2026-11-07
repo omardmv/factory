@@ -12,6 +12,13 @@
 export const MAX_PLAN_TASKS = 40;
 const KEY = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
+// What the coordinator is told when it writes or revises a plan.
+export const PLAN_RULES = `The plan lists EVERY task of the epic. Each task is one PR an agent can finish and prove on its own (its own tests, its own review): say what to change, where, and how done is checked, in a few sentences, self-contained (the agent sees only the epic's goal and its own task). Give each task a short key (lowercase letters, digits, dashes) and "depends_on": the keys of the tasks that must be MERGED before it can start, and only real dependencies (code it builds on, a flag it needs, a file it would conflict on): everything else runs in parallel, so do not chain tasks just to order them. Tasks that edit the same files (agents/server.mjs, agents/plan.mjs, the Slack bot, ...) must depend on each other (directly or through a chain) or be merged into one task: two parallel tasks on the same file conflict. Give each task a "files" list of the files it edits; a plan where two tasks share a file and neither depends on the other is refused. At most ${MAX_PLAN_TASKS} tasks; split the epic if it needs more.
+End your reply with the whole plan as a fenced block exactly like:
+\`\`\`plan
+{"tasks": [{"key": "flag", "title": "one line", "task": "what to do, where, how done is checked", "depends_on": [], "files": ["agents/plan.mjs"]}, {"key": "next-thing", "title": "...", "task": "...", "depends_on": ["flag"], "files": ["agents/plan.mjs", "agents/server.mjs"]}]}
+\`\`\``;
+
 export function parsePlan(text) {
   // fences only count on a line of their own: a task's text may mention "```plan"
   // or "```" (JSON strings cannot hold a raw line break, so they never look like one)
@@ -33,7 +40,8 @@ export function parsePlan(text) {
     const task = String(t?.task ?? '').trim();
     if (!task) return { error: `task "${key}" has no task text` };
     const deps = Array.isArray(t?.depends_on) ? t.depends_on.map(String) : [];
-    out.push({ key, title: String(t?.title ?? task.split('\n')[0]).trim().slice(0, 90), task, deps: [...new Set(deps)] });
+    const files = Array.isArray(t?.files) ? [...new Set(t.files.map((f) => String(f).trim().replace(/^\.\//, '')).filter(Boolean))] : [];
+    out.push({ key, title: String(t?.title ?? task.split('\n')[0]).trim().slice(0, 90), task, deps: [...new Set(deps)], ...(files.length ? { files } : {}) });
   }
   for (const t of out) for (const d of t.deps) {
     if (d === t.key) return { error: `task "${t.key}" depends on itself` };
@@ -41,6 +49,8 @@ export function parsePlan(text) {
   }
   const w = waves(out);
   if (w.error) return w;
+  const clash = fileOverlap(out);
+  if (clash) return { error: clash };
   return { tasks: out.map((t) => ({ ...t, wave: w.wave[t.key] })) };
 }
 
@@ -58,6 +68,18 @@ export function waves(tasks) {
   };
   try { for (const t of tasks) visit(t.key, []); } catch (e) { return { error: e.message }; }
   return { wave };
+}
+
+// Two tasks that declare the same file, with no dependency between them (direct or
+// through a chain) in either direction, would run in parallel and conflict: a reason, or null.
+export function fileOverlap(tasks) {
+  const by = new Map(tasks.map((t) => [t.key, t]));
+  const reaches = (from, to, seen = new Set()) => from.deps.some((d) => d === to || (!seen.has(d) && seen.add(d) && by.has(d) && reaches(by.get(d), to, seen)));
+  for (const [i, a] of tasks.entries()) for (const b of tasks.slice(i + 1)) {
+    const shared = (a.files ?? []).find((f) => (b.files ?? []).includes(f));
+    if (shared && !reaches(a, b.key) && !reaches(b, a.key)) return `tasks "${a.key}" and "${b.key}" both edit ${shared} and neither depends on the other: make one depend on the other, or merge them into one task`;
+  }
+  return null;
 }
 
 // A new plan from the coordinator replaces what has not started; what has

@@ -162,3 +162,17 @@ assert.deepEqual(seq.map((l) => l.split('(').pop()), ['talk)', 'talk)', 'talk)',
 ok('talk handler: "yes, ..." and "ok but" reach the coordinator, bare go approves nothing, "Plan B" is not a command, "plan it" sets brief and sends the discussion');
 
 console.log(`all ${n} passed`);
+
+// declared files: overlap needs a dependency, in either direction, direct or through a chain
+const F = (key, files, deps = []) => ({ ...T(key, deps), ...(files ? { files } : {}) });
+const ro = parsePlan(block([F('a', ['agents/server.mjs']), F('b', ['agents/server.mjs', 'x.js'])]));
+assert.match(ro.error, /"a" and "b" both edit agents\/server\.mjs/);
+ok('two tasks on the same file with no dependency are refused, naming both tasks and the file');
+assert.ok(!parsePlan(block([F('a', ['s.mjs']), F('b', ['s.mjs'], ['a'])])).error);
+assert.ok(!parsePlan(block([F('a', ['s.mjs'], ['b']), F('b', ['s.mjs'])])).error);
+ok('overlap with a direct dependency (either direction) is accepted');
+assert.ok(!parsePlan(block([F('a', ['s.mjs']), F('m', null, ['a']), F('b', ['./s.mjs'], ['m'])])).error);
+ok('overlap with a transitive dependency is accepted');
+assert.ok(!parsePlan(block([F('a', null), F('b', null), F('c', ['x'])])).error);
+assert.match(parsePlan(block([F('a', ['s.mjs']), F('b', ['s.mjs'], ['c']), F('c', null)])).error, /"a" and "b"/);
+ok('tasks without files are unaffected; a dependency on a third task does not excuse an overlap');

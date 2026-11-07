@@ -16,7 +16,7 @@
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
-import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
+import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
@@ -453,11 +453,6 @@ async function publishTaskMedia(id) {
 // soon as everything it depends on has merged, so unrelated work runs in
 // parallel and waves are only the result. The coordinator never writes code;
 // you can reply at any time to revise what has not started.
-const PLAN_RULES = `The plan lists EVERY task of the epic. Each task is one PR an agent can finish and prove on its own (its own tests, its own review): say what to change, where, and how done is checked, in a few sentences, self-contained (the agent sees only the epic's goal and its own task). Give each task a short key (lowercase letters, digits, dashes) and "depends_on": the keys of the tasks that must be MERGED before it can start, and only real dependencies (code it builds on, a flag it needs, a file it would conflict on): everything else runs in parallel, so do not chain tasks just to order them. At most ${MAX_PLAN_TASKS} tasks; split the epic if it needs more.
-End your reply with the whole plan as a fenced block exactly like:
-\`\`\`plan
-{"tasks": [{"key": "flag", "title": "one line", "task": "what to do, where, how done is checked", "depends_on": []}, {"key": "next-thing", "title": "...", "task": "...", "depends_on": ["flag"]}]}
-\`\`\``;
 // the planning prompt: sent when the person says "plan" at the end of the discussion
 const planningPrompt = (note) => `${note}
 Now write the plan. Frame it with the "large" playbook: the definition of done for the whole epic, scope, risks, shaped by the discussion so far. Reply to the person in plain words: the framing, then the waves the dependencies make (wave 1: what starts at once; wave 2: what each waits for; ...) as short lists, then the risks. ${PLAN_RULES}
