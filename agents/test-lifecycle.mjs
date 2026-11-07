@@ -206,4 +206,27 @@ await test('checks report: ignored when not running a change', () => {
     assert.equal(afterFactoryReport({ task: task({ phase: 'run', ...o }), text: '❌', maxRounds: 6 }).action, 'ignore');
 });
 
+// ---- unasked questions (agents/unasked.mjs): a plain-text ask counts as DECISION NEEDED ----
+import { checkUnasked } from './unasked.mjs';
+import { SAYRA, REPORT } from './test-unasked.mjs';
+const reviewed = (o = {}) => task({ reviewedSha: 'bbb2222', verdict: 'CHANGES', ...o });
+await test('plain-text question: decision needed, never the panel', async () => {
+  assert.equal(await status(task(), { unasked: true }), 'decision needed');
+  assert.equal(await status(reviewed(), { unasked: true, from: 'review' }), 'decision needed');
+  assert.equal(await status(task(), { unasked: true }, deps({ findPr: async () => null })), 'decision needed');
+  assert.equal(await status(task({ kind: 'report' }), { unasked: true }), 'decision needed');
+  assert.equal((await run(task({ kind: 'program' }), { unasked: true })).decision, true);
+  assert.equal(await status(task(), { unasked: true, from: 'pause' }), 'paused');
+});
+await test('answer to a caught question in a review round (origin kept), no commit: back to the panel', async () => {
+  assert.equal(await status(reviewed(), { from: 'person', origin: 'review' }), 'reviewing');
+  const p = pickupJob({ status: 'working', sessionId: 's1', job: { id: 'x', kind: 'agent', from: 'person', origin: 'review' } });
+  assert.equal(p.job.origin, 'review'); // a restart keeps it
+});
+await test('stubbed turn: a reply ending in a plain-text question lands on decision needed, no panel run', async () => {
+  const turn = async (reply, model) => { const a = await checkUnasked(reply, { ask: async () => model }); return status(task(), { reply, unasked: a.asks }, deps({ hasChecks: () => false })); };
+  assert.equal(await turn(SAYRA, '{"asks":true,"question":"purple or teal?","options":["purple","teal"]}'), 'decision needed');
+  assert.equal(await turn(REPORT, '{"asks":false}'), 'reviewing');
+});
+
 console.log(`${n} groups passed`);

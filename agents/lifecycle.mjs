@@ -17,7 +17,7 @@ const reviewOrigin = (from, origin) => [from, origin].includes('review');
 //  { type: 'coordinator', decision, resetCrash } an epic's coordinator replied
 //  { type: 'status', status, pr, resetCrash }  the next status (pr: what was found, change tasks only)
 // deps: findPr(task) -> pr | null, hasChecks(task), hasQa(task)
-export async function afterAgentRun({ task, from, origin, mode, reply, maxCrashRetries = 2 }, deps) {
+export async function afterAgentRun({ task, from, origin, mode, reply, unasked = false, maxCrashRetries = 2 }, deps) {
   if (task.status === 'stopped') return { type: 'stopped' };
   if (task.status === 'pausing' && from !== 'pause') return { type: 'checkpoint' };
   const crashes = task.crashRetries ?? 0;
@@ -25,9 +25,10 @@ export async function afterAgentRun({ task, from, origin, mode, reply, maxCrashR
     return { type: 'retry', retry: crashes + 1, from: reviewOrigin(from, origin) ? 'review' : from };
   }
   const resetCrash = !!reply;
-  const decision = isDecision(reply);
+  // unasked: the reply asked the person something in plain text (agents/unasked.mjs); same as a DECISION NEEDED block
+  const decision = isDecision(reply) || unasked;
   if (from === 'pause') return { type: 'status', status: 'paused', pr: task.pr ?? null, resetCrash };
-  if (task.kind === 'report') return { type: 'status', status: decision ? 'decision needed' : mode === 'plan' ? 'waiting for you' : 'done', pr: task.pr ?? null, resetCrash };
+  if (task.kind === 'report') return { type: 'status', status: decision ? 'decision needed' : mode === 'plan' ? 'waiting for you' : 'done', pr: task.pr ?? null, resetCrash, decision };
   if (task.kind === 'program') return { type: 'coordinator', decision, resetCrash };
   const pr = (await deps.findPr(task)) ?? task.pr ?? null;
   const head = pr?.state === 'open' ? pr.head : null;
@@ -45,7 +46,7 @@ export async function afterAgentRun({ task, from, origin, mode, reply, maxCrashR
   // QA FAIL goes on to the panel, which sees the report and judges the dispute)
   else if (!deps.hasChecks(t) || (task.greenSha && head.startsWith(task.greenSha))) status = deps.hasQa(t) && head !== task.qaTestedSha ? 'testing' : 'reviewing';
   else status = 'waiting for checks';
-  return { type: 'status', status, pr, resetCrash };
+  return { type: 'status', status, pr, resetCrash, decision };
 }
 
 // the prompt of the carry-on turn after a death without a reply
@@ -69,7 +70,7 @@ export function pickupJob(task) {
   if (['stopped', 'paused'].includes(task.status)) return { drop: true };
   if (j.kind === 'review' || j.kind === 'qa') return { job: j };
   if (task.sessionId && j.from !== 'pause') {
-    return { job: { ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup', origin: j.from === 'pickup' ? j.origin : j.from } };
+    return { job: { ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup', origin: j.from === 'pickup' ? j.origin : (j.origin ?? j.from) } };
   }
   return { job: j };
 }

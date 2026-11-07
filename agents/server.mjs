@@ -15,6 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
+import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
 import { verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
@@ -137,7 +138,7 @@ const containers = new Map(); // task id -> container name
 const QUEUE_FILE = `${HOME}/queue.json`;
 const queue = readJson(QUEUE_FILE, []); // { id, kind: 'agent' | 'qa' | 'review', prompt?, mode?, from? }
 const saveQueue = () => writeFileSync(QUEUE_FILE, JSON.stringify(queue));
-function enqueue(id, prompt, mode, from) { queue.push({ id, kind: 'agent', prompt, mode, from }); saveQueue(); pump(); }
+function enqueue(id, prompt, mode, from, origin) { queue.push({ id, kind: 'agent', prompt, mode, from, ...(origin ? { origin } : {}) }); saveQueue(); pump(); }
 function enqueueReview(id) { if (!queue.some((j) => j.id === id && j.kind === 'review')) queue.push({ id, kind: 'review' }); saveQueue(); pump(); }
 function enqueueQa(id) { if (!queue.some((j) => j.id === id && j.kind === 'qa')) queue.push({ id, kind: 'qa' }); saveQueue(); pump(); }
 const JOB_NAME = { agent: 'agent', qa: 'QA tester', review: 'reviewer' };
@@ -223,14 +224,25 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
   return { last, stderr, sessionId };
 }
 
+const UNASKED_TIMEOUT_MS = 60000;
 async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
   const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
   if (r.last) say(id, t.kind === 'program' ? 'coordinator' : 'agent', r.last);
   else say(id, 'factory', `[factory] the agent stopped without a reply. ${r.stderr.trim().slice(-400)}`);
+  // a plain-text question to the person (no DECISION NEEDED block): one cheap check per turn, fails open.
+  // Run before the task is loaded and while it still holds its running slot, so a Stop/Pause
+  // pressed meanwhile is not overwritten and no second turn of this task starts. Not in plan
+  // mode (a plan awaiting approval already waits for the person).
+  let asked = { asks: false };
+  if (from !== 'pause' && mode !== 'plan' && r.last && !['stopped', 'pausing'].includes(load(id).status)) {
+    const hold = { kill() {} }; running.set(id, hold);
+    try { asked = await checkUnasked(r.last, { ask: (p) => oneShot(p, UNASKED_TIMEOUT_MS), timeoutMs: UNASKED_TIMEOUT_MS, log }); }
+    finally { if (running.get(id) === hold) running.delete(id); }
+  }
   const done = load(id);
   if (r.sessionId && !done.sessionId) done.sessionId = r.sessionId;
-  const out = await afterAgentRun({ task: done, from, origin, mode, reply: r.last, maxCrashRetries: MAX_CRASH_RETRIES }, { findPr, hasChecks, hasQa });
+  const out = await afterAgentRun({ task: done, from, origin, mode, reply: r.last, unasked: asked.asks, maxCrashRetries: MAX_CRASH_RETRIES }, { findPr, hasChecks, hasQa });
   if (out.type === 'stopped') { save(done); return pump(); }
   // pause: one more turn to leave a checkpoint, then rest
   if (out.type === 'checkpoint') {
@@ -246,6 +258,13 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     return pump();
   }
   if (out.resetCrash) done.crashRetries = 0;
+  // the person's answer to a decision carries the turn's origin, so a review-fix round still returns to the panel
+  if (out.decision || asked.asks) done.askedFrom = [from, origin].includes('review') ? 'review' : (origin ?? from);
+  if (asked.asks) {
+    say(id, 'agent', decisionMessage(asked), { unasked: true });
+    done.waitingOn = waitingOnLine(asked);
+    log('unasked.caught', { task: id, question: asked.question });
+  } else delete done.waitingOn;
   if (out.type === 'coordinator') { save(done); return afterCoordinator(done, mode, from, r.last, out.decision); }
   if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
   const next = out.status;
@@ -648,7 +667,7 @@ function post(id, from, text) {
     return t;
   }
   if (t.phase === 'brief') { t.phase = 'run'; save(t); enqueue(id, runPrompt(t, messages(id)[0].text, `The person answered your brief: ${text}`), 'bypassPermissions', 'person'); }
-  else enqueue(id, text, 'bypassPermissions', 'person');
+  else { const o = t.askedFrom; if (o) { delete t.askedFrom; save(t); } enqueue(id, text, 'bypassPermissions', 'person', o); }
   return t;
 }
 
@@ -656,18 +675,22 @@ function post(id, from, text) {
 // A small one-shot Claude call (no repository, no tools) reads the person's
 // words against each project's "about" and names one project, or says unsure.
 // Callers ask the person whenever it is unsure or fails.
-async function classify(text) {
-  const names = Object.keys(PROJECTS);
-  const prompt = `Projects:\n${names.map((n) => `- ${n}: ${PROJECTS[n].about ?? PROJECTS[n].repo}`).join('\n')}\n\nMessage from the founder:\n"""\n${text.slice(0, 4000)}\n"""\n\nWhich project is this message about? Answer with ONE line of JSON and nothing else: {"project": "<one of: ${names.join(', ')}>" or null if it could fit more than one or none, "why": "<at most 12 words>"}. Pick a project only when the message clearly points to it.`;
+// one-shot haiku call in a throwaway container (no repo, no tools): the model's text
+async function oneShot(prompt, timeoutMs = 90000) {
   const args = ['run', '--rm', '--network', NETWORK, '--memory', '1g', '--cpus', '1', '--security-opt', 'no-new-privileges:true', '-e', 'CLAUDE_CODE_OAUTH_TOKEN',
     ...(RUNTIME ? ['--runtime', RUNTIME] : []), IMAGE, 'claude', '-p', prompt, '--model', CLASSIFY_MODEL, '--max-turns', '1', '--output-format', 'json', '--disallowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task'];
   const out = await new Promise((resolve) => {
     const child = spawn('docker', args, { env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') }, stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = ''; child.stdout.on('data', (c) => { buf += c; });
-    const timer = setTimeout(() => child.kill('SIGKILL'), 90000);
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
     child.on('close', () => { clearTimeout(timer); resolve(buf); });
   });
-  let result = ''; try { result = JSON.parse(out).result ?? ''; } catch { return { project: null, why: 'classifier gave no answer' }; }
+  try { return JSON.parse(out).result ?? ''; } catch { throw new Error('the one-shot call gave no answer'); }
+}
+async function classify(text) {
+  const names = Object.keys(PROJECTS);
+  const prompt = `Projects:\n${names.map((n) => `- ${n}: ${PROJECTS[n].about ?? PROJECTS[n].repo}`).join('\n')}\n\nMessage from the founder:\n"""\n${text.slice(0, 4000)}\n"""\n\nWhich project is this message about? Answer with ONE line of JSON and nothing else: {"project": "<one of: ${names.join(', ')}>" or null if it could fit more than one or none, "why": "<at most 12 words>"}. Pick a project only when the message clearly points to it.`;
+  let result = ''; try { result = await oneShot(prompt); } catch { return { project: null, why: 'classifier gave no answer' }; }
   const j = /\{[^{}]*\}/.exec(result); let ans = {}; try { ans = JSON.parse(j?.[0] ?? '{}'); } catch {}
   const project = names.includes(ans.project) ? ans.project : null;
   log('classify', { project, why: ans.why });
