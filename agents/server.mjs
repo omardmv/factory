@@ -20,7 +20,7 @@ import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
-import { publishMedia } from './media.mjs';
+import { publishMedia, mediaFiles } from './media.mjs';
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -799,6 +799,18 @@ const handler = async (req, res) => {
       if (items.length > 20) return send(400, { error: 'at most 20 items in a batch' });
       const batch = `b${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${randomBytes(2).toString('hex')}`;
       return send(201, { batch, tasks: items.map((text) => createTask(b.project, text, true, { batch })) });
+    }
+    // a task's screenshots and videos (workspace/screens, workspace/videos), for the
+    // Slack bot to post: the list, or one file. Only files mediaFiles lists are
+    // served (no symlinks, no paths outside the two folders).
+    const mm = url.pathname.match(/^\/tasks\/([\w-]+)\/media(?:\/(screens|videos)\/(.+))?$/);
+    if (mm && req.method === 'GET') {
+      const [, mid, msub, mrel] = mm, files = mediaFiles(`${dir(mid)}/workspace`);
+      if (!msub) return send(200, files.map((f) => ({ sub: f.sub, rel: f.rel, mtime: f.mtime, video: f.video, bytes: statSync(f.path).size })));
+      const f = files.find((x) => x.sub === msub && x.rel === decodeURIComponent(mrel));
+      if (!f) return send(404, { error: 'no such file' });
+      const buf = readFileSync(f.path);
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': buf.length }); return res.end(buf);
     }
     const m = url.pathname.match(/^\/tasks(?:\/([\w-]+))?(?:\/(messages|stop|pause))?$/);
     if (!m) return send(404, { error: 'not found' });
