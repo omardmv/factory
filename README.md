@@ -17,7 +17,9 @@ Projects are configured on the box in `/opt/factory/agents/projects.json`
 not code; the bots and the dashboard read it through `GET /projects`).
 `agents/projects.example.json` here shows the shape: one entry per
 project, keyed by name, with `about`, `repo`, `base`, `autoMerge`,
-`mergeMethod` and `githubApp` (`id`, `key`, `bot`). The factory itself is
+`mergeMethod`, `githubApp` (`id`, `key`, `bot`) and optional `requiredChecks`
+(checks that must pass on a PR's reviewed head before the factory merges it;
+the factory enforces them itself, so they work on any GitHub plan). The factory itself is
 one project too (`factory`, repo `omardmv/factory`, base `main`): this
 repo can name itself.
 
