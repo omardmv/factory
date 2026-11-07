@@ -15,9 +15,8 @@ const COOLIFY = process.env.COOLIFY_API ?? 'http://coolify:8080/api/v1';
 const COOKIE_DOMAIN = process.env.COOKIE_DOMAIN ?? '.contentcoach.org';
 const SELF = process.env.SELF_URL ?? 'https://factory.contentcoach.org';
 const SESSION_DAYS = 30;
-const PROJECTS = [
-  { name: 'contentcoach', prefix: 'cc', app: 'zmyto8r1grwnpihq9xt1fdg3', domain: 'contentcoach.org', repo: 'contentcoach/contentcoach' },
-];
+// projects with Coolify PR previews: { name, prefix, app (Coolify uuid), domain, repo } (none right now)
+const PROJECTS = [];
 const LINKS = {
   coolify: 'https://coolify.contentcoach.org',
   factoryRepo: 'https://github.com/omardmv/factory',
@@ -116,7 +115,7 @@ async function dashboard() {
     return `<div class="card"><div class="row"><div class="grow"><b>PR #${v.pr}</b> <span class="muted">${esc(v.project.name)} · ${esc(v.commit)} · ${esc(ago(v.at))}</span><div class="muted">${esc(v.message)}</div></div>${st} ${e2e}</div>
       <div class="row links" style="margin-top:6px">${v.live ? `<a href="${v.url}/app/">open</a><a href="${v.url}/_factory/login">sign in</a><a href="${v.url}/_factory/">videos</a>` : ''}<a href="https://github.com/${v.project.repo}/pull/${v.pr}">pull request</a><a href="${LINKS.coolify}">coolify</a>
       ${v.live ? `<form method="post" action="/redeploy" style="display:inline"><input type="hidden" name="pr" value="${v.pr}"><input type="hidden" name="app" value="${v.project.app}"><button>Redeploy</button></form>` : ''}</div></div>`;
-  }).join('') || '<div class="card muted">No previews yet. Every pull request into dev gets one.</div>';
+  }).join('') || '<div class="card muted">No project has PR previews right now.</div>';
 
   const tile = (label, value, ok = true) => `<div class="tile"><b>${esc(label)}</b>${ok ? esc(value) : `<span class="pill bad">${esc(value)}</span>`}</div>`;
   const okWord = (s) => ['active', 'running', 'healthy'].includes(s);
@@ -138,7 +137,7 @@ async function dashboard() {
   <h2>Agents</h2><div class="card row"><div class="grow">${facts.agent_containers_running ?? 0} agent container${facts.agent_containers_running === 1 ? '' : 's'} running on this server</div>
     <a href="https://claude.ai/code">Claude cloud sessions</a></div>
   <h2>Factory health</h2><div class="grid">${tiles}</div>
-  <h2>Places</h2><div class="card links"><a href="${LINKS.coolify}">Coolify</a><a href="${LINKS.factoryRepo}">factory repo</a><a href="https://github.com/contentcoach/contentcoach/pulls">ContentCoach PRs</a></div>
+  <h2>Places</h2><div class="card links"><a href="${LINKS.coolify}">Coolify</a><a href="${LINKS.factoryRepo}">factory repo</a><a href="https://github.com/AzizbekLive/conversation-bot/pulls">Sayra PRs</a></div>
   <p class="muted" style="margin-top:28px">This page redeploys itself: push to the factory repo and the server picks it up within 5 minutes.</p>`);
 }
 
@@ -176,7 +175,7 @@ createServer(async (req, res) => {
     if (url.pathname === '/') return send(200, appPage('Factory', await chatView({ taskId: url.searchParams.get('task'), healthy: healthy(), list: url.searchParams.get('list') === '1' })));
     if (url.pathname === '/tasks' && req.method === 'POST') {
       const f = await readForm(req);
-      if (!fromUs(req) || !['contentcoach', 'factory'].includes(f.project) || !String(f.text ?? '').trim()) return send(400, 'bad request');
+      if (!fromUs(req) || !['factory', 'sayra'].includes(f.project) || !String(f.text ?? '').trim()) return send(400, 'bad request');
       const t = f.kind === 'program' ? await agents('/programs', { method: 'POST', body: JSON.stringify({ project: f.project, goal: f.text }) })
         : await agents('/tasks', { method: 'POST', body: JSON.stringify({ project: f.project, text: f.text, auto: f.auto === 'on', kind: f.kind === 'report' ? 'report' : undefined }) });
       return send(303, '', { location: `/?task=${t.id}` });

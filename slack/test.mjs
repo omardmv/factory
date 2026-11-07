@@ -35,7 +35,7 @@ const agentsSrv = await listen(async (req, res) => {
 });
 
 // ---- the bot, pointed at the fakes; one task exists before it starts
-const old = mk('contentcoach', 'old task from before Slack'); old.messages.push({ from: 'agent', text: 'old reply' });
+const old = mk('sayra', 'old task from before Slack'); old.messages.push({ from: 'agent', text: 'old reply' });
 const dir = mkdtempSync(`${tmpdir()}/slackbot-`);
 for (const [f, v] of Object.entries({ 'slack-bot-token': 'xoxb-test', 'slack-app-token': 'xapp-test', 'agents-token': 'agents-secret' })) writeFileSync(`${dir}/${f}`, v);
 Object.assign(process.env, { SECRETS_DIR: dir, BOT_STATE: `${dir}/state.json`, SLACK_API: `http://127.0.0.1:${slackSrv.address().port}`, AGENTS_API: `http://127.0.0.1:${agentsSrv.address().port}`, FACTS_FILE: `${dir}/none.json` });
@@ -60,16 +60,16 @@ await step('pairing by DM sets the owner', async () => {
   assert.equal(bot.state.owner, 'U_ME'); assert.equal(bot.state.dm, 'D1');
   assert.match(calls.at(-1).p.text, /Paired/); assert.equal(calls.at(-1).auth, 'Bearer xoxb-test');
 });
-let ccTask;
+let sayraTask;
 await step('a channel the owner creates: join, its first message is the task (project from the name)', async () => {
-  channels.C_NEW = { id: 'C_NEW', name: 'cc-login-redirect' };
-  await bot.onChannelCreated({ type: 'channel_created', channel: { id: 'C_NEW', name: 'cc-login-redirect', creator: 'U_ME' } });
+  channels.C_NEW = { id: 'C_NEW', name: 'sayra-login-redirect' };
+  await bot.onChannelCreated({ type: 'channel_created', channel: { id: 'C_NEW', name: 'sayra-login-redirect', creator: 'U_ME' } });
   assert.ok(calls.some((c) => c.method === 'conversations.join' && c.p.channel === 'C_NEW'));
   const i = calls.length;
   await bot.onMessage({ type: 'message', channel: 'C_NEW', channel_type: 'channel', user: 'U_ME', text: 'fix the login redirect on phones', ts: '2.0' });
-  ccTask = Object.values(tasks).find((t) => t.title === 'fix the login redirect on phones');
-  assert.equal(ccTask.project, 'contentcoach'); assert.equal(bot.state.channelTask.C_NEW, ccTask.id);
-  assert.match(posted(i, 'C_NEW')[0].p.text, /started \(contentcoach\)/);
+  sayraTask = Object.values(tasks).find((t) => t.title === 'fix the login redirect on phones');
+  assert.equal(sayraTask.project, 'sayra'); assert.equal(bot.state.channelTask.C_NEW, sayraTask.id);
+  assert.match(posted(i, 'C_NEW')[0].p.text, /started \(sayra\)/);
 });
 await step('a channel someone else created is not joined; a non-task channel never starts a task', async () => {
   const before = Object.keys(tasks).length, i = calls.length;
@@ -78,7 +78,7 @@ await step('a channel someone else created is not joined; a non-task channel nev
   assert.equal(Object.keys(tasks).length, before); assert.equal(since(i).length, 0);
 });
 await step('a brief lands in the task channel with a Go button', async () => {
-  Object.assign(ccTask, { status: 'waiting for you' }); ccTask.messages.push({ from: 'agent', text: '**Playbook: bug.**\n## Plan\n- reproduce\n- fix' });
+  Object.assign(sayraTask, { status: 'waiting for you' }); sayraTask.messages.push({ from: 'agent', text: '**Playbook: bug.**\n## Plan\n- reproduce\n- fix' });
   const i = calls.length; await bot.pushUpdates();
   const m = posted(i, 'C_NEW'); assert.equal(m.length, 1);
   assert.match(m[0].p.text, /\*Brief: Go, or reply/); assert.match(m[0].p.text, /\*Playbook: bug\.\*/); assert.match(m[0].p.text, /• reproduce/);
@@ -86,19 +86,19 @@ await step('a brief lands in the task channel with a Go button', async () => {
   const j = calls.length; await bot.pushUpdates(); assert.equal(posted(j).length, 0, 'nothing twice');
 });
 await step('Go sends "go" to the task and removes the button', async () => {
-  await bot.onAction({ type: 'block_actions', user: { id: 'U_ME' }, actions: [{ action_id: 'go', value: ccTask.id }], channel: { id: 'C_NEW' }, message: { ts: '9.0', text: 't', blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 't' } }, { type: 'actions' }] } });
-  assert.equal(ccTask.messages.at(-1).text, 'go'); assert.equal(ccTask.phase, 'run');
+  await bot.onAction({ type: 'block_actions', user: { id: 'U_ME' }, actions: [{ action_id: 'go', value: sayraTask.id }], channel: { id: 'C_NEW' }, message: { ts: '9.0', text: 't', blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 't' } }, { type: 'actions' }] } });
+  assert.equal(sayraTask.messages.at(-1).text, 'go'); assert.equal(sayraTask.phase, 'run');
   const u = calls.at(-1); assert.equal(u.method, 'chat.update'); assert.ok(!u.p.blocks.some((b) => b.type === 'actions'));
-  const before = ccTask.messages.length;
-  await bot.onAction({ type: 'block_actions', user: { id: 'U_X' }, actions: [{ action_id: 'go', value: ccTask.id }] });
-  assert.equal(ccTask.messages.length, before, 'only the owner');
+  const before = sayraTask.messages.length;
+  await bot.onAction({ type: 'block_actions', user: { id: 'U_X' }, actions: [{ action_id: 'go', value: sayraTask.id }] });
+  assert.equal(sayraTask.messages.length, before, 'only the owner');
 });
 await step('anything the owner writes in the channel goes to the task', async () => {
   await bot.onMessage({ type: 'message', channel: 'C_NEW', channel_type: 'channel', user: 'U_ME', text: 'also check Safari', ts: '3.0' });
-  assert.equal(ccTask.messages.at(-1).text, 'also check Safari'); assert.equal(calls.at(-1).method, 'reactions.add');
+  assert.equal(sayraTask.messages.at(-1).text, 'also check Safari'); assert.equal(calls.at(-1).method, 'reactions.add');
   await bot.onMessage({ type: 'message', channel: 'C_NEW', channel_type: 'channel', user: 'U_ME', text: 'edited', subtype: 'message_changed', ts: '3.1' });
   await bot.onMessage({ type: 'message', channel: 'C_NEW', channel_type: 'channel', bot_id: 'B1', text: 'bot echo', ts: '3.2' });
-  assert.equal(ccTask.messages.at(-1).text, 'also check Safari');
+  assert.equal(sayraTask.messages.at(-1).text, 'also check Safari');
 });
 let fTask;
 await step('a DM "factory: …" starts a task in a new channel and invites the owner', async () => {
@@ -119,9 +119,9 @@ await step('a DM with no prefix goes to the factory; sayra: goes to Sayra', asyn
   assert.equal(t.project, 'sayra'); assert.match(calls.filter((c) => c.method === 'conversations.create').at(-1).p.name, /^sayra-profile-editing-/);
 });
 await step('a task from elsewhere (issue intake) gets its own channel on its first message', async () => {
-  const t = mk('contentcoach', 'Issue #12: export fails', { phase: 'run', status: 'working' }); t.messages.push({ from: 'agent', text: 'Playbook: bug. Reproducing.' });
+  const t = mk('sayra', 'Issue #12: export fails', { phase: 'run', status: 'working' }); t.messages.push({ from: 'agent', text: 'Playbook: bug. Reproducing.' });
   const i = calls.length; await bot.pushUpdates();
-  assert.ok(since(i).some((c) => c.method === 'conversations.create' && c.p.name.startsWith('cc-issue-12-export-fails')));
+  assert.ok(since(i).some((c) => c.method === 'conversations.create' && c.p.name.startsWith('sayra-issue-12-export-fails')));
   assert.equal(posted(i, bot.state.taskChannel[t.id]).length, 1);
 });
 await step('decision needed, QA and review render with their labels', async () => {
@@ -132,14 +132,14 @@ await step('decision needed, QA and review render with their labels', async () =
   assert.equal(bot.mrkdwn('a <b> & [x](https://y)'), 'a &lt;b&gt; &amp; <https://y|x>');
 });
 await step('/factory commands: tasks anywhere, stop only in a task channel, nobody else', async () => {
-  assert.match((await bot.onCommand({ user_id: 'U_ME', channel_id: 'D1', text: 'tasks' })).text, new RegExp(ccTask.id));
+  assert.match((await bot.onCommand({ user_id: 'U_ME', channel_id: 'D1', text: 'tasks' })).text, new RegExp(sayraTask.id));
   assert.match((await bot.onCommand({ user_id: 'U_ME', channel_id: 'D1', text: 'stop' })).text, /task's channel/);
   assert.match((await bot.onCommand({ user_id: 'U_X', channel_id: bot.state.taskChannel[fTask.id], text: 'stop' })).text, /Not paired/);
   assert.match((await bot.onCommand({ user_id: 'U_ME', channel_id: bot.state.taskChannel[fTask.id], text: 'stop' })).text, /stopped/);
   assert.equal(fTask.status, 'stopped');
 });
 await step('merged PR or stopped task: the channel is archived, once', async () => {
-  ccTask.pr = { state: 'merged', number: 7, url: 'https://g/7' }; ccTask.status = 'merged';
+  sayraTask.pr = { state: 'merged', number: 7, url: 'https://g/7' }; sayraTask.status = 'merged';
   const i = calls.length; await bot.pushUpdates();
   const arch = since(i).filter((c) => c.method === 'conversations.archive').map((c) => c.p.channel).sort();
   assert.deepEqual(arch, ['C_NEW', bot.state.taskChannel[fTask.id]].sort());
@@ -147,8 +147,8 @@ await step('merged PR or stopped task: the channel is archived, once', async () 
   const j = calls.length; await bot.pushUpdates(); assert.equal(since(j).filter((c) => c.method !== 'conversations.create').filter((c) => c.method === 'conversations.archive').length, 0);
 });
 await step('projects from channel names', () => {
-  assert.equal(bot.projectOfChannel('factory-x'), 'factory'); assert.equal(bot.projectOfChannel('cc_x'), 'contentcoach');
-  assert.equal(bot.projectOfChannel('contentcoach-y'), 'contentcoach'); assert.equal(bot.projectOfChannel('ideas'), 'factory');
+  assert.equal(bot.projectOfChannel('factory-x'), 'factory'); assert.equal(bot.projectOfChannel('sayra_x'), 'sayra'); assert.equal(bot.projectOfChannel('cc-x'), 'factory');
+  assert.equal(bot.projectOfChannel('ideas'), 'factory');
   assert.equal(bot.projectOfChannel('factoryish'), 'factory'); assert.equal(bot.projectOfChannel('sayraa'), 'factory');
   assert.equal(bot.projectOfChannel('sayra-voice-bug'), 'sayra');
 });
