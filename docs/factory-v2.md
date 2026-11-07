@@ -104,14 +104,25 @@ staging. Production stays a manual merge by the founder, always.
   for brain, prompt, model or panel PRs, and counts against the factory's
   daily cap.
 
-## 5a. Access: a factory MCP
+## 5a. Access: a remote factory MCP
 
-The agents API (`agents/server.mjs`, loopback + token) gets an MCP front,
-so any Claude Code session (the founder's laptop, a cloud session) can use
-the factory as a tool: submit a task to a project, list tasks and their
-state, read a task's messages, PR and preview, reply, pause or stop.
-Same token, same audit trail; it adds no new powers (no merge, no gate
-changes). Slack, the dashboard and the MCP all sit on that one API.
+Needed so the factory works from Claude anywhere, cloud sessions included
+(founder 2026-11-07): a cloud session or claude.ai has no ssh, no
+`bin/factory` and no reach into the box's loopback, so a remote MCP
+server is its only way in.
+
+- A remote MCP server (streamable HTTP) at `factory.contentcoach.org/mcp`,
+  in front of the agents API; added once as a custom connector, it is
+  then available in the founder's laptop sessions, cloud sessions and
+  claude.ai.
+- Tools: submit a task to a project, list tasks and their state, read a
+  task's messages, PR and preview, reply, pause, stop.
+- Auth: OAuth for the founder only (connectors expect it), or a bearer
+  token where the client supports one; every call is in the audit trail.
+- Adds no new powers: no merge, no gate changes, no secrets; the same
+  limits as Slack and the dashboard, which sit on the same API.
+- The MCP endpoint is internet-facing, unlike the agents API: rate-limit
+  it and keep it behind Cloudflare.
 
 ## 5b. One factory, many projects
 
@@ -166,5 +177,5 @@ hold these (list kept in `brain/knowledge/gates.md`) is never auto-merged.
 4. PR-first + researcher stage.
 5. Loops per project.
 6. Retro + metrics, then the replay benchmark (5).
-7. Factory MCP on the agents API (5a).
+7. Remote factory MCP for cloud sessions (5a).
 8. Per-project agent images and knowledge (5b).
