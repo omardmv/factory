@@ -15,6 +15,7 @@
 // needs-triage) and in batches. The queue and running jobs survive a restart.
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
+import { mergeDecision } from './merge.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync } from 'node:fs';
@@ -27,7 +28,7 @@ const RUNTIME = process.env.AGENT_RUNTIME ?? '';           // e.g. runsc
 const CLASSIFY_MODEL = process.env.CLASSIFY_MODEL ?? 'haiku';
 const PORT = Number(process.env.PORT ?? 19300);
 const BIND = (process.env.BIND_ADDRESSES ?? '127.0.0.1').split(',').map((s) => s.trim()).filter(Boolean);
-const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 3);
+const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 5);
 const MAX_FACTORY_ROUNDS = Number(process.env.MAX_FACTORY_ROUNDS ?? 6);
 // the review panel: fresh sessions, each its own model and angle; every one must pass
 const REVIEW_PANEL = (process.env.REVIEW_PANEL ?? 'opus:correctness,sonnet:evidence').split(',').map((x) => { const [model, focus] = x.trim().split(':'); return { model, focus }; });
@@ -410,6 +411,7 @@ Other reviewers look at this PR from other angles at the same time; stay on your
 // required checks) still applies. Refused merges retry on the next polls,
 // then go back to the person.
 const MERGE_TRIES = 10;
+const MAX_CONFLICT_ROUNDS = Number(process.env.MAX_CONFLICT_ROUNDS ?? 3);
 async function autoMerge(id) {
   const t = load(id), p = PROJECTS[t.project];
   if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
@@ -417,10 +419,19 @@ async function autoMerge(id) {
   const token = await githubToken(t.repo);
   const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
   const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`); log('merge.refused', { task: id, why }); };
-  if (pr.merged_at) { update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; }); return; }
-  if (pr.state !== 'open') return giveUp('the PR is closed');
-  if (pr.base.ref !== p.autoMerge) return giveUp(`it targets ${pr.base.ref}; this project only merges into ${p.autoMerge} by itself`);
-  if (pr.head.sha !== t.reviewedSha) return giveUp(`its head moved to ${pr.head.sha.slice(0, 7)} after the review of ${t.reviewedSha.slice(0, 7)}`);
+  const d = mergeDecision(pr, t, p.autoMerge, t.conflictRounds ?? 0, MAX_CONFLICT_ROUNDS);
+  if (d.action === 'already-merged') { update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; }); return; }
+  if (d.action === 'give-up') return giveUp(d.why);
+  if (d.action === 'wait') { log('merge.wait', { task: id, why: 'GitHub is still computing mergeability' }); return; } // the next poll retries
+  if (d.action === 'resolve') {
+    // another PR landed first and this one no longer merges cleanly: back to its
+    // agent to bring the branch up to date (then checks and review run again)
+    update(id, (x) => { x.conflictRounds = d.round; x.mergeWanted = false; x.status = 'working'; });
+    log('merge.conflict', { task: id, pr: pr.number, round: d.round });
+    say(id, 'factory', `[factory] PR #${pr.number} no longer merges into ${p.autoMerge}: something merged there first conflicts with it (round ${d.round} of ${MAX_CONFLICT_ROUNDS}). Sent back to the agent to resolve.`);
+    enqueue(id, `[factory] Your PR #${pr.number} was approved, but it no longer merges into ${p.autoMerge}: another change landed there first and conflicts with yours. Bring your branch up to date: \`git fetch origin && git merge origin/${p.autoMerge}\`, resolve every conflict keeping both changes' intent (read what landed: \`git log -p HEAD..origin/${p.autoMerge}\`), re-run your tests and the checks your definition of done names, and push. Log the resolution in the decision log and add a "Merge" note to the PR. Do not rebase or force-push. It will be reviewed again.`, 'bypassPermissions', 'conflict');
+    return;
+  }
   try {
     await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: p.mergeMethod ?? 'merge', commit_title: `${pr.title} (#${pr.number})` });
   } catch (e) {
@@ -448,7 +459,7 @@ function createProgram(project, goal) {
 GOAL:
 ${goal}
 
-Frame it with the "large" playbook: the definition of done for the whole program, scope, risks. Then the phases. A phase is a set of tasks that are independent of each other (they run in parallel and can merge in any order); a later phase may depend on earlier phases being merged. Each task is one PR an agent can finish and prove on its own: say what to change, where, and how done is checked, in a few sentences. At most 5 tasks per phase. Plan the first phase in detail; the later phases one line each.
+Frame it with the "large" playbook: the definition of done for the whole program, scope, risks. Then the phases. A phase is a set of tasks that are independent of each other (they run in parallel and can merge in any order); a later phase may depend on earlier phases being merged. Each task is one PR an agent can finish and prove on its own: say what to change, where, and how done is checked, in a few sentences. At most 8 tasks per phase. Plan the first phase in detail; the later phases one line each.
 Reply to the person in plain words (framing, then the phases), then the first phase as a fenced block exactly like:
 \`\`\`phase
 {"phase": 1, "tasks": ["...", "..."]}
@@ -459,7 +470,7 @@ Read the code you need. Do not change any file.`, 'plan', 'start');
 function launchPhase(t, block) {
   const n = block.phase ?? t.programPhase + 1;
   const goal = messages(t.id)[0]?.text ?? t.title;
-  const kids = block.tasks.slice(0, 5).map((text) => createTask(t.project, `Part of program ${t.id}, phase ${n}. The program's goal, for context only (do just your part):\n${goal.slice(0, 2000)}\n\nYOUR TASK:\n${text}`, true, { parent: t.id, batch: t.id, title: String(text).split('\n')[0].slice(0, 90) }));
+  const kids = block.tasks.slice(0, 8).map((text) => createTask(t.project, `Part of program ${t.id}, phase ${n}. The program's goal, for context only (do just your part):\n${goal.slice(0, 2000)}\n\nYOUR TASK:\n${text}`, true, { parent: t.id, batch: t.id, title: String(text).split('\n')[0].slice(0, 90) }));
   update(t.id, (x) => { x.phase = 'run'; x.programPhase = n; x.children = [...(x.children ?? []), ...kids.map((k) => k.id)]; x.phaseChildren = kids.map((k) => k.id); x.status = `running phase ${n}`; x.mergeNoticeFor = null; });
   say(t.id, 'factory', `[factory] phase ${n} started: ${kids.length} task${kids.length === 1 ? '' : 's'}. Each runs to a reviewed PR; the next phase is planned when you have merged these.`);
   log('program.phase', { task: t.id, phase: n, children: kids.map((k) => k.id) });
