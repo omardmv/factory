@@ -6,30 +6,36 @@ import { tmpdir } from 'node:os';
 import assert from 'node:assert/strict';
 
 const listen = (handler) => new Promise((r) => { const s = createServer(handler).listen(0, '127.0.0.1', () => r(s)); });
-const body = async (req) => { let b = ''; for await (const c of req) b += c; return b ? JSON.parse(b) : {}; };
+const raw = async (req) => { const ch = []; for await (const c of req) ch.push(c); return Buffer.concat(ch); };
+const body = async (req) => { const b = (await raw(req)).toString(); if (!b) return {}; return /x-www-form-urlencoded/.test(req.headers['content-type'] ?? '') ? Object.fromEntries(new URLSearchParams(b)) : JSON.parse(b); };
 
 // ---- fake Slack
 const calls = []; const channels = { C_GENERAL: { id: 'C_GENERAL', name: 'general' } }; let n = 0;
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 7)]);
-const fileAuth = [];
+const fileAuth = [], uploads = {}; let noFilesWrite = false;
 const slackSrv = await listen(async (req, res) => {
   // Slack's private file links: the image with the bot token; its sign-in page without files:read
+  if (req.url.startsWith('/upload/')) { uploads[req.url.slice(8)] = await raw(req); res.writeHead(200); return res.end('OK'); }
   if (req.url.startsWith('/files/')) { fileAuth.push(req.headers.authorization); if (req.url === '/files/ok.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(PNG); } res.writeHead(200, { 'content-type': 'text/html' }); return res.end('<html>sign in</html>'); }
   const method = req.url.slice(1), p = await body(req); calls.push({ method, p, auth: req.headers.authorization });
   let out = { ok: true };
   if (method === 'conversations.create') { if (Object.values(channels).some((c) => c.name === p.name)) out = { ok: false, error: 'name_taken' }; else { const id = `C${++n}`; channels[id] = { id, name: p.name }; out = { ok: true, channel: channels[id] }; } }
   if (method === 'conversations.info') out = { ok: true, channel: channels[p.channel] };
   if (method === 'chat.postMessage') out = { ok: true, ts: `${++n}.0` };
+  if (method === 'files.getUploadURLExternal') { const id = `F${++n}`; out = noFilesWrite ? { ok: false, error: 'missing_scope' } : { ok: true, file_id: id, upload_url: `http://127.0.0.1:${slackSrv.address().port}/upload/${id}` }; }
   res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out));
 });
 // ---- fake factory-agents
-const tasks = {}; let tid = 0; const classifyCalls = []; const sentAttachments = [];
+const tasks = {}, media = {}; let tid = 0; const classifyCalls = []; const sentAttachments = [];
 const mk = (project, text, extra = {}) => { const id = `2611${String(++tid).padStart(2, '0')}-abc${tid}`; tasks[id] = { id, project, title: text.split('\n')[0], kind: 'change', phase: 'brief', status: 'briefing', messages: [{ from: 'you', text }], ...extra }; return tasks[id]; };
 const agentsSrv = await listen(async (req, res) => {
   const send = (o, c = 200) => { res.writeHead(c, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
   if (req.headers.authorization !== 'Bearer agents-secret') return send({ error: 'auth' }, 401);
   const u = new URL(req.url, 'http://x'), p = await body(req);
   if (p.attachments?.length) sentAttachments.push({ path: u.pathname, text: p.text, attachments: p.attachments });
+  const mm = u.pathname.match(/^\/tasks\/([\w-]+)\/media(?:\/(screens|videos)\/(.+))?$/);
+  if (mm && !mm[2]) return send((media[mm[1]] ?? []).map(({ data, ...f }) => f));
+  if (mm) { const f = (media[mm[1]] ?? []).find((x) => x.sub === mm[2] && x.rel === decodeURIComponent(mm[3])); res.writeHead(f ? 200 : 404); return res.end(f?.data ?? ''); }
   if (u.pathname === '/projects') return send([{ name: 'factory', repo: 'o/factory', base: 'main' }, { name: 'shop', repo: 'o/shop', base: 'staging' }]);
   if (u.pathname === '/classify') { classifyCalls.push(p.text); return send(/mini app/i.test(p.text) ? { project: 'shop', why: 'Mini App feature' } : /slack bot/i.test(p.text) ? { project: 'factory', why: 'the Slack bot' } : { project: null, why: 'could be either' }); }
   if (u.pathname === '/tasks' && req.method === 'GET') return send(Object.values(tasks).map(({ messages, ...t }) => t));
@@ -266,6 +272,35 @@ await step('a new task from a DM carries its image', async () => {
   await bot.onMessage({ type: 'message', subtype: 'file_share', channel: 'D1', channel_type: 'im', user: 'U_ME', text: 'factory: the gallery cuts this off', ts: '9.2', files: [{ id: 'F4', name: 'gallery.png', mimetype: 'image/png', url_private_download: fileUrl('ok.png') }] });
   const sent = sentAttachments.slice(before);
   assert.equal(sent.length, 1); assert.equal(sent[0].path, '/tasks'); assert.equal(sent[0].text, 'the gallery cuts this off');
+});
+const mediaTask = mk('shop', 'make the buttons red', { status: 'working' });
+await step("after the agent's turn, its new screenshots and videos go up under its message, once", async () => {
+  media[mediaTask.id] = [{ sub: 'screens', rel: 'edit/01-red.png', mtime: 1, video: false, data: PNG }, { sub: 'videos', rel: 'save.webm', mtime: 1, video: true, data: Buffer.from('webm-bytes') }];
+  mediaTask.messages.push({ from: 'agent', text: 'Done: the button is red now.' });
+  const i = calls.length;
+  await bot.pushUpdates();
+  const done = since(i).filter((c) => c.method === 'files.completeUploadExternal');
+  assert.equal(done.length, 1); assert.equal(done[0].p.channel_id, bot.state.taskChannel[mediaTask.id]); assert.ok(done[0].p.channel_id);
+  assert.match(done[0].p.initial_comment, /What the agent saw: 1 screenshot, 1 video/);
+  const ids = JSON.parse(done[0].p.files).map((f) => f.id);
+  assert.deepEqual(uploads[ids[0]], PNG); assert.equal(uploads[ids[1]].toString(), 'webm-bytes');
+  const asked = since(i).filter((c) => c.method === 'files.getUploadURLExternal').map((c) => c.p.filename);
+  assert.deepEqual(asked, ['01-red.png', 'save.webm']);
+  // nothing new: nothing posted again, even after another message
+  mediaTask.messages.push({ from: 'agent', text: 'Still red.' });
+  const j = calls.length; await bot.pushUpdates();
+  assert.equal(since(j).filter((c) => c.method.startsWith('files.')).length, 0);
+});
+await step('without files:write: one DM saying which permission, and the media waits until it is granted', async () => {
+  media[mediaTask.id].push({ sub: 'screens', rel: 'dark.png', mtime: 2, video: false, data: PNG });
+  noFilesWrite = true; mediaTask.messages.push({ from: 'agent', text: 'Dark mode too.' });
+  let i = calls.length; await bot.pushUpdates();
+  assert.match(posted(i, 'D1').map((c) => c.p.text).join('\n'), /files:write/);
+  mediaTask.messages.push({ from: 'agent', text: 'again' }); i = calls.length; await bot.pushUpdates();
+  assert.equal(posted(i, 'D1').filter((c) => /files:write/.test(c.p.text)).length, 0, 'said once');
+  noFilesWrite = false; mediaTask.messages.push({ from: 'agent', text: 'and again' }); i = calls.length; await bot.pushUpdates();
+  const done = since(i).filter((c) => c.method === 'files.completeUploadExternal');
+  assert.equal(done.length, 1); assert.match(done[0].p.initial_comment, /1 screenshot\b/);
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

@@ -24,7 +24,9 @@ oauth_config:
       - chat:write
       - commands
       - files:read
+      - files:write
       - im:history
+      - pins:write
       - reactions:write
 settings:
   event_subscriptions:

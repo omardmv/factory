@@ -60,6 +60,49 @@ async function agents(path, init = {}, timeoutMs = 10000) {
   const j = await r.json(); if (!r.ok) throw new Error(j.error ?? r.status); return j;
 }
 
+// ---- what the agent saw, posted to the task's channel: after a run ends, its
+// new screenshots and videos go up under its message (needs files:write).
+// Slack's upload is three steps: get an upload URL, send the bytes, complete.
+const MEDIA_PER_POST = 10;
+export async function slackForm(method, params, token = secret('slack-bot-token')) {
+  const r = await fetch(`${SLACK}/${method}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params), signal: AbortSignal.timeout(20000) });
+  const j = await r.json();
+  if (!j.ok) throw Object.assign(new Error(`${method}: ${j.error}`), { slack: j.error });
+  return j;
+}
+async function agentsBytes(path) {
+  const r = await fetch(`${AGENTS}${path}`, { headers: { authorization: `Bearer ${secret('agents-token')}` }, signal: AbortSignal.timeout(60000) });
+  if (!r.ok) throw new Error(`${path}: ${r.status}`); return Buffer.from(await r.arrayBuffer());
+}
+const mediaKey = (f) => `${f.sub}/${f.rel}@${f.mtime}`;
+export async function postMedia(t, channel) {
+  state.media ??= {};
+  const seen = new Set(state.media[t.id] ?? []);
+  const fresh = (await agents(`/tasks/${t.id}/media`)).filter((f) => !seen.has(mediaKey(f)));
+  if (!fresh.length) return 0;
+  const pics = fresh.filter((f) => !f.video), vids = fresh.filter((f) => f.video);
+  const pick = [...pics, ...vids].slice(0, MEDIA_PER_POST), files = [];
+  try {
+    for (const f of pick) {
+      const buf = await agentsBytes(`/tasks/${t.id}/media/${f.sub}/${f.rel.split('/').map(encodeURIComponent).join('/')}`);
+      const u = await slackForm('files.getUploadURLExternal', { filename: f.rel.split('/').pop(), length: String(buf.length) });
+      const up = await fetch(u.upload_url, { method: 'POST', body: buf, signal: AbortSignal.timeout(120000) });
+      if (!up.ok) throw new Error(`upload ${f.rel}: ${up.status}`);
+      files.push({ id: u.file_id, title: f.rel });
+    }
+    const more = fresh.length - pick.length;
+    const count = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+    const what = [pics.length && count(pics.length, 'screenshot'), vids.length && count(vids.length, 'video')].filter(Boolean).join(', ');
+    await slackForm('files.completeUploadExternal', { files: JSON.stringify(files), channel_id: channel, initial_comment: `📸 What the agent saw: ${what}${more ? ` (${more} more on the <${DASHBOARD}/?task=${t.id}|dashboard>)` : ''}` });
+  } catch (e) {
+    // without files:write: say it once, keep the media unsent so it goes up once the permission is there
+    if (e.slack === 'missing_scope') { if (!state.filesWriteWarned) { state.filesWriteWarned = true; persist(); await dm('📸 I have screenshots and videos from the agents to post in their channels, but the Slack app is missing the `files:write` permission. Add it under OAuth & Permissions → Bot Token Scopes, then reinstall the app.').catch(() => {}); } return 0; }
+    throw e;
+  }
+  state.media[t.id] = [...seen, ...fresh.map(mediaKey)]; persist();
+  return pick.length;
+}
+
 // ---- images the person attaches: Slack keeps them private, so the bot fetches
 // them with its own token (needs the files:read scope) and hands them to the
 // agents API, which saves them into the task's workspace
@@ -385,6 +428,8 @@ export async function pushUpdates() {
     if (fresh.length) {
       const ch = await channelFor(full);
       for (const m of fresh) { const r = render(full, m); await post(ch, r.text, { go: r.go, plan: r.plan, taskId: t.id }); }
+      // a run ended (the agent, coordinator or QA tester spoke): its new screenshots and videos follow
+      if (fresh.some((m) => ['agent', 'coordinator', 'qa'].includes(m.from))) await postMedia(full, ch).catch((e) => log('media.error', { task: t.id, error: e.message }));
     }
     state.sent[t.id] = full.messages.length; persist();
     if (full.kind === 'program') await syncEpicChannel(full, state.taskChannel[t.id]);
