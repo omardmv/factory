@@ -253,6 +253,15 @@ ok('a plan task keeps a known type (any case) and drops an unknown one');
   assert.equal(keep.items.find((t) => t.key === 'a').researchKey, 'a-research');
   assert.deepEqual(parsePlan(block([R('a-research', { type: 'research', task: 'r' }), R('a', { task: 'no research here' })])).tasks.find((t) => t.key === 'a').deps, []);
   ok('a revision that lists the research task without the mark keeps the research link, unless "no research"');
+  // the revision leaves the research task out ("do not list it yourself"): a started one is kept and the link with it
+  const run1 = plan.map((t) => (t.key === 'a-research' ? { ...t, taskId: 'R1' } : t));
+  const k2 = mergePlan(run1, parsePlan(block([R('a', { task: 'new text' })])).tasks);
+  assert.deepEqual(k2.items.find((t) => t.key === 'a').deps, ['a-research']);
+  assert.ok(k2.items.some((t) => t.key === 'a-research' && t.taskId === 'R1'));
+  assert.deepEqual(progress(k2.items, (i) => (i.key === 'a-research' ? 'running' : 'pending')).ready, []);
+  const k3 = mergePlan(run1, parsePlan(block([R('a', { task: 'no research now' })])).tasks);
+  assert.deepEqual(k3.items.find((t) => t.key === 'a').deps, []);
+  ok('a revision that omits a started research task keeps the link (unless "no research")');
   // a started task never gains research from a revision
   const cur = [{ key: 'a', title: 'a', task: 'do a', deps: [], wave: 1, taskId: 'T1' }];
   const rev = mergePlan(cur, parsePlan(block([R('a', { task: 'now with a new schema' })])).tasks);

@@ -131,7 +131,7 @@ export function mergePlan(current, next) {
   // a kept key keeps its GitHub sub-issue (issue/issueId/linked) so a revision never opens a second one
   const gh = (k) => { const o = old.get(k); return o?.issue ? { issue: o.issue, issueId: o.issueId, ...(o.linked === undefined ? {} : { linked: o.linked }) } : {}; };
   // a started task keeps its research link even when the revision leaves the mark out
-  next = next.map((t) => { const o = old.get(t.key); return o?.researchKey && !t.researchKey && next.some((x) => x.key === o.researchKey) ? { ...t, deps: [...new Set([...t.deps, o.researchKey])], researchKey: o.researchKey, researchDoc: o.researchDoc } : t; });
+  next = next.map((t) => { const o = old.get(t.key); return o?.researchKey && !t.researchKey && (started.has(o.researchKey) || next.some((x) => x.key === o.researchKey)) && !NO_RESEARCH.test(`${t.title}\n${t.task}`) ? { ...t, deps: [...new Set([...t.deps, o.researchKey])], researchKey: o.researchKey, researchDoc: o.researchDoc } : t; });
   let merged = next.map((t) => ({ ...t, ...gh(t.key), ...(started.has(t.key) ? { taskId: started.get(t.key).taskId } : {}) }));
   // research is never added to a task that has started (a revision may now match the rule): drop the new research task and the link
   const skip = new Set(merged.filter((t) => t.type === 'research' && !t.taskId && started.has(t.researchFor) && !old.get(t.researchFor)?.researchKey).map((t) => t.key));
