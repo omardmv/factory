@@ -1,15 +1,14 @@
 {
   "contentcoach": {
     "repo": "contentcoach/contentcoach", "base": "dev", "checks": "preview", "qa": true, "autoMerge": "dev", "mergeMethod": "merge",
-    "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, private, owned by the contentcoach org" }
+    "githubApp": { "id": "5649406", "key": "github-app-factory.pem" }
   },
   "sayra": {
     "repo": "AzizbekLive/conversation-bot", "base": "staging", "autoMerge": "staging", "mergeMethod": "squash",
-    "githubApp": { "id": "5649406", "key": "github-app-sayra.pem", "note": "sayra-coolify, owned by omardmv, installed on conversation-bot (also Coolify's source for Sayra staging); key copied from Coolify; tokens cut down to these permissions",
-      "permissions": { "contents": "write", "pull_requests": "write", "issues": "write", "checks": "read", "statuses": "read", "metadata": "read" } }
+    "githubApp": { "id": "5649406", "key": "github-app-factory.pem" }
   },
   "factory": {
     "repo": "omardmv/factory", "base": "main", "autoMerge": "main", "mergeMethod": "squash",
-    "githubApp": { "id": "4941357", "key": "github-app.pem", "note": "openinspectv1, private, owned by omardmv" }
+    "githubApp": { "id": "5649406", "key": "github-app-factory.pem" }
   }
 }
