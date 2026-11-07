@@ -489,6 +489,8 @@ Other reviewers look at this PR from other angles at the same time; stay on your
 // then go back to the person.
 const MERGE_TRIES = 10;
 const MAX_CONFLICT_ROUNDS = Number(process.env.MAX_CONFLICT_ROUNDS ?? 3);
+const MAX_CHECK_ROUNDS = Number(process.env.MAX_CHECK_ROUNDS ?? 3);
+const REQUIRED_CHECKS_WAIT_MIN = Number(process.env.REQUIRED_CHECKS_WAIT_MIN ?? 45);
 async function autoMerge(id) {
   const t = load(id), p = PROJECTS[t.project];
   if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
@@ -496,10 +498,30 @@ async function autoMerge(id) {
   const token = await githubToken(t.repo);
   const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
   const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`); log('merge.refused', { task: id, why }); };
-  const d = mergeDecision(pr, t, p.autoMerge, t.conflictRounds ?? 0, MAX_CONFLICT_ROUNDS);
+  // the project's required checks (box config "requiredChecks"), enforced here: GitHub can't on a free private repo
+  let checks = null;
+  if (p.requiredChecks?.length && pr.head?.sha) {
+    const sha = pr.head.sha;
+    const cr = await gh(token, `/repos/${t.repo}/commits/${sha}/check-runs?per_page=100`);
+    const st = await gh(token, `/repos/${t.repo}/commits/${sha}/status`);
+    const runs = [...(cr.check_runs ?? []).map((r) => ({ name: r.name, status: r.status, conclusion: r.conclusion, started_at: r.started_at, url: r.html_url })),
+      ...(st.statuses ?? []).map((x) => ({ name: x.context, status: x.state === 'pending' ? 'in_progress' : 'completed', conclusion: x.state === 'pending' ? null : x.state === 'success' ? 'success' : 'failure', started_at: x.updated_at, url: x.target_url }))];
+    const since = t.checksWait?.sha === sha ? t.checksWait.at : (update(id, (x) => { x.checksWait = { sha, at: new Date().toISOString() }; }), new Date().toISOString());
+    checks = { required: p.requiredChecks, runs, waitedMin: (Date.now() - Date.parse(since)) / 60000, maxWaitMin: REQUIRED_CHECKS_WAIT_MIN, rounds: t.checkRounds ?? 0, maxRounds: MAX_CHECK_ROUNDS };
+  }
+  const d = mergeDecision(pr, t, p.autoMerge, t.conflictRounds ?? 0, MAX_CONFLICT_ROUNDS, checks);
   if (d.action === 'already-merged') { update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; }); return; }
   if (d.action === 'give-up') return giveUp(d.why);
-  if (d.action === 'wait') { log('merge.wait', { task: id, why: 'GitHub is still computing mergeability' }); return; } // the next poll retries
+  if (d.action === 'wait') { log('merge.wait', { task: id, why: d.why ?? 'GitHub is still computing mergeability' }); return; } // the next poll retries
+  if (d.action === 'fix-checks') {
+    // a required check failed on the approved head: back to its agent (then checks and review run again)
+    const list = d.failed.map((f) => `${f.name} (${f.conclusion}${f.url ? `: ${f.url}` : ''})`).join(', ');
+    update(id, (x) => { x.checkRounds = d.round; x.mergeWanted = false; x.status = 'working'; });
+    log('merge.checks-failed', { task: id, pr: pr.number, round: d.round, failed: d.failed.map((f) => f.name) });
+    say(id, 'factory', `[factory] PR #${pr.number} was approved, but required check${d.failed.length > 1 ? 's' : ''} failed: ${list} (round ${d.round} of ${MAX_CHECK_ROUNDS}). Sent back to the agent.`);
+    enqueue(id, `[factory] Your PR #${pr.number} was approved, but the project's required check${d.failed.length > 1 ? 's' : ''} failed on its head: ${list}. Read the failing run's log (\`gh run view --log-failed\` or the link), reproduce it locally, fix the cause (not the test, unless the test is wrong, and then say why in the decision log), push, and note the fix in the PR. It will be reviewed again.`, 'bypassPermissions', 'checks');
+    return;
+  }
   if (d.action === 'resolve') {
     // another PR landed first and this one no longer merges cleanly: back to its
     // agent to bring the branch up to date (then checks and review run again)

@@ -9,7 +9,9 @@ Never loosen one to finish a task.
   logic in `agents/server.mjs`)
 - auto-merge targets and branch protection (each project's `autoMerge` in the
   box config, `/opt/factory/agents/projects.json`); production is never
-  merged by the factory
+  merged by the factory. `requiredChecks` (per project, box config): checks that
+  must pass on the reviewed head before the factory merges; the factory enforces
+  them itself, since private repos on a free plan have no branch protection
 - the round limit and spend caps
 - the replay benchmark: its tasks and how results are scored
 - agent isolation: container limits, network, firewall, runtime

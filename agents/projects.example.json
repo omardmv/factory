@@ -12,6 +12,7 @@
     "repo": "<owner>/<repo>",
     "base": "staging",
     "autoMerge": "staging",
+    "requiredChecks": ["e2e"],
     "mergeMethod": "squash",
     "githubApp": { "id": "<app id>", "key": "github-app-factory.pem", "bot": { "name": "<app slug>[bot]", "email": "<user id>+<app slug>[bot]@users.noreply.github.com" } }
   }
