@@ -21,7 +21,7 @@
   <marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#0f8a6a" stroke-width="1.6"/></marker>
 </defs>
 
-<text class="title" x="30" y="72">The ContentCoach Factory</text>
+<text class="title" x="30" y="72">The Software Factory</text>
 <text class="s" x="34" y="102">every PR becomes a live preview, tested and recorded, on our own VPS, for $0</text>
 
 <!-- legend -->
@@ -85,15 +85,15 @@
 <rect x="1306" y="194" width="260" height="96" rx="8" fill="#fff1e0" stroke="#b7651a"/>
 <text class="t o" x="1322" y="218">copy staging data</text>
 <text class="s" x="1322" y="240">DB: CREATE DATABASE … TEMPLATE</text>
-<text class="s" x="1322" y="260">  cc_snapshot (&lt;1 s)</text>
+<text class="s" x="1322" y="260">  shop_snapshot (&lt;1 s)</text>
 <text class="s" x="1322" y="280">media: hardlinks (0 bytes)</text>
 <rect x="1590" y="194" width="262" height="96" rx="8" fill="#e3f6ef" stroke="#0f8a6a"/>
-<text class="t g" x="1606" y="218">compose project cc-pr-N</text>
+<text class="t g" x="1606" y="218">compose project shop-pr-N</text>
 <text class="s" x="1606" y="240">migrate → api (+worker) → web</text>
 <text class="s" x="1606" y="260">offline: fake model, $0</text>
 <text class="s" x="1606" y="280">no bot, no payment keys</text>
 <rect x="1306" y="306" width="546" height="96" rx="8" fill="#fff" stroke="#888"/>
-<text class="t" x="1322" y="332">https://&lt;feature&gt;-pr&lt;N&gt;.contentcoach.org</text>
+<text class="t" x="1322" y="332">https://&lt;feature&gt;-pr&lt;N&gt;.shop.example</text>
 <text class="s" x="1322" y="354">one wildcard DNS record · Cloudflare cert · password gate</text>
 <text class="s" x="1322" y="376">gateway routes by PR number via docker DNS, no config per PR</text>
 <text class="s" x="1322" y="396">label "live" → real model, only when needed, $10/day cap</text>
@@ -120,13 +120,13 @@
 <rect x="1322" y="662" width="40" height="30" rx="3" fill="#eee" stroke="#999"/><path d="M1336 670 L1350 677 L1336 684 Z" fill="#999"/>
 <rect x="1372" y="662" width="40" height="30" rx="3" fill="#eee" stroke="#999"/><path d="M1386 670 L1400 677 L1386 684 Z" fill="#999"/>
 <rect x="1422" y="662" width="40" height="30" rx="3" fill="#eee" stroke="#999"/><path d="M1436 670 L1450 677 L1436 684 Z" fill="#999"/>
-<text class="s" x="1478" y="682">no PostHog on previews: these videos are the recordings</text>
+<text class="s" x="1478" y="682">no analytics on previews: these videos are the recordings</text>
 <path class="arr" d="M1280 630 L1222 630"/>
 
 <!-- PR comment -->
 <text class="h b" x="750" y="520">One PR comment (edited on every push)</text>
 <rect x="744" y="532" width="474" height="200" rx="8" fill="#f6f8fb" stroke="#555" stroke-width="1.6"/>
-<text class="t" x="764" y="566">Preview   schedule-sheet-pr481.contentcoach.org</text>
+<text class="t" x="764" y="566">Preview   schedule-sheet-pr481.shop.example</text>
 <text class="t" x="764" y="594">Sign in   one-click link (your staging account)</text>
 <text class="t" x="764" y="622">E2E       41 passed · 1 failed  ▶ video  ▶ trace</text>
 <text class="t" x="764" y="650">Data      staging snapshot of 03:00 Tashkent</text>
@@ -146,7 +146,7 @@
 <!-- Staging -->
 <text class="h o" x="30" y="520">Staging</text>
 <rect x="22" y="560" width="330" height="140" rx="8" fill="#fff1e0" stroke="#b7651a" stroke-width="1.6"/>
-<text class="t o" x="187" y="596" text-anchor="middle">staging.contentcoach.org</text>
+<text class="t o" x="187" y="596" text-anchor="middle">staging.shop.example</text>
 <text class="s" x="187" y="622" text-anchor="middle">dev deploys here (Kamal, zero downtime)</text>
 <text class="s" x="187" y="644" text-anchor="middle">your account, real data, real bot</text>
 <text class="s" x="187" y="666" text-anchor="middle">copied nightly into the factory ↓</text>
@@ -157,7 +157,7 @@
 <text class="t r" x="187" y="828" text-anchor="middle">Your sign-off on staging</text>
 <path class="arr" d="M356 822 L420 822"/>
 <rect x="424" y="784" width="300" height="76" rx="8" fill="#e3f6ef" stroke="#0f8a6a" stroke-width="2"/>
-<text class="t g" x="574" y="814" text-anchor="middle">Production · contentcoach.org</text>
+<text class="t g" x="574" y="814" text-anchor="middle">Production · shop.example</text>
 <text class="s" x="574" y="838" text-anchor="middle">main = a release · nothing ships switched off</text>
 
 <!-- Data loop -->
@@ -173,18 +173,18 @@
 <text class="t g" x="1389" y="842" text-anchor="middle">disarm</text><text class="s" x="1389" y="864" text-anchor="middle">jobs, card tokens, login links</text>
 <path class="arrG" d="M1518 849 L1570 849"/>
 <rect x="1574" y="814" width="280" height="70" rx="8" fill="#fff" stroke="#888"/>
-<text class="t" x="1714" y="842" text-anchor="middle">cc_pr_N per preview</text><text class="s" x="1714" y="864" text-anchor="middle">PR closed → DB, media, videos deleted</text>
+<text class="t" x="1714" y="842" text-anchor="middle">shop_pr_N per preview</text><text class="s" x="1714" y="864" text-anchor="middle">PR closed → DB, media, videos deleted</text>
 
 <!-- isolation note -->
 <text class="h" x="30" y="940">Isolation on the VPS</text>
 <text class="s" x="30" y="966">/opt/factory · /srv/factory · docker network "factory" · its own Postgres</text>
-<text class="s" x="30" y="988">prod, satstation, sayra, ugc: never touched · staging: read only</text>
+<text class="s" x="30" y="988">prod, other tenants: never touched · staging: read only</text>
 
 <!-- future -->
 <text class="h" x="1284" y="950">Next</text>
 <text class="s" x="1284" y="976">· sign-in links from agent containers (no ssh)</text>
 <text class="s" x="1284" y="998">· a fresh runner per job, rootless docker</text>
-<text class="s" x="1284" y="1020">· second project (sayra / satstation) on the same factory</text>
+<text class="s" x="1284" y="1020">· second project on the same factory</text>
 
 <!-- feedback loop -->
 <path d="M110 1000 L110 1040 L1240 1040 L1240 1000" fill="none" stroke="#bbb" stroke-dasharray="4 4"/>

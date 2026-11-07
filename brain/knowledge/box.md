@@ -6,7 +6,7 @@ factory, Coolify, previews, agents, CI runners.
 - 12 cores, 47 GB RAM, ~480 GB disk; no KVM (no `/dev/kvm`), so no
   Firecracker, Kata or other micro VMs. Docker containers, optionally under
   gVisor (`--runtime=runsc`).
-- Other tenants share it (satstation, ugcstation, sayra, other bots). Never
+- Other tenants share it (other apps and bots on the box). Never
   touch their containers, volumes, networks or vhosts.
 - Host nginx owns 80/443 for every site, behind Cloudflare. Coolify and its
   Traefik listen on 127.0.0.1 only.

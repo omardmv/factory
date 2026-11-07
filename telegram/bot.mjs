@@ -150,7 +150,7 @@ async function onMessage(msg) {
   if (q) {
     const project = (q[1] ?? 'factory').toLowerCase();
     const items = text.slice(q[0].length).split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
-    if (!items.length) return send('A queue is one task per line:\nqueue:\n- make the Save button sticky on phones\n- fix the login redirect\n("queue <project>:" for Sayra)');
+    if (!items.length) return send('A queue is one task per line:\nqueue:\n- make the Save button sticky on phones\n- fix the login redirect\n("queue <project>:" for another project)');
     const b = await agents('/batches', { method: 'POST', body: JSON.stringify({ project, items }) });
     state.batches[b.batch] = { ids: b.tasks.map((t) => t.id), project, reported: false };
     for (const t of b.tasks) state.sent[t.id] = 1;
