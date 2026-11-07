@@ -19,12 +19,13 @@ const slackSrv = await listen(async (req, res) => {
   res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out));
 });
 // ---- fake factory-agents
-const tasks = {}; let tid = 0;
+const tasks = {}; let tid = 0; const classifyCalls = [];
 const mk = (project, text, extra = {}) => { const id = `2611${String(++tid).padStart(2, '0')}-abc${tid}`; tasks[id] = { id, project, title: text.split('\n')[0], kind: 'change', phase: 'brief', status: 'briefing', messages: [{ from: 'you', text }], ...extra }; return tasks[id]; };
 const agentsSrv = await listen(async (req, res) => {
   const send = (o, c = 200) => { res.writeHead(c, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
   if (req.headers.authorization !== 'Bearer agents-secret') return send({ error: 'auth' }, 401);
   const u = new URL(req.url, 'http://x'), p = await body(req);
+  if (u.pathname === '/classify') { classifyCalls.push(p.text); return send(/mini app/i.test(p.text) ? { project: 'sayra', why: 'Mini App feature' } : /slack bot/i.test(p.text) ? { project: 'factory', why: 'the Slack bot' } : { project: null, why: 'could be either' }); }
   if (u.pathname === '/tasks' && req.method === 'GET') return send(Object.values(tasks).map(({ messages, ...t }) => t));
   if (u.pathname === '/tasks' && req.method === 'POST') return send(mk(p.project, p.text, p.kind ? { kind: p.kind } : {}), 201);
   const m = u.pathname.match(/^\/tasks\/([\w-]+)(?:\/(messages|stop|pause))?$/);
@@ -111,18 +112,54 @@ await step('a DM "factory: …" starts a task in a new channel and invites the o
   assert.ok(calls.some((x) => x.method === 'conversations.invite' && x.p.channel === ch && x.p.users === 'U_ME'));
   assert.match(calls.filter((x) => x.method === 'chat.postMessage' && x.p.channel === 'D1').at(-1).p.text, new RegExp(`<#${ch}>`));
 });
-await step('a DM with no prefix goes to the factory; sayra: goes to Sayra', async () => {
-  await bot.onMessage({ type: 'message', channel: 'D1', channel_type: 'im', user: 'U_ME', text: 'Tidy the dashboard footer', ts: '4.1' });
-  assert.equal(Object.values(tasks).find((t) => t.title === 'Tidy the dashboard footer').project, 'factory');
+await step('a DM naming no project: a clear one is guessed and said so; sayra: skips the guess', async () => {
+  const n = classifyCalls.length;
+  await bot.onMessage({ type: 'message', channel: 'D1', channel_type: 'im', user: 'U_ME', text: 'Feature: users edit their profile in the Mini App', ts: '4.1' });
+  const t = Object.values(tasks).find((x) => x.title.startsWith('Feature: users edit their profile'));
+  assert.equal(t.project, 'sayra'); assert.equal(classifyCalls.length, n + 1);
+  assert.match(posted(0, bot.state.taskChannel[t.id]).at(-1).p.text, /started \(sayra, guessed from your message: Mini App feature/);
   await bot.onMessage({ type: 'message', channel: 'D1', channel_type: 'im', user: 'U_ME', text: 'sayra: Profile editing\nusers edit bio', ts: '4.2' });
-  const t = Object.values(tasks).find((x) => x.title === 'Profile editing');
-  assert.equal(t.project, 'sayra'); assert.match(calls.filter((c) => c.method === 'conversations.create').at(-1).p.name, /^sayra-profile-editing-/);
+  const t2 = Object.values(tasks).find((x) => x.title === 'Profile editing');
+  assert.equal(t2.project, 'sayra'); assert.equal(classifyCalls.length, n + 1, 'a named project is not classified');
+  assert.match(calls.filter((c) => c.method === 'conversations.create').at(-1).p.name, /^sayra-profile-editing-/);
+});
+await step('unsure: the bot asks with one button per project, and the pick starts it', async () => {
+  const before = Object.keys(tasks).length, i = calls.length;
+  await bot.onMessage({ type: 'message', channel: 'D1', channel_type: 'im', user: 'U_ME', text: 'fix the login bug', ts: '4.3' });
+  assert.equal(Object.keys(tasks).length, before, 'nothing starts before the pick');
+  const ask = since(i).find((c) => c.method === 'chat.postMessage' && /Which project/.test(c.p.text));
+  assert.ok(ask); assert.equal(ask.p.channel, 'D1');
+  const buttons = ask.p.blocks.at(-1).elements; assert.deepEqual(buttons.map((b) => b.text.text).sort(), ['Factory', 'Sayra']);
+  const sayraBtn = buttons.find((b) => b.text.text === 'Sayra');
+  await bot.onAction({ type: 'block_actions', user: { id: 'U_X' }, actions: [{ action_id: sayraBtn.action_id, value: sayraBtn.value }] });
+  assert.equal(Object.keys(tasks).length, before, 'only the owner picks');
+  await bot.onAction({ type: 'block_actions', user: { id: 'U_ME' }, actions: [{ action_id: sayraBtn.action_id, value: sayraBtn.value }], channel: { id: 'D1' }, message: { ts: '5.0', text: 'q' } });
+  const t = Object.values(tasks).find((x) => x.title === 'fix the login bug'); assert.equal(t.project, 'sayra');
+  assert.equal(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks[0].type, 'context', 'buttons replaced');
+  await bot.onAction({ type: 'block_actions', user: { id: 'U_ME' }, actions: [{ action_id: sayraBtn.action_id, value: sayraBtn.value }] });
+  assert.equal(Object.values(tasks).filter((x) => x.title === 'fix the login bug').length, 1, 'a second press does nothing');
+});
+await step('an unnamed new channel: unsure asks in that channel, and the task lives there', async () => {
+  channels.C_IDEA = { id: 'C_IDEA', name: 'ideas' };
+  await bot.onChannelCreated({ type: 'channel_created', channel: { id: 'C_IDEA', name: 'ideas', creator: 'U_ME' } });
+  const i = calls.length;
+  await bot.onMessage({ type: 'message', channel: 'C_IDEA', channel_type: 'channel', user: 'U_ME', text: 'better onboarding', ts: '6.0' });
+  const ask = since(i).find((c) => c.method === 'chat.postMessage' && /Which project/.test(c.p.text)); assert.equal(ask.p.channel, 'C_IDEA');
+  const f = ask.p.blocks.at(-1).elements.find((b) => b.text.text === 'Factory');
+  await bot.onAction({ type: 'block_actions', user: { id: 'U_ME' }, actions: [{ action_id: f.action_id, value: f.value }], channel: { id: 'C_IDEA' }, message: { ts: '6.1', text: 'q' } });
+  const t = Object.values(tasks).find((x) => x.title === 'better onboarding');
+  assert.equal(t.project, 'factory'); assert.equal(bot.state.channelTask.C_IDEA, t.id, 'the task stays in the founder\'s channel');
 });
 await step('a task from elsewhere (issue intake) gets its own channel on its first message', async () => {
   const t = mk('sayra', 'Issue #12: export fails', { phase: 'run', status: 'working' }); t.messages.push({ from: 'agent', text: 'Playbook: bug. Reproducing.' });
   const i = calls.length; await bot.pushUpdates();
   assert.ok(since(i).some((c) => c.method === 'conversations.create' && c.p.name.startsWith('sayra-issue-12-export-fails')));
   assert.equal(posted(i, bot.state.taskChannel[t.id]).length, 1);
+});
+await step('a bare "stop" in a task channel is a command, not an answer', async () => {
+  const t = Object.values(tasks).find((x) => x.title === 'better onboarding'); const n = t.messages.length;
+  await bot.onMessage({ type: 'message', channel: 'C_IDEA', channel_type: 'channel', user: 'U_ME', text: 'stop', ts: '7.0' });
+  assert.equal(t.status, 'stopped'); assert.equal(t.messages.length, n, 'not sent to the agent');
 });
 await step('decision needed, QA and review render with their labels', async () => {
   const r1 = bot.render({ id: 'x', kind: 'change', phase: 'run', status: 'decision needed' }, { from: 'agent', text: 'DECISION NEEDED\n1. A\n2. B' });
@@ -142,14 +179,14 @@ await step('merged PR or stopped task: the channel is archived, once', async () 
   sayraTask.pr = { state: 'merged', number: 7, url: 'https://g/7' }; sayraTask.status = 'merged';
   const i = calls.length; await bot.pushUpdates();
   const arch = since(i).filter((c) => c.method === 'conversations.archive').map((c) => c.p.channel).sort();
-  assert.deepEqual(arch, ['C_NEW', bot.state.taskChannel[fTask.id]].sort());
+  assert.deepEqual(arch, ['C_NEW', 'C_IDEA', bot.state.taskChannel[fTask.id]].sort(), 'merged, stopped by command, stopped by /factory');
   assert.ok(posted(i, 'C_NEW').some((c) => /PR #7 merged: archiving/.test(c.p.text)));
   const j = calls.length; await bot.pushUpdates(); assert.equal(since(j).filter((c) => c.method !== 'conversations.create').filter((c) => c.method === 'conversations.archive').length, 0);
 });
 await step('projects from channel names', () => {
-  assert.equal(bot.projectOfChannel('factory-x'), 'factory'); assert.equal(bot.projectOfChannel('sayra_x'), 'sayra'); assert.equal(bot.projectOfChannel('cc-x'), 'factory');
-  assert.equal(bot.projectOfChannel('ideas'), 'factory');
-  assert.equal(bot.projectOfChannel('factoryish'), 'factory'); assert.equal(bot.projectOfChannel('sayraa'), 'factory');
+  assert.equal(bot.projectOfChannel('factory-x'), 'factory'); assert.equal(bot.projectOfChannel('sayra_x'), 'sayra'); assert.equal(bot.projectOfChannel('cc-x'), null);
+  assert.equal(bot.projectOfChannel('ideas'), null);
+  assert.equal(bot.projectOfChannel('factoryish'), null); assert.equal(bot.projectOfChannel('sayraa'), null);
   assert.equal(bot.projectOfChannel('sayra-voice-bug'), 'sayra');
 });
 console.log(`all ${ok} passed`);
