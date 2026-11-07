@@ -224,7 +224,7 @@ await test('answer to a caught question in a review round (origin kept), no comm
   assert.equal(p.job.origin, 'review'); // a restart keeps it
 });
 await test('stubbed turn: a reply ending in a plain-text question lands on decision needed, no panel run', async () => {
-  const turn = async (reply, model) => { const a = await checkUnasked(reply, { ask: async () => model }); return status(task(), { reply, unasked: a.asks }); };
+  const turn = async (reply, model) => { const a = await checkUnasked(reply, { ask: async () => model }); return status(task(), { reply, unasked: a.asks }, deps({ hasChecks: () => false })); };
   assert.equal(await turn(SAYRA, '{"asks":true,"question":"purple or teal?","options":["purple","teal"]}'), 'decision needed');
   assert.equal(await turn(REPORT, '{"asks":false}'), 'reviewing');
 });
