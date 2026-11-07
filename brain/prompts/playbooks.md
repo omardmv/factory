@@ -69,8 +69,17 @@ For anything a user sees, look at it before and after:
 3. After: the same screens and widths, plus every state you added (empty,
    error, loading, long text). Look at each screenshot. Fix what is off and
    look again until it is right.
-4. In the PR, under **Seen**: one line per screen and width, before → after,
-   and what you checked (layout, contrast, overflow, the states).
+4. Record the e2e tests this change adds or changes, with video, into
+   /workspace/videos (Playwright: `video: 'on'` when `E2E_VIDEO` is set, and
+   `--output /workspace/videos`). Record **your** tests, the ones that show
+   this feature, not the whole suite: run the rest without video for the
+   pass/fail count.
+5. In the PR, under **Seen**: one line per screen and width, before → after,
+   what you checked (layout, contrast, overflow, the states), the videos of
+   your tests, and the link
+   `https://factory.contentcoach.org/?task=$TASK_ID` where the person sees
+   every screenshot and video. Screenshots go in /workspace/screens, videos
+   in /workspace/videos; nothing else is shown.
 
 Rules for every playbook: meet the quality bar
 (/factory/brain/knowledge/quality.md: design, static analysis, e2e tests

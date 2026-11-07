@@ -14,6 +14,8 @@ services:
       - /opt/factory/dashboard:/run/factory:ro
       - /srv/factory/state:/srv/factory/state:ro
       - /srv/factory/artifacts:/srv/factory/artifacts:ro
+      # each task's screenshots and e2e videos (workspace/screens, workspace/videos)
+      - /srv/factory/agents/tasks:/srv/factory/agents/tasks:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
