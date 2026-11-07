@@ -111,6 +111,13 @@ await step('a DM "factory: …" starts a task in a new channel and invites the o
   assert.ok(calls.some((x) => x.method === 'conversations.invite' && x.p.channel === ch && x.p.users === 'U_ME'));
   assert.match(calls.filter((x) => x.method === 'chat.postMessage' && x.p.channel === 'D1').at(-1).p.text, new RegExp(`<#${ch}>`));
 });
+await step('a DM with no prefix goes to the factory; sayra: goes to Sayra', async () => {
+  await bot.onMessage({ type: 'message', channel: 'D1', channel_type: 'im', user: 'U_ME', text: 'Tidy the dashboard footer', ts: '4.1' });
+  assert.equal(Object.values(tasks).find((t) => t.title === 'Tidy the dashboard footer').project, 'factory');
+  await bot.onMessage({ type: 'message', channel: 'D1', channel_type: 'im', user: 'U_ME', text: 'sayra: Profile editing\nusers edit bio', ts: '4.2' });
+  const t = Object.values(tasks).find((x) => x.title === 'Profile editing');
+  assert.equal(t.project, 'sayra'); assert.match(calls.filter((c) => c.method === 'conversations.create').at(-1).p.name, /^sayra-profile-editing-/);
+});
 await step('a task from elsewhere (issue intake) gets its own channel on its first message', async () => {
   const t = mk('contentcoach', 'Issue #12: export fails', { phase: 'run', status: 'working' }); t.messages.push({ from: 'agent', text: 'Playbook: bug. Reproducing.' });
   const i = calls.length; await bot.pushUpdates();
@@ -141,8 +148,8 @@ await step('merged PR or stopped task: the channel is archived, once', async () 
 });
 await step('projects from channel names', () => {
   assert.equal(bot.projectOfChannel('factory-x'), 'factory'); assert.equal(bot.projectOfChannel('cc_x'), 'contentcoach');
-  assert.equal(bot.projectOfChannel('contentcoach-y'), 'contentcoach'); assert.equal(bot.projectOfChannel('ideas'), 'contentcoach');
-  assert.equal(bot.projectOfChannel('factoryish'), 'contentcoach');
+  assert.equal(bot.projectOfChannel('contentcoach-y'), 'contentcoach'); assert.equal(bot.projectOfChannel('ideas'), 'factory');
+  assert.equal(bot.projectOfChannel('factoryish'), 'factory'); assert.equal(bot.projectOfChannel('sayraa'), 'factory');
   assert.equal(bot.projectOfChannel('sayra-voice-bug'), 'sayra');
 });
 console.log(`all ${ok} passed`);

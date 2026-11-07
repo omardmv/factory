@@ -1,8 +1,8 @@
 // The factory in Slack: one channel per task. Socket Mode (outbound only, no
 // public endpoint), answers only its paired owner, talks to factory-agents.
 //  - create a channel and write your idea in it: that is the task. The
-//    channel name picks the project (cc-… / contentcoach-… / factory-…;
-//    contentcoach by default)
+//    channel name picks the project (sayra-… / cc-… / factory-…;
+//    the factory by default)
 //  - or DM the bot: a plain message starts a task in a new channel; "queue:",
 //    "bug:", "program:" as on Telegram (prefix "factory" for the factory repo)
 //  - tasks from issues, queues and programs get their own channel too
@@ -26,7 +26,7 @@ const PUSH_EVERY_MS = Number(process.env.PUSH_EVERY_MS ?? 15000);
 // project -> channel-name prefixes (the first is used for channels the bot makes)
 const PROJECTS = { contentcoach: ['cc', 'contentcoach'], factory: ['factory'], sayra: ['sayra'] };
 const NAMES = Object.keys(PROJECTS).join('|');
-const DEFAULT_PROJECT = 'contentcoach';
+const DEFAULT_PROJECT = 'factory';
 const secret = (n) => readFileSync(`${SECRETS}/${n}`, 'utf8').trim();
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
 
@@ -141,8 +141,8 @@ async function archiveIfFinished(t) {
 
 // ---- incoming
 const HELP = `*What I understand*
-• create a channel (\`cc-…\` ContentCoach, \`sayra-…\` Sayra, \`factory-…\` the factory) and write your idea: that's the task
-• or DM me: a plain message starts a task in a new channel (\`sayra:\` or \`factory:\` prefix for another project)
+• create a channel (\`sayra-…\` Sayra, \`cc-…\` ContentCoach, anything else the factory) and write your idea: that's the task
+• or DM me: a plain message starts a task in a new channel (start with \`sayra:\` or \`contentcoach:\` for a project; the factory by default)
 • \`queue:\` + one task per line · \`bug:\` + what's wrong · \`program:\` + a big goal (add \`factory\`, e.g. \`bug factory:\`)
 • in a task's channel, everything you write goes to the agent; Go starts a brief or a plan
 • \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`help\` anywhere`;
