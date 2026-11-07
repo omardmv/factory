@@ -156,7 +156,7 @@ export async function chatView({ taskId, healthy, list = false }) {
   if (task) {
     const pv = PREVIEW[task.project], pr = task.pr?.number, e2e = e2eFor(task.project, pr);
     const links = [
-      task.pr ? `<a href="${esc(task.pr.url)}" target="_blank">PR #${pr} · ${esc(task.pr.state)}</a>` : '<span class="hint">no PR yet</span>',
+      (task.epicIssue?.url ? `<a href="${esc(task.epicIssue.url)}" target="_blank">epic issue #${esc(task.epicIssue.number)}</a>` : '') + (task.pr ? `<a href="${esc(task.pr.url)}" target="_blank">PR #${pr} · ${esc(task.pr.state)}</a>` : task.epicIssue?.url ? '' : '<span class="hint">no PR yet</span>'),
       pv && pr ? `<a href="${pv.host(pr)}/app/" target="_blank">preview</a><a href="${pv.host(pr)}/_factory/login" target="_blank">sign in</a><a href="${pv.host(pr)}/_factory/" target="_blank">videos</a>` : '',
       e2e ? `<span>${e2e.failed ? '❌' : '✅'} e2e ${e2e.passed} passed${e2e.failed ? `, ${e2e.failed} failed` : ''}</span>` : '',
       `<span class="hint">${esc(task.status)}${task.costUsd ? ` · $${task.costUsd.toFixed(2)}` : ''}</span>`,

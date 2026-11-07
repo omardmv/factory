@@ -15,7 +15,8 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
-import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS } from './plan.mjs';
+import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
+import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -164,7 +165,7 @@ function pickup() {
     if (['stopped', 'paused'].includes(t.status)) { update(t.id, (x) => { delete x.job; }); continue; }
     const j = t.job;
     if (j.kind === 'review' || j.kind === 'qa') queue.push(j);
-    else if (t.sessionId && j.from !== 'pause') queue.push({ ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup' });
+    else if (t.sessionId && j.from !== 'pause') queue.push({ ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup', origin: j.from });
     else queue.push(j);
     log('pickup', { task: t.id, kind: j.kind, from: j.from });
   }
@@ -221,7 +222,7 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
   return { last, stderr, sessionId };
 }
 
-async function agentRun({ id, prompt, mode, from }) {
+async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
   const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
   if (r.last) say(id, t.kind === 'program' ? 'coordinator' : 'agent', r.last);
@@ -246,6 +247,10 @@ async function agentRun({ id, prompt, mode, from }) {
     if (mode === 'plan') next = 'waiting for you';
     else if (decision) next = 'decision needed';
     else if (!head) next = 'waiting for you';
+    // an answer to review findings goes back to the panel even with no new commit:
+    // the finding may have asked for evidence (a run, a PR comment), not code.
+    // Bounded: every CHANGES verdict counts toward MAX_FACTORY_ROUNDS.
+    else if (head === done.reviewedSha && done.verdict !== 'PASS' && [from, origin].includes('review')) next = 'reviewing';
     else if (head === done.reviewedSha) next = done.verdict === 'PASS' ? 'ready for you' : 'waiting for you'; // nothing new since the review
     // green: the QA tester first (once per head; a head the agent kept after a
     // QA FAIL goes on to the panel, which sees the report and judges the dispute)
@@ -470,19 +475,22 @@ End your reply with the whole plan as a fenced block exactly like:
 \`\`\`plan
 {"tasks": [{"key": "flag", "title": "one line", "task": "what to do, where, how done is checked", "depends_on": []}, {"key": "next-thing", "title": "...", "task": "...", "depends_on": ["flag"]}]}
 \`\`\``;
+// the planning prompt: sent when the person says "plan" at the end of the discussion
+const planningPrompt = (note) => `${note}
+Now write the plan. Frame it with the "large" playbook: the definition of done for the whole epic, scope, risks, shaped by the discussion so far. Reply to the person in plain words: the framing, then the waves the dependencies make (wave 1: what starts at once; wave 2: what each waits for; ...) as short lists, then the risks. ${PLAN_RULES}
+Do not change any file.`;
 function createProgram(project, goal) {
   const p = PROJECTS[project]; if (!p) throw new Error(`unknown project ${project}`);
   if (!goal) throw new Error('empty goal');
   const id = newId(); mkdirSync(dir(id), { recursive: true });
-  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'brief', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString() };
+  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'talk', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString() };
   save(t); say(id, 'you', goal);
   enqueue(id, `EPIC ${id} in ${p.repo} (base ${p.base}). You are its coordinator: you plan and track; you never write code. Agents do each piece as its own task and PR (each with its own tests and an independent review); approved PRs merge into ${p.autoMerge ?? p.base}${p.autoMerge ? ' by themselves' : ' when the person merges them'}.
 
 GOAL:
 ${goal}
 
-Read the code you need. Frame it with the "large" playbook: the definition of done for the whole epic, scope, risks. Then plan it.
-Reply to the person in plain words: the framing, then the waves the dependencies make (wave 1: what starts at once; wave 2: what each waits for; ...) as short lists, then the risks. ${PLAN_RULES}
+This is a DISCUSSION first. Read the code you need, then talk it through with the person: propose options and their trade-offs, say what you recommend, and ask the questions that change the answer. Do NOT write a \`\`\`plan block and do not lay out the full task plan yet: the person will tell you when to plan (they write "plan"). Keep replies short and in plain words.
 Do not change any file.`, 'plan', 'start');
   return t;
 }
@@ -503,33 +511,67 @@ function startReady(t) {
   const byKey = Object.fromEntries(t.plan.map((i) => [i.key, i]));
   for (const i of g.ready) {
     const built = i.deps.map((d) => { const k = byKey[d].taskId ? load(byKey[d].taskId) : null; return `- ${byKey[d].title}${k?.pr ? ` (PR #${k.pr.number}, merged)` : ''}`; }).join('\n');
-    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}`, true, { parent: t.id, batch: t.id, title: i.title });
+    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title });
     i.taskId = kid.id;
   }
-  update(t.id, (x) => { x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
+  update(t.id, (x) => { copyIssueFields(t.plan, x.plan ?? []); x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
   say(t.id, 'factory', `[factory] started ${g.ready.length}: ${g.ready.map((i) => `${i.title} (wave ${i.wave})`).join('; ')}. Everything each one depends on has merged.`);
   log('epic.start', { task: t.id, started: g.ready.map((i) => i.key) });
   return progress(t.plan, itemState);
 }
+const openingEpic = new Set(); // programs whose epic issue is being opened: no task starts before it is done
 function approvePlan(t, text) {
   const r = parsePlan(text);
   if (r.error) { say(t.id, 'factory', `[factory] the plan can't start: ${r.error}. Asked the coordinator to fix it.`); enqueue(t.id, `[factory] Your plan block is invalid: ${r.error}. Send the corrected plan. ${PLAN_RULES}`, 'plan', 'person'); return; }
   t.plan = r.tasks; t.phase = 'run'; t.status = 'running'; t.stallNotice = null; save(t);
   const w = Math.max(...t.plan.map((i) => i.wave));
   say(t.id, 'factory', `[factory] plan approved: ${t.plan.length} tasks in ${w} wave${w === 1 ? '' : 's'}. Each starts as soon as what it depends on has merged.`);
-  startReady(t);
+  openingEpic.add(t.id);
+  openEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, goal: messages(t.id)[0]?.text ?? t.title, onEpic: (e) => update(t.id, (x) => { x.epicIssue = e; }) })
+    .then((res) => {
+      if (res.message) say(t.id, 'factory', res.message);
+      if (res.error) log('epic.issue.failed', { task: t.id, error: res.error });
+      update(t.id, (x) => { if (t.epicIssue) x.epicIssue = t.epicIssue; copyIssueFields(x.plan ?? [], t.plan); });
+    })
+    .catch((e) => log('epic.issue.failed', { task: t.id, error: e.message }))
+    .finally(() => {
+      openingEpic.delete(t.id);
+      try { if (!['stopped', 'paused', 'pausing', 'done'].includes(load(t.id).status)) { startReady(load(t.id)); pump(); } }
+      catch (e) { log('epic.start.failed', { task: t.id, error: e.message }); }
+    });
+}
+// Keeps the GitHub epic in step with the plan; only talks to GitHub when the
+// states changed (hash on the task). Soft: a failure is logged, retried next pass.
+const syncingEpic = new Set();
+async function syncEpic(id, done = false) {
+  if (syncingEpic.has(id) || openingEpic.has(id)) return;
+  syncingEpic.add(id);
+  try {
+    const t = load(id);
+    if (!t.epicIssue?.number || !Array.isArray(t.plan)) return;
+    const states = Object.fromEntries(t.plan.map((i) => [i.key, itemState(i)]));
+    if (!done && t.epicClosed && t.plan.every((i) => states[i.key] === 'merged')) done = true; // chat after PROGRAM DONE with no new work: stay closed
+    const sent = new Set((t.epicDropped ?? []).map((p) => p.key)); // what this pass will close
+    const r = await syncEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, states, goal: messages(id)[0]?.text ?? t.title, tasksUrl: `${DASHBOARD}/?task=${id}`, done });
+    // saved either way: sub-issues opened before a failure must not be opened twice.
+    // Only the dropped keys sent to GitHub are cleared, and only on success; a revision saved meanwhile keeps its own.
+    update(id, (x) => { saveIssueFields(x.plan ?? [], t.plan); for (const k of ['epicSyncHash', 'epicClosed']) x[k] = t[k]; if (!r.error) x.epicDropped = (x.epicDropped ?? []).filter((p) => !sent.has(p.key)); });
+    if (r.error) log('epic.sync.failed', { task: id, error: r.error }); else if (r.changed) log('epic.synced', { task: id });
+  } catch (e) { log('epic.sync.failed', { task: id, error: e.message }); }
+  finally { syncingEpic.delete(id); }
 }
 function afterCoordinator(t, mode, from, last, decision) {
   if (decision) { t.status = 'decision needed'; save(t); return pump(); }
-  if (/^\s*PROGRAM DONE\b/m.test(last)) { t.status = 'done'; save(t); return pump(); }
+  if (/^\s*PROGRAM DONE\b/m.test(last)) { t.status = 'done'; save(t); syncEpic(t.id, true); return pump(); }
+  if (t.phase === 'talk') { t.status = 'waiting for you'; save(t); return pump(); } // discussion: never a plan, the person says "plan"
   if (t.phase === 'brief') { t.status = 'waiting for you'; save(t); return pump(); } // the plan waits for "go"
   if (/```plan/.test(last)) { // a revision while it runs: what has started keeps going
     const r = parsePlan(last), m = r.error ? r : mergePlan(t.plan, r.tasks);
     if (m.error) say(t.id, 'factory', `[factory] the revised plan was not applied: ${m.error}. The current plan keeps going.`);
-    else { t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
+    else { t.epicDropped = [...(t.epicDropped ?? []), ...droppedWithIssues(t.plan, m.items)]; t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
   }
   t.status = 'running'; save(t);
-  startReady(t);
+  if (!openingEpic.has(t.id)) { startReady(t); syncEpic(t.id); }
   pump();
 }
 const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
@@ -546,14 +588,18 @@ function announceProgress(t) {
   for (const l of r.lines) say(t.id, 'factory', l);
 }
 async function watchPrograms() {
+  // a finished epic whose issue is still open: the close is retried until it works
+  for (const t of allTasks().filter((x) => x.kind === 'program' && x.status === 'done' && x.epicIssue?.number && !x.epicClosed)) await syncEpic(t.id, true);
   for (const t of allTasks().filter((x) => x.kind === 'program' && x.phase === 'run' && Array.isArray(x.plan) && x.plan.length && !['done', 'stopped', 'decision needed'].includes(x.status))) {
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
     for (const i of t.plan.filter((i) => i.taskId)) { // PR states can change on GitHub (merged, closed by hand)
       const k = load(i.taskId);
       if (k.pr?.state !== 'merged') { const pr = await findPr(k); if (pr && pr.state !== k.pr?.state) { k.pr = pr; if (pr.state === 'merged') k.status = 'merged'; save(k); } }
     }
+    if (openingEpic.has(t.id)) continue;
     announceProgress(t);
     const g = startReady(t);
+    await syncEpic(t.id);
     const status = g.done ? 'verifying' : g.stalled ? 'waiting for you' : `running · ${g.merged}/${g.total} merged`;
     if (t.status !== status) update(t.id, (x) => { x.status = status; });
     if (g.done && !t.finalCheck) {
@@ -610,7 +656,11 @@ function post(id, from, text) {
     return t;
   }
   if (t.kind === 'program') {
-    if (t.phase === 'brief' && /^\s*(go|ok|okay|yes|approved?|start|lgtm)\b/i.test(text)) {
+    if (t.phase === 'talk') {
+      talkReply(t, text, messages(id), { say, save, enqueue, planningPrompt, continuePrompt: (x) => `The person replied: ${x}\n\nContinue the discussion: answer, give options and trade-offs, ask what you still need. Still no \`\`\`plan block: the person will write "plan" when ready.` });
+      return load(id);
+    }
+    if (t.phase === 'brief' && isGoCommand(text)) {
       const last = messages(id).filter((m) => m.from === 'coordinator').at(-1)?.text;
       if (/```plan/.test(last ?? '')) { approvePlan(t, last); return load(id); }
     }

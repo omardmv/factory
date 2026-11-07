@@ -1,0 +1,208 @@
+// node agents/test-epic-issue.mjs
+import assert from 'node:assert/strict';
+import { renderEpicBody, renderSubIssueBody, createEpicIssue, syncEpicIssue, openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged, droppedWithIssues } from './epic-issue.mjs';
+
+let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
+const P = (key, deps, wave) => ({ key, title: `Title ${key}`, task: `do ${key}\nmore`, deps, wave });
+const mkPlan = () => [P('a', [], 1), P('b', ['a'], 2), P('c', ['a'], 2), P('d', ['b', 'c'], 3)];
+
+function fakeGh() {
+  const calls = []; const issues = {}; let next = 10;
+  const gh = async (token, path, method = 'GET', payload) => {
+    assert.equal(token, 'tok'); calls.push({ path, method, payload });
+    let m;
+    if (method === 'POST' && path === '/repos/o/r/issues') { const number = next++; issues[number] = { number, id: 1000 + number, state: 'open', html_url: `https://github.com/o/r/issues/${number}`, ...payload }; return issues[number]; }
+    if (method === 'GET' && (m = path.match(/^\/repos\/o\/r\/issues\/(\d+)$/))) return issues[m[1]];
+    if (method === 'PATCH' && (m = path.match(/^\/repos\/o\/r\/issues\/(\d+)$/))) { Object.assign(issues[m[1]], payload); return issues[m[1]]; }
+    return {};
+  };
+  return { gh, calls, issues };
+}
+
+// rendering
+const plan0 = mkPlan();
+const body = renderEpicBody('Ship the thing', plan0, { a: 'merged', b: 'running' }, { tasksUrl: 'https://x/tasks' });
+assert.match(body, /Ship the thing/);
+assert.match(body, /1\/4 tasks merged/);
+assert.match(body, /\*\*Wave 2\*\* \(in parallel\)/);
+assert.match(body, /\| `d` Title d \| `b`, `c` \| 3 \| ⏳ pending \|/);
+assert.match(body, /\| `a` Title a \| – \| 1 \| ✅ merged \|/);
+assert.match(body, /\[live progress\]\(https:\/\/x\/tasks\)/);
+ok('epic body: goal, progress, waves, build order, table');
+const sub = renderSubIssueBody(plan0[3], 7, plan0);
+assert.match(sub, /Part of epic #7 · wave 3/); assert.match(sub, /Depends on: `b`, `c`/); assert.match(sub, /do d/);
+ok('sub-issue body');
+
+// create: epic first, then sub-issues in plan order, each linked by numeric id
+const f = fakeGh(); const plan = mkPlan();
+const res = await createEpicIssue({ gh: f.gh, token: 'tok', repo: 'o/r', title: 'Epic', goal: 'G', plan });
+assert.equal(res.epic.number, 10); assert.equal(res.epic.url, 'https://github.com/o/r/issues/10');
+assert.deepEqual(Object.keys(res.items), ['a', 'b', 'c', 'd']);
+assert.deepEqual(Object.values(res.items).map((i) => i.number), [11, 12, 13, 14]);
+const creates = f.calls.filter((c) => c.method === 'POST' && c.path === '/repos/o/r/issues');
+assert.deepEqual(creates.map((c) => c.payload.title), ['Epic', 'Title a', 'Title b', 'Title c', 'Title d']);
+const links = f.calls.filter((c) => c.path === '/repos/o/r/issues/10/sub_issues');
+assert.deepEqual(links.map((c) => c.payload.sub_issue_id), [1011, 1012, 1013, 1014]);
+assert.match(f.issues[10].body, /#12/); // numbers appear after creation
+ok('epic created first, then sub-issues in plan order linked by numeric id');
+
+// re-run: nothing created twice
+const before = f.calls.length;
+await syncEpicIssue({ gh: f.gh, token: 'tok', repo: 'o/r', epic: res.epic, goal: 'G', plan, states: {} });
+await syncEpicIssue({ gh: f.gh, token: 'tok', repo: 'o/r', epic: res.epic, goal: 'G', plan, states: {} });
+assert.equal(f.calls.slice(before).filter((c) => c.method === 'POST').length, 0);
+ok('re-running sync creates no duplicates');
+
+// merge closes as completed, once
+const states = { a: 'merged', b: 'failed', c: 'running' };
+await syncEpicIssue({ gh: f.gh, token: 'tok', repo: 'o/r', epic: res.epic, goal: 'G', plan, states });
+assert.deepEqual([f.issues[11].state, f.issues[11].state_reason], ['closed', 'completed']);
+assert.deepEqual([f.issues[12].state, f.issues[12].state_reason], ['closed', 'not_planned']);
+assert.equal(f.issues[13].state, 'open'); assert.equal(f.issues[14].state, 'open');
+assert.match(f.calls.find((c) => c.path.endsWith('/12/comments')).payload.body, /could not finish/);
+assert.match(f.issues[10].body, /1\/4 tasks merged/);
+const mark = f.calls.length;
+await syncEpicIssue({ gh: f.gh, token: 'tok', repo: 'o/r', epic: res.epic, goal: 'G', plan, states });
+assert.equal(f.calls.slice(mark).filter((c) => c.method === 'POST' || c.payload?.state).length, 0);
+ok('merged closes completed; failed closes not_planned with one comment; closing is idempotent');
+
+// a task added to the plan later gets its sub-issue, linked, in order; dropped closes not_planned
+const plan2 = [...plan, P('e', ['d'], 4)];
+const r2 = await syncEpicIssue({ gh: f.gh, token: 'tok', repo: 'o/r', epic: res.epic, goal: 'G', plan: plan2, states: { ...states, c: 'dropped', e: 'pending' } });
+assert.equal(r2.items.e.number, 15); assert.equal(f.issues[15].title, 'Title e');
+assert.equal(f.calls.filter((c) => c.path.endsWith('/10/sub_issues')).length, 5);
+assert.equal(f.issues[13].state_reason, 'not_planned');
+assert.equal(f.issues[11].state_reason, 'completed');
+ok('new plan items get sub-issues; dropped closes not_planned');
+
+// revise then sync: kept items keep their issue, removed ones are closed, nothing is duplicated
+{
+  const { mergePlan } = await import('./plan.mjs');
+  const g = fakeGh(); const pl = mkPlan();
+  const r = await createEpicIssue({ gh: g.gh, token: 'tok', repo: 'o/r', title: 'E', goal: 'G', plan: pl });
+  const rev = mergePlan(pl, [P('a', [], 1), P('b', ['a'], 2), P('x', ['a'], 2)]).items;
+  assert.deepEqual(rev.filter((i) => i.key !== 'x').map((i) => i.issue), [11, 12]);
+  const before = g.calls.filter((c) => c.method === 'POST' && c.path === '/repos/o/r/issues').length;
+  await syncEpicIssue({ gh: g.gh, token: 'tok', repo: 'o/r', epic: r.epic, goal: 'G', plan: rev, previous: pl, states: {} });
+  assert.equal(g.calls.filter((c) => c.method === 'POST' && c.path === '/repos/o/r/issues').length - before, 1); // only x
+  assert.equal(g.issues[13].state_reason, 'not_planned'); assert.equal(g.issues[14].state_reason, 'not_planned'); // c, d removed
+  ok('revise then sync: no duplicates, removed tasks closed not_planned');
+}
+// link failure: retry re-links, never duplicates; epic number survives; failed-then-merged relabelled; no issue for failed-before-open
+{
+  const g = fakeGh(); const pl = mkPlan(); let boom = true;
+  const gh = async (t, p, m, d) => { if (boom && p.endsWith('/sub_issues') && d.sub_issue_id === 1012) throw new Error('rate limit'); return g.gh(t, p, m, d); };
+  let err; try { await createEpicIssue({ gh, token: 'tok', repo: 'o/r', title: 'E', goal: 'G', plan: pl }); } catch (e) { err = e; }
+  assert.equal(err.partial.epic.number, 10);
+  boom = false;
+  await syncEpicIssue({ gh, token: 'tok', repo: 'o/r', epic: err.partial.epic, goal: 'G', plan: pl, states: {} });
+  assert.equal(g.calls.filter((c) => c.path.endsWith('/10/sub_issues')).length, 4);
+  assert.equal(g.calls.filter((c) => c.method === 'POST' && c.path === '/repos/o/r/issues').length, 5);
+  await syncEpicIssue({ gh, token: 'tok', repo: 'o/r', epic: err.partial.epic, goal: 'G', plan: pl, states: { a: 'failed' } });
+  await syncEpicIssue({ gh, token: 'tok', repo: 'o/r', epic: err.partial.epic, goal: 'G', plan: pl, states: { a: 'merged' } });
+  assert.equal(g.issues[11].state_reason, 'completed');
+  const q = [P('z', [], 1)];
+  await syncEpicIssue({ gh, token: 'tok', repo: 'o/r', epic: err.partial.epic, goal: 'G', plan: q, states: { z: 'failed' } });
+  assert.equal(q[0].issue, undefined);
+  ok('link failure retried without duplicates; failed→merged relabelled; over tasks get no issue');
+}
+
+// approval: opens the epic once, stores numbers, says it; failure is soft
+{
+  const g = fakeGh(); const task = { title: 'Epic', plan: mkPlan() };
+  const run = () => openEpicIssue({ gh: g.gh, getToken: async () => 'tok', repo: 'o/r', task, goal: 'G' });
+  const r = await run();
+  assert.equal(task.epicIssue.number, 10); assert.match(task.epicIssue.url, /issues\/10$/);
+  assert.deepEqual(task.plan.map((i) => [i.issue, i.issueId]), [[11, 1011], [12, 1012], [13, 1013], [14, 1014]]);
+  assert.equal(r.message, `[factory] epic issue ${task.epicIssue.url} opened with 4 sub-issues`);
+  const n = g.calls.length; const again = await run();
+  assert.equal(g.calls.length, n); assert.equal(again.message, null);
+  assert.equal(g.calls.filter((c) => c.method === 'POST' && c.path === '/repos/o/r/issues').length, 5);
+  ok('approval opens the epic and sub-issues once, stores numbers, never twice');
+}
+{
+  const t1 = { title: 'Epic', plan: mkPlan() };
+  const r1 = await openEpicIssue({ gh: async () => { throw new Error('boom 502'); }, getToken: async () => 'tok', repo: 'o/r', task: t1, goal: 'G' });
+  assert.equal(r1.error, 'boom 502'); assert.match(r1.message, /could not open the epic issue.*boom 502.*carries on/); assert.equal(t1.epicIssue, undefined);
+  const r2 = await openEpicIssue({ gh: async () => ({}), getToken: async () => { throw new Error('no token'); }, repo: 'o/r', task: { title: 'E', plan: mkPlan() }, goal: 'G' });
+  assert.equal(r2.error, 'no token');
+  const g = fakeGh(); const t3 = { title: 'Epic', plan: mkPlan() };
+  const gh = async (t, p, m, d) => { if (p.endsWith('/sub_issues') && d.sub_issue_id === 1012) throw new Error('rate limit'); return g.gh(t, p, m, d); };
+  const r3 = await openEpicIssue({ gh, getToken: async () => 'tok', repo: 'o/r', task: t3, goal: 'G' });
+  assert.match(r3.error, /rate limit/); assert.equal(t3.epicIssue.number, 10); // epic kept so it is not opened twice
+  ok('a GitHub failure is soft: reported, nothing thrown, partial epic remembered');
+}
+
+{
+  assert.match(refsLine({ issue: 12 }, 'o/r'), /Refs #12/); assert.equal(refsLine({}, 'o/r'), '');
+  const cur = [{ key: 'a' }, { key: 'new' }]; copyIssueFields(cur, [{ key: 'a', issue: 5, issueId: 50 }, { key: 'gone', issue: 6, issueId: 60 }]);
+  assert.deepEqual(cur, [{ key: 'a', issue: 5, issueId: 50 }, { key: 'new' }]);
+  const g = fakeGh(); const saved = []; const t = { title: 'E', plan: mkPlan() };
+  const gh = async (tk, p, m, d) => { if (p.endsWith('/sub_issues') && d.sub_issue_id === 1011) throw new Error('nope'); return g.gh(tk, p, m, d); };
+  const r = await openEpicIssue({ gh, getToken: async () => 'tok', repo: 'o/r', task: t, goal: 'G', onEpic: (e) => saved.push(e) });
+  assert.equal(saved.length, 1); assert.match(r.message, /issues\/10 was opened but not all sub-issues/);
+  ok('Refs line, key-wise issue copy, epic saved right after creation, partial failure names the epic');
+}
+
+{
+  const g = fakeGh(); const task = { title: 'Epic', plan: mkPlan() };
+  await openEpicIssue({ gh: g.gh, getToken: async () => 'tok', repo: 'o/r', task, goal: 'G' });
+  const sync = (states, extra = {}) => syncEpicIfChanged({ gh: g.gh, getToken: async () => 'tok', repo: 'o/r', task, states, goal: 'G', ...extra });
+  let n = g.calls.length;
+  let r = await sync({}); assert.equal(r.changed, true); assert.ok(g.calls.length > n);
+  n = g.calls.length; r = await sync({}); assert.equal(r.changed, false); assert.equal(g.calls.length, n);
+  ok('sync: first pass talks to GitHub, an unchanged pass makes no calls');
+  r = await sync({ a: 'merged', b: 'running' });
+  assert.deepEqual([g.issues[11].state, g.issues[11].state_reason], ['closed', 'completed']);
+  assert.equal(g.issues[12].state, 'open'); assert.match(g.issues[10].body, /1\/4 tasks merged/);
+  n = g.calls.length; await sync({ a: 'merged', b: 'running' }); assert.equal(g.calls.length, n);
+  ok('sync: a merge closes its sub-issue and refreshes the epic body, then goes quiet');
+  await sync({ a: 'merged', b: 'failed', c: 'running' });
+  assert.deepEqual([g.issues[12].state, g.issues[12].state_reason], ['closed', 'not_planned']);
+  assert.ok(g.calls.some((c) => c.path === '/repos/o/r/issues/12/comments'));
+  ok('sync: a failed task gets a comment and closes as not planned');
+  // revision: d dropped (unstarted), e new
+  const before = task.plan; task.plan = [...before.filter((i) => i.key !== 'd'), { ...P('e', ['a'], 2) }];
+  task.epicDropped = droppedWithIssues(before, task.plan);
+  assert.deepEqual(task.epicDropped.map((p) => p.key), ['d']);
+  await sync({ a: 'merged', b: 'failed', c: 'running' });
+  assert.deepEqual([g.issues[14].state, g.issues[14].state_reason], ['closed', 'not_planned']);
+  const e = task.plan.find((i) => i.key === 'e'); assert.ok(e.issue);
+  assert.ok(g.calls.some((c) => c.path === '/repos/o/r/issues/10/sub_issues' && c.payload.sub_issue_id === e.issueId));
+  assert.deepEqual(task.epicDropped, []);
+  n = g.calls.length; await sync({ a: 'merged', b: 'failed', c: 'running' }); assert.equal(g.calls.length, n);
+  ok('sync: a revision adds a sub-issue for the new task, closes the dropped one, then goes quiet');
+  await sync({ a: 'merged', b: 'failed', c: 'merged', e: 'merged' }, { done: true });
+  assert.deepEqual([g.issues[10].state, g.issues[10].state_reason], ['closed', 'completed']);
+  n = g.calls.length; await sync({ a: 'merged', b: 'failed', c: 'merged', e: 'merged' }, { done: true }); assert.equal(g.calls.length, n);
+  ok('sync: the epic closes on PROGRAM DONE');
+}
+{
+  const g = fakeGh(); const task = { title: 'Epic', plan: mkPlan() };
+  await openEpicIssue({ gh: g.gh, getToken: async () => 'tok', repo: 'o/r', task, goal: 'G' });
+  let boom = true;
+  const gh = async (t, p, m, d) => { if (boom && m === 'PATCH') throw new Error('502'); return g.gh(t, p, m, d); };
+  const args = { gh, getToken: async () => 'tok', repo: 'o/r', task, states: { a: 'merged' }, goal: 'G' };
+  const r = await syncEpicIfChanged(args); assert.equal(r.error, '502'); assert.equal(task.epicSyncHash, undefined);
+  boom = false; const r2 = await syncEpicIfChanged(args); assert.equal(r2.changed, true); assert.equal(g.issues[11].state, 'closed');
+  assert.deepEqual(await syncEpicIfChanged({ ...args, getToken: async () => { throw new Error('x'); }, states: { a: 'merged', b: 'running' } }), { changed: false, error: 'x' });
+  assert.deepEqual(await syncEpicIfChanged({ ...args, task: { plan: mkPlan() } }), { changed: false });
+  ok('sync: failures are returned, not thrown, and retried next pass; no epic means no calls');
+}
+
+{
+  // a link fails once: the repair must survive being saved, so later syncs never re-link
+  const g = fakeGh(); const task = { title: 'Epic', plan: mkPlan() };
+  let fail = true;
+  const gh = async (t, p, m, d) => { if (fail && p.endsWith('/sub_issues') && d.sub_issue_id === 1012) { fail = false; throw new Error('rate limit'); } return g.gh(t, p, m, d); };
+  await openEpicIssue({ gh, getToken: async () => 'tok', repo: 'o/r', task, goal: 'G' });
+  const stored = () => JSON.parse(JSON.stringify(task.plan)); // what the server keeps on disk
+  let disk = stored();
+  const pass = async (states) => { const t = { ...task, plan: JSON.parse(JSON.stringify(disk)) }; const r = await syncEpicIfChanged({ gh: g.gh, getToken: async () => 'tok', repo: 'o/r', task: t, states, goal: 'G' }); saveIssueFields(disk, t.plan); Object.assign(task, { epicSyncHash: t.epicSyncHash }); return r; };
+  assert.equal(disk.find((i) => i.key === 'b').linked, false);
+  await pass({ a: 'merged' });
+  assert.equal(disk.find((i) => i.key === 'b').linked, true);
+  const n = g.calls.length; await pass({ a: 'merged', b: 'merged' });
+  assert.equal(g.calls.slice(n).filter((c) => c.path.endsWith('/sub_issues')).length, 0);
+  ok('sync: a repaired link is saved, later syncs do not link again');
+}

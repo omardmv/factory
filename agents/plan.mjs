@@ -64,7 +64,10 @@ export function waves(tasks) {
 // started (has a task id) keeps going, under its key, whatever the new plan says.
 export function mergePlan(current, next) {
   const started = new Map(current.filter((i) => i.taskId).map((i) => [i.key, i]));
-  const merged = next.map((t) => (started.has(t.key) ? { ...t, taskId: started.get(t.key).taskId } : { ...t }));
+  const old = new Map(current.map((i) => [i.key, i]));
+  // a kept key keeps its GitHub sub-issue (issue/issueId/linked) so a revision never opens a second one
+  const gh = (k) => { const o = old.get(k); return o?.issue ? { issue: o.issue, issueId: o.issueId, ...(o.linked === undefined ? {} : { linked: o.linked }) } : {}; };
+  const merged = next.map((t) => ({ ...t, ...gh(t.key), ...(started.has(t.key) ? { taskId: started.get(t.key).taskId } : {}) }));
   for (const [k, i] of started) if (!next.some((t) => t.key === k)) merged.push(i); // dropped from the plan but already running
   const w = waves(merged);
   if (w.error) return { error: w.error };
@@ -125,4 +128,29 @@ export function announcements(items, g, said, linkOf) {
     lines.push(`[factory] wave ${w.wave} done: ${w.items.map(linkOf).join('; ')}. ${g.merged}/${g.total} merged; next: ${next}.`);
   }
   return { lines, said: { merged: [...merged, ...newly.map((i) => i.key)], waves: [...waves, ...fresh.map(waveId)] } };
+}
+
+// A message that tells the coordinator to stop talking and write the plan:
+// "plan", "plan it", "plan:" or "make the plan" at the start, then end of message or ":" / "!" / ".".
+// Not "go" (that approves a plan) and not "Plan B looks better".
+export const isPlanCommand = (text) => /^\s*(?:make\s+(?:the|a)\s+plan|plan(?:\s+it)?)(?:\s+(?:please|now))?\s*(?:[:!.]|$)/i.test(String(text ?? ''));
+// approval of a plan in `brief`
+export const isGoCommand = (text) => /^\s*(go|ok|okay|yes|approved?|start|lgtm)\b/i.test(String(text ?? ''));
+// In `talk` only a bare "go" is special (there is nothing to approve); "yes, the server" is an answer.
+export const isBareGo = (text) => /^\s*go\s*[!.]*\s*$/i.test(String(text ?? ''));
+export const talkAction = (text) => isPlanCommand(text) ? 'plan' : isBareGo(text) ? 'go' : 'talk';
+
+// The reply handler for an epic in `talk`; deps are injected so it can be tested.
+// t: the program; thread: [{from, text}]; d: { say, save, enqueue, planningPrompt, continuePrompt }
+export function talkReply(t, text, thread, d) {
+  const act = talkAction(text);
+  if (act === 'go') { d.say(t.id, 'factory', '[factory] there is no plan yet, so there is nothing to approve. Keep talking, or write "plan" when you want the coordinator to write it.'); return act; }
+  if (act === 'plan') {
+    const past = thread.filter((m) => m.from === 'you' || m.from === 'coordinator').map((m) => `${m.from === 'you' ? 'PERSON' : 'YOU'}: ${m.text}`).join('\n\n').slice(-12000);
+    t.phase = 'brief'; d.save(t);
+    d.enqueue(t.id, d.planningPrompt(`The person asked you to plan: ${text}\n\nTHE DISCUSSION SO FAR:\n${past}`), 'plan', 'person');
+    return act;
+  }
+  d.enqueue(t.id, d.continuePrompt(text), 'plan', 'person');
+  return act;
 }

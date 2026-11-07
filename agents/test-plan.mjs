@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS } from './plan.mjs';
+import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS, isPlanCommand, talkAction, talkReply } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
@@ -77,6 +77,14 @@ const kept = mergePlan(cur, parsePlan(block([T('zones'), T('zone-s2', ['zones'])
 assert.ok(kept.items.some((i) => i.key === 'map1-core' && i.taskId === 'id-map1-core'));
 ok('a started task dropped from the new plan is kept (it is already running)');
 
+// a revision keeps the GitHub sub-issue of a kept key (and of a started task dropped from the plan)
+const withIssue = cur.map((i) => (i.key === 'flag' ? { ...i, issue: 41, issueId: 9041 } : i.key === 'map1-core' ? { ...i, issue: 42, issueId: 9042 } : i));
+const mi = mergePlan(withIssue, parsePlan(block([T('flag'), T('zones', ['flag'])])).tasks);
+assert.deepEqual([mi.items.find((i) => i.key === 'flag').issue, mi.items.find((i) => i.key === 'flag').issueId], [41, 9041]);
+assert.equal(mi.items.find((i) => i.key === 'map1-core').issue, 42);
+assert.equal(mi.items.find((i) => i.key === 'zones').issue, undefined);
+ok('a revised plan keeps sub-issue numbers and ids; new tasks have none yet');
+
 const tricky = 'Plan below.\n```plan\n' + JSON.stringify({ tasks: [T('talk-mode', [], 'talk'), { key: 'docs', title: 'docs', task: 'Explain that the coordinator must NOT emit a ```plan block yet, and show ``` fences in docs', depends_on: ['talk-mode'] }] }) + '\n```\nThat is all.';
 const tp = parsePlan(tricky);
 assert.ok(!tp.error, tp.error); assert.equal(tp.tasks.length, 2); assert.equal(tp.tasks[1].wave, 2);
@@ -137,5 +145,20 @@ const aR = announcements(w1r, progress(w1r, (i) => stR[i.key]), sA, lk);
 assert.match(aR.lines.at(-1), /wave 1 done: a; b; e\. 3\/4 merged; next: c\./);
 assert.deepEqual(announcements(w1r, progress(w1r, (i) => stR[i.key]), aR.said, lk).lines.filter((l) => /wave/.test(l)), []);
 ok('announcements: a wave that gains a task is announced again once, when the new task merges; "next" only names what can start');
+
+for (const y of ['plan', 'Plan it', 'plan:', 'plan it!', 'make the plan', '  Make a plan please', 'PLAN!']) assert.ok(isPlanCommand(y), y);
+for (const x of ['go', 'planning is hard', 'what is the plan?', 'I would not plan yet', 'Plan B looks better', 'plan it later', 'plans', '', null]) assert.ok(!isPlanCommand(x), String(x));
+ok('isPlanCommand: plan / plan it / plan: / make the plan at the start, not go or other words');
+
+// the real talk handler, with injected deps
+const prog = { id: 'e1', phase: 'talk' }, sent = [], notes = [], thread = [{ from: 'you', text: 'goal' }, { from: 'coordinator', text: 'Server or bot?' }];
+const deps = { say: (id, f, x) => notes.push(x), save: () => {}, enqueue: (id, p, m, f) => sent.push(p), planningPrompt: (n) => 'PLAN:' + n, continuePrompt: (x) => 'TALK:' + x };
+const seq = ['yes, the server, and keep it small', 'ok but small', 'go', 'Plan B looks better', 'plan it'].map((m) => `${m} -> ${talkReply(prog, m, thread, deps)} (${prog.phase})`);
+console.log(seq.join('\n'));
+assert.deepEqual(sent.map((s) => s.slice(0, 5)), ['TALK:', 'TALK:', 'TALK:', 'PLAN:']);
+assert.equal(notes.length, 1); assert.match(notes[0], /no plan yet/);
+assert.match(sent[3], /Server or bot\?/);
+assert.deepEqual(seq.map((l) => l.split('(').pop()), ['talk)', 'talk)', 'talk)', 'talk)', 'brief)']);
+ok('talk handler: "yes, ..." and "ok but" reach the coordinator, bare go approves nothing, "Plan B" is not a command, "plan it" sets brief and sends the discussion');
 
 console.log(`all ${n} passed`);
