@@ -11,4 +11,11 @@ if [ -n "${REPO:-}" ] && [ ! -d /workspace/repo/.git ]; then
   git -C /workspace/repo checkout -q -b "agent/$TASK_ID" "origin/${BASE:-main}"
 fi
 cd /workspace/repo 2>/dev/null || cd /workspace
+# the factory's chosen plugins (FACTORY_PLUGINS, from brain/claude/plugins.json):
+# each one this image has is loaded with --plugin-dir
+if [ "${1:-}" = claude ] && [ -n "${FACTORY_PLUGINS:-}" ]; then
+  for p in $(printf '%s' "$FACTORY_PLUGINS" | tr ',' ' '); do
+    [ -d "/opt/claude-plugins/$p" ] && set -- "$@" --plugin-dir "/opt/claude-plugins/$p"
+  done
+fi
 exec "$@"

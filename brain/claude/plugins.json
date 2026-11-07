@@ -1,0 +1,15 @@
+{
+  "note": "Claude Code plugins every agent loads (reviewers and QA too). Each must exist in the agent image (agents/image/plugins/assemble.sh, from claude-plugins-official). Removing one here takes effect on the next run; adding a new one needs it in the image first. A change here is a safety-gate change: it lands with the founder's approval.",
+  "plugins": [
+    "playwright",
+    "code-review",
+    "pr-review-toolkit",
+    "security-guidance",
+    "frontend-design",
+    "feature-dev",
+    "code-simplifier",
+    "claude-md-management",
+    "pyright-lsp",
+    "typescript-lsp"
+  ]
+}
