@@ -16,6 +16,7 @@
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
+import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
@@ -748,9 +749,9 @@ function post(id, from, text) {
 // words against each project's "about" and names one project, or says unsure.
 // Callers ask the person whenever it is unsure or fails.
 // one-shot haiku call in a throwaway container (no repo, no tools): the model's text
-async function oneShot(prompt, timeoutMs = 90000) {
+async function oneShot(prompt, timeoutMs = 90000, model = CLASSIFY_MODEL) {
   const args = ['run', '--rm', '--network', NETWORK, '--memory', '1g', '--cpus', '1', '--security-opt', 'no-new-privileges:true', '-e', 'CLAUDE_CODE_OAUTH_TOKEN',
-    ...(RUNTIME ? ['--runtime', RUNTIME] : []), IMAGE, 'claude', '-p', prompt, '--model', CLASSIFY_MODEL, '--max-turns', '1', '--output-format', 'json', '--disallowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task'];
+    ...(RUNTIME ? ['--runtime', RUNTIME] : []), IMAGE, 'claude', '-p', prompt, '--model', model, '--max-turns', '1', '--output-format', 'json', '--disallowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task'];
   const out = await new Promise((resolve) => {
     const child = spawn('docker', args, { env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') }, stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = ''; child.stdout.on('data', (c) => { buf += c; });
@@ -933,9 +934,31 @@ for (const a of BIND) createServer(handler).listen(PORT, a, () => log('listening
   }
 }
 pickup();
+// ---------- the stuck doctor (decisions in doctor.mjs): a task that gave up, or that the watchdog
+// escalated, gets one diagnosis from its history: cause, evidence, fix, who acts. Diagnosis only.
+const DOCTOR_MODEL = process.env.DOCTOR_MODEL ?? 'sonnet';
+let doctoring = null;
+async function doctorSweep() {
+  if (doctoring || drain.draining) return;
+  const t = allTasks().find((x) => needsDoctor(x));
+  if (!t) return;
+  const key = needsDoctor(t);
+  update(t.id, (x) => { x.doctorKey = key; }); // marked first: a failed diagnosis is not retried in a loop
+  doctoring = t.id;
+  try {
+    const rows = decisions(t.id).map((r) => Object.values(r).join('\t')).join('\n');
+    const out = await oneShot(doctorPrompt(t, messages(t.id), rows), 180000, DOCTOR_MODEL);
+    const d = parseDiagnosis(out);
+    say(t.id, 'factory', doctorMessage(d), { ping: true, doctor: true });
+    log('doctor.done', { task: t.id, category: d?.category ?? null, who: d?.who ?? null });
+  } catch (e) { log('doctor.failed', { task: t.id, error: e.message }); }
+  finally { doctoring = null; }
+}
+
 const poll = () => drain.draining ? Promise.resolve() : intake().catch((e) => log('intake.failed', { error: e.message }))
   .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
-  .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }));
+  .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }))
+  .then(() => { doctorSweep(); }); // in the background: a diagnosis takes a minute, the poll does not wait
 // ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
 const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);
 const NUDGE_PROMPT = '[factory] Nudge: the factory saw no progress on this task for a while. Check `git status`, your decision log, your PR and its checks, then carry on with what you were doing. If you are blocked, say exactly on what.';
