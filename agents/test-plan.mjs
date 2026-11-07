@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS } from './plan.mjs';
+import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, isPlanCommand, talkAction, talkReply } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
@@ -84,5 +84,20 @@ assert.match(parsePlan('```plan\n{"tasks": []').error, /not closed/);
 const two = parsePlan('old:\n```plan\n' + JSON.stringify({ tasks: [T('old')] }) + '\n```\nnew:\n```plan\n' + JSON.stringify({ tasks: [T('new')] }) + '\n```');
 assert.equal(two.tasks[0].key, 'new');
 ok('fences inside task text are ignored; an unclosed block is refused; the last block wins');
+
+for (const y of ['plan', 'Plan it', 'plan:', 'plan it!', 'make the plan', '  Make a plan please', 'PLAN!']) assert.ok(isPlanCommand(y), y);
+for (const x of ['go', 'planning is hard', 'what is the plan?', 'I would not plan yet', 'Plan B looks better', 'plan it later', 'plans', '', null]) assert.ok(!isPlanCommand(x), String(x));
+ok('isPlanCommand: plan / plan it / plan: / make the plan at the start, not go or other words');
+
+// the real talk handler, with injected deps
+const prog = { id: 'e1', phase: 'talk' }, sent = [], notes = [], thread = [{ from: 'you', text: 'goal' }, { from: 'coordinator', text: 'Server or bot?' }];
+const deps = { say: (id, f, x) => notes.push(x), save: () => {}, enqueue: (id, p, m, f) => sent.push(p), planningPrompt: (n) => 'PLAN:' + n, continuePrompt: (x) => 'TALK:' + x };
+const seq = ['yes, the server, and keep it small', 'ok but small', 'go', 'Plan B looks better', 'plan it'].map((m) => `${m} -> ${talkReply(prog, m, thread, deps)} (${prog.phase})`);
+console.log(seq.join('\n'));
+assert.deepEqual(sent.map((s) => s.slice(0, 5)), ['TALK:', 'TALK:', 'TALK:', 'PLAN:']);
+assert.equal(notes.length, 1); assert.match(notes[0], /no plan yet/);
+assert.match(sent[3], /Server or bot\?/);
+assert.deepEqual(seq.map((l) => l.split('(').pop()), ['talk)', 'talk)', 'talk)', 'talk)', 'brief)']);
+ok('talk handler: "yes, ..." and "ok but" reach the coordinator, bare go approves nothing, "Plan B" is not a command, "plan it" sets brief and sends the discussion');
 
 console.log(`all ${n} passed`);
