@@ -50,7 +50,9 @@ const ARTIFACTS = process.env.ARTIFACTS_DIR ?? '/srv/factory/artifacts';
 const INTAKE_LABEL = process.env.INTAKE_LABEL ?? 'ready-for-agent';
 const TRIAGE_LABEL = process.env.TRIAGE_LABEL ?? 'needs-triage';
 const POLL_EVERY_S = Number(process.env.INTAKE_EVERY_S ?? 120);
-const PROJECTS = JSON.parse(readFileSync(new URL('./projects.json', import.meta.url), 'utf8'));
+// the projects this factory serves: box config, not part of the repo (see projects.example.json)
+const PROJECTS_FILE = process.env.PROJECTS_FILE ?? `${SECRETS}/projects.json`;
+const PROJECTS = JSON.parse(readFileSync(PROJECTS_FILE, 'utf8'));
 // the factory's brain (brain/ in this repo): role prompts, playbooks,
 // knowledge and skills. Read on every run, so a merged brain change applies to
 // the next run without a restart. Knowledge and skills are mounted read-only
@@ -400,7 +402,7 @@ Other reviewers look at this PR from other angles at the same time; stay on your
 
 // ---------- auto-merge: only the reviewed head, only into the configured branch ----------
 // projects.json "autoMerge": the one branch this project may merge into by
-// itself (contentcoach: dev = staging; never main). GitHub's sha lock refuses
+// itself (e.g. a project whose staging deploys from `dev`: dev, never main). GitHub's sha lock refuses
 // the merge if anything was pushed after the review; branch protection (dev's
 // required checks) still applies. Refused merges retry on the next polls,
 // then go back to the person.
@@ -752,6 +754,8 @@ const handler = async (req, res) => {
     if (url.pathname === '/health') return send(200, { ok: true, running: running.size, queued: queue.length });
     if (!authOk(req)) return send(401, { error: 'unauthorized' });
     if (url.pathname === '/digest' && req.method === 'GET') return send(200, await digest(Number(url.searchParams.get('hours') ?? 24)));
+    // names and repos only: never the GitHub App ids or key files
+    if (url.pathname === '/projects' && req.method === 'GET') return send(200, Object.entries(PROJECTS).map(([name, p]) => ({ name, about: p.about ?? '', repo: p.repo, base: p.base, autoMerge: p.autoMerge ?? null })));
     if (url.pathname === '/classify' && req.method === 'POST') { const b = await body(req); return send(200, await classify(String(b.text ?? ''))); }
     if (url.pathname === '/programs' && req.method === 'POST') { const b = await body(req); return send(201, createProgram(b.project, String(b.goal ?? '').trim(), b.attachments)); }
     // a batch: independent tasks, each run without a brief to a reviewed PR

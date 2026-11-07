@@ -1,9 +1,8 @@
 // Live browser sessions for agents (the e2e MCP server's open_session with
 // config: <this file>). Model-free: no `agents` key, so nothing here spends.
-//   staging  - https://staging.contentcoach.org/app
-//   preview  - opens the factory gateway; navigate to any
-//              https://<feature>-pr<N>.contentcoach.org/app from there. The
-//              preview password answers every basic-auth challenge.
+//   staging  - the project's staging app (FACTORY_STAGING_URL)
+//   preview  - a PR preview (FACTORY_PREVIEW_URL); navigate within it from
+//              there. The preview password answers every basic-auth challenge.
 // Sign in by navigating to the URL `factory login <target>` prints.
 import type { E2EConfig } from 'e2e';
 import { web } from '@e2e-dev/web';
@@ -25,12 +24,12 @@ export default {
     {
       name: 'staging',
       engine: web(),
-      app: { url: 'https://staging.contentcoach.org/app', environment: 'staging' },
+      app: { url: process.env.FACTORY_STAGING_URL ?? 'about:blank', environment: 'staging' },
     },
     {
       name: 'preview',
       engine: web({ basicAuth: { username: 'factory', password: previewPassword() } }),
-      app: { url: process.env.FACTORY_PREVIEW_URL ?? 'https://hello-pr0.contentcoach.org/', environment: 'staging' },
+      app: { url: process.env.FACTORY_PREVIEW_URL ?? 'about:blank', environment: 'staging' },
     },
   ],
 } satisfies E2EConfig;

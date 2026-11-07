@@ -1,10 +1,10 @@
 // The factory in Slack: one channel per task. Socket Mode (outbound only, no
 // public endpoint), answers only its paired owner, talks to factory-agents.
 //  - create a channel and write your idea in it: that is the task. The
-//    channel name can pick the project (sayra-… / factory-…); otherwise the
+//    channel name can pick the project (<project>-…); otherwise the
 //    factory works it out from the words and asks with buttons when unsure
 //  - or DM the bot: a plain message starts a task in a new channel; "queue:",
-//    "bug:", "epic:" (or "program:") as on Telegram ("sayra:" / "factory:" picks the project)
+//    "bug:", "epic:" (or "program:") as on Telegram ("<project>:" picks the project)
 //  - tasks from issues, queues and programs get their own channel too
 //  - everything you write in a task's channel goes to that task; briefs and
 //    plans get a Go button; an epic starts in a discussion with a Plan it button
@@ -24,8 +24,21 @@ const FACTS = process.env.FACTS_FILE ?? '/srv/factory/state/status.json';
 const DASHBOARD = process.env.DASHBOARD ?? 'https://factory.contentcoach.org';
 const PUSH_EVERY_MS = Number(process.env.PUSH_EVERY_MS ?? 15000);
 // project -> channel-name prefixes (the first is used for channels the bot makes)
-const PROJECTS = { factory: ['factory'], sayra: ['sayra'] };
-const NAMES = Object.keys(PROJECTS).join('|');
+// the projects come from the factory (GET /projects), refreshed every few
+// minutes: adding a project is a box config change, never a code change here
+export let PROJECTS = { factory: ['factory'] };
+let NAMES = 'factory';
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export function setProjects(list) {
+  const names = (Array.isArray(list) ? list : []).map((p) => String(p?.name ?? '').toLowerCase()).filter((n) => /^[a-z0-9][a-z0-9_-]{0,30}$/.test(n));
+  if (!names.length) return PROJECTS;
+  PROJECTS = Object.fromEntries(names.map((n) => [n, [n]]));
+  NAMES = names.map(escRe).join('|');
+  return PROJECTS;
+}
+export async function loadProjects() {
+  try { return setProjects(await agents('/projects')); } catch (e) { log('projects.error', { error: e.message }); return PROJECTS; }
+}
 const secret = (n) => readFileSync(`${SECRETS}/${n}`, 'utf8').trim();
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
 
@@ -200,10 +213,10 @@ async function archiveIfFinished(t) {
 }
 
 // ---- incoming
-const HELP = `*What I understand*
-• create a channel and write your idea: that's the task (name it \`sayra-…\` or \`factory-…\` to pick the project, or I'll work it out and ask if unsure)
-• or DM me: a plain message starts a task in a new channel (I work out the project from your words and ask if unsure; \`sayra:\` / \`factory:\` at the start picks it)
-• \`queue:\` + one task per line · \`bug:\` + what's wrong · \`epic:\` + a big goal: you talk it through with the coordinator, press Plan it (or write plan) and it plans every task with what it depends on, then press Go; unrelated tasks run in parallel (add the project, e.g. \`epic sayra:\`)
+const help = () => `*What I understand* (projects: ${Object.keys(PROJECTS).map((p) => `\`${p}\``).join(', ')})
+• create a channel and write your idea: that's the task (name it \`<project>-…\` to pick the project, or I'll work it out and ask if unsure)
+• or DM me: a plain message starts a task in a new channel (I work out the project from your words and ask if unsure; \`<project>:\` at the start picks it)
+• \`queue:\` + one task per line · \`bug:\` + what's wrong · \`epic:\` + a big goal: you talk it through with the coordinator, press Plan it (or write plan) and it plans every task with what it depends on, then press Go; unrelated tasks run in parallel (add the project, e.g. \`epic <project>:\`)
 • in a task's channel, everything you write goes to the agent; Go starts a brief or a plan; Plan it ends an epic discussion
 • \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`help\` anywhere`;
 
@@ -265,7 +278,7 @@ export async function onMessage(ev) {
     if (state.pairing && code.length === state.pairing.length && timingSafeEqual(Buffer.from(code), Buffer.from(state.pairing))) {
       state.owner = ev.user; state.dm = ev.channel; delete state.pairing; persist();
       log('paired', { owner: ev.user });
-      return post(ev.channel, `Paired.\n\n${HELP}`);
+      return post(ev.channel, `Paired.\n\n${help()}`);
     }
     return; // silent to strangers
   }
@@ -299,7 +312,7 @@ async function onDm(text, files = []) {
   const kind = q ? 'queue' : k ? (k[1].toLowerCase() === 'epic' ? 'program' : k[1].toLowerCase()) : 'task';
   const project = (q?.[1] ?? k?.[2] ?? m?.[1])?.toLowerCase() ?? null;
   const rest = (q ? text.slice(q[0].length) : k ? text.slice(k[0].length) : m ? text.slice(m[0].length) : text).trim();
-  if (!rest && !(files.length && kind !== 'queue')) return kind === 'queue' ? dm('A queue is one task per line:\n```queue:\n- make the Save button sticky on phones\n- fix the login redirect```') : dm(HELP);
+  if (!rest && !(files.length && kind !== 'queue')) return kind === 'queue' ? dm('A queue is one task per line:\n```queue:\n- make the Save button sticky on phones\n- fix the login redirect```') : dm(help());
   return project ? begin(kind, project, rest, undefined, '', kind === 'queue' ? [] : files) : resolve(kind, rest, undefined, kind === 'queue' ? [] : files);
 }
 
@@ -327,7 +340,7 @@ export async function onCommand(p) {
     const tasks = (await agents('/tasks')).filter((t) => !finished(t)).slice(0, 15);
     return { text: tasks.length ? tasks.map((t) => `• \`${t.id}\` ${esc(short(t.title))} · ${t.status}${state.taskChannel[t.id] ? ` · <#${state.taskChannel[t.id]}>` : ''}`).join('\n') : 'No active tasks.' };
   }
-  return { text: HELP };
+  return { text: help() };
 }
 
 export async function onAction(p) {
@@ -447,6 +460,7 @@ function connect() {
 }
 
 export async function prime() {
+  await loadProjects();
   // first run: no channels for history, only for tasks that start from now on
   if (state.primed) return;
   try { for (const t of await agents('/tasks')) { state.skip[t.id] = true; state.sent[t.id] = (await agents(`/tasks/${t.id}`)).messages.length; } } catch (e) { log('prime.error', { error: e.message }); return; }
@@ -459,6 +473,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   state.lastDigest ??= new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10); persist();
   setInterval(() => pushUpdates().catch((e) => log('push.error', { error: e.message })), PUSH_EVERY_MS);
   setInterval(morning, 60000);
+  setInterval(() => loadProjects(), 5 * 60000);
   log('started', { paired: !!state.owner });
   connect();
 }

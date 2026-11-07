@@ -6,7 +6,7 @@ let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
 const T = (key, deps = [], title) => ({ key, title: title ?? key, task: `do ${key}`, depends_on: deps });
 
-// the Endless Horde shape: a flag first, then parallel work, zones in order
+// a game-epic shape: a flag first, then parallel work, zones in order
 const horde = [T('flag'), T('map1-core', ['flag']), T('late-join', ['map1-core']), T('admin-panel', ['map1-core']),
   T('leaderboard', ['map1-core']), T('fence', ['map1-core']), T('zones', ['flag']), T('zone-s2', ['zones']),
   T('zone-s3', ['zone-s2']), T('zone-s4', ['zone-s3']), T('zone-s1', ['zone-s4']), T('balance', ['leaderboard', 'zone-s1'])];
