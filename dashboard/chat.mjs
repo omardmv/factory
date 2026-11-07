@@ -2,11 +2,11 @@
 // project, with each task's PR / preview / e2e pinned on top. Talks to
 // factory-agents server-side; the browser never sees its token.
 import { readFileSync } from 'node:fs';
-import { shipped, deploys, openPrs } from './github.mjs';
 
 const AGENTS = process.env.AGENTS_API ?? 'http://172.24.0.1:19300';
 const ARTIFACTS = process.env.ARTIFACTS_DIR ?? '/srv/factory/artifacts';
-const PREVIEW = { contentcoach: { prefix: 'cc', host: (n) => `https://pr${n}.contentcoach.org` } };
+// projects whose PRs get a preview: { <project>: { prefix, host: (pr) => url } } (none right now)
+const PREVIEW = {};
 const token = () => readFileSync(`${process.env.SECRETS_DIR ?? '/run/factory'}/agents-token`, 'utf8').trim();
 
 export async function agents(path, init = {}) {
@@ -49,11 +49,9 @@ const quick = (id) => `<form method="post" action="/t/${id}/reply" class="qa"><i
 
 async function overview(tasks, healthy) {
   let facts = {}; try { facts = JSON.parse(readFileSync(`${STATE}/status.json`, 'utf8')); } catch {}
-  const [prs, ship, dep] = await Promise.all([settle(openPrs()), settle(shipped()), settle(deploys())]);
   const working = tasks.filter((t) => t.running);
   const needYou = tasks.filter((t) => !t.running && NEEDS_YOU.includes(t.status));
-  const live = Array.isArray(prs) ? prs : [];
-  const head = `<div class="big">${working.length} agent${working.length === 1 ? '' : 's'} working · ${needYou.length} waiting for you · ${live.length} preview${live.length === 1 ? '' : 's'} live</div>
+  const head = `<div class="big">${working.length} agent${working.length === 1 ? '' : 's'} working · ${needYou.length} waiting for you</div>
     <div class="hint">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● the factory needs a look</span>'} · disk ${facts.disk_used_pct ?? '?'}% · data snapshot ${(facts.snapshots ?? []).map((x) => { const t = (x.note.match(/taken (\S+)/) ?? [])[1]; return t ? ago(t) + ' old' : '?'; }).join(', ')} · <a href="/health">health →</a> <a class="back" href="/?list=1">· all tasks →</a></div>`;
 
   const needs = needYou.map((t) => card(`<b>${esc(t.title)}</b><div class="hint">${esc(t.project)} · ${t.phase === 'brief' ? 'brief ready' : 'stopped, needs you'} · ${ago(t.updatedAt)}</div>
@@ -61,22 +59,9 @@ async function overview(tasks, healthy) {
 
   const work = working.map((t) => card(`<span class="dot live"></span> <b>${esc(t.title)}</b><div class="hint">${esc(t.project)}${t.pr ? ` · PR #${t.pr.number}` : ''}${t.lastActivity ? ` · ${esc(t.lastActivity.tool)}: ${esc(t.lastActivity.detail)} · ${ago(t.lastActivity.at)} ago` : ''}</div>`, `/?task=${t.id}`, 'open chat →')).join('') || '<div class="hint pad">No agent is working right now. <a href="/?task=new">Start one →</a></div>';
 
-  const previews = live.map((p) => {
-    const e = e2eFor('contentcoach', p.number), host = PREVIEW.contentcoach.host(p.number);
-    const agentTask = p.branch.startsWith('agent/') ? p.branch.slice(6) : null;
-    return card(`<b>#${p.number}</b> ${esc(p.title)}<div class="hint">${esc(p.author ?? '')} · ${ago(p.at)} · ${e ? (e.failed ? `❌ e2e ${e.failed} failed` : `✅ e2e ${e.passed}`) : 'no e2e yet'}</div>
-      <div class="row links"><a href="${host}/app/" target="_blank">open</a><a href="${host}/_factory/login" target="_blank">sign in</a><a href="${host}/_factory/" target="_blank">videos</a>${agentTask ? `<a href="/?task=${agentTask}">agent chat</a>` : ''}</div>`, p.url, 'PR on GitHub →', true);
-  }).join('') || `<div class="hint pad">${prs?.error ? esc(prs.error) : 'No open pull requests.'}</div>`;
-
-  const shippedHtml = Array.isArray(ship) && ship.length ? ship.slice(0, 8).map((p) => `<li><a href="${p.url}" target="_blank">#${p.number} ${esc(p.title)}</a> <span class="hint">· ${esc(p.author ?? '')} · ${ago(p.at)} ago</span></li>`).join('') : `<li class="hint">${ship?.error ? esc(ship.error) : 'Nothing merged this week.'}</li>`;
-  const depHtml = Array.isArray(dep) && dep.length ? dep.map((d) => `<li>${d.status !== 'completed' ? '<span class="dot live"></span>' : d.conclusion === 'success' ? '✅' : d.conclusion === 'cancelled' ? '⏹' : '❌'} <b>${d.env}</b> <a href="${d.url}" target="_blank">${esc(d.title)}</a> <span class="hint">· ${d.sha} · ${ago(d.at)} ago</span></li>`).join('') : `<li class="hint">${dep?.error ? esc(dep.error) : 'No deploys found.'}</li>`;
-
   return `<div class="overview">${head}
     <h3>Needs you</h3>${needs}
     <h3>Agents at work</h3>${work}
-    <h3>Live previews</h3><div class="grid2">${previews}</div>
-    <div class="grid2"><div><h3>Shipped to dev · 7 days</h3><ul class="list">${shippedHtml}</ul><a class="more" href="https://github.com/contentcoach/contentcoach/pulls?q=is%3Apr+is%3Amerged+base%3Adev" target="_blank">all merged →</a></div>
-    <div><h3>Deploys</h3><ul class="list">${depHtml}</ul><a class="more" href="https://github.com/contentcoach/contentcoach/actions" target="_blank">all runs →</a></div></div>
   </div>`;
 }
 
@@ -120,7 +105,7 @@ export async function chatView({ taskId, healthy, list = false }) {
   let tasks = [], task = null, err = '';
   try { tasks = await agents('/tasks'); if (taskId && taskId !== 'new') task = await agents(`/tasks/${encodeURIComponent(taskId)}`); }
   catch (e) { err = e.message; }
-  const projects = [...new Set(['contentcoach', 'factory', ...tasks.map((t) => t.project)])];
+  const projects = [...new Set(['factory', 'sayra', ...tasks.map((t) => t.project)])];
   const side = projects.map((p) => {
     const ts = tasks.filter((t) => t.project === p);
     if (!ts.length) return '';
@@ -152,7 +137,7 @@ export async function chatView({ taskId, healthy, list = false }) {
     main = `<div class="msgs"><div class="empty"><a href="/?list=1" class="hint back" style="font-size:12px">← tasks</a><h2 style="font-weight:500">New task</h2>
       <p class="hint">Describe what you want. The agent replies once with questions (if any), a plan and what "done" means. After your "go" it works until its PR is green, without asking.</p>
       <form method="post" action="/tasks" class="card" style="text-align:left">
-        <select name="project">${['contentcoach', 'factory'].map((p) => `<option>${p}</option>`).join('')}</select>
+        <select name="project">${['factory', 'sayra'].map((p) => `<option>${p}</option>`).join('')}</select>
         <select name="kind"><option value="change">a change</option><option value="report">a bug report (triage)</option><option value="program">a program (phases of PRs)</option></select>
         <textarea name="text" required style="width:100%;min-height:110px;margin:10px 0;font:inherit;padding:9px;border:1px solid #d3d1c7;border-radius:10px" placeholder="e.g. Make the schedule sheet's Save button stay visible on phones"></textarea>
         <label class="hint" style="display:block;margin-bottom:12px"><input type="checkbox" name="auto">skip the brief, start right away</label><button>Start</button></form>

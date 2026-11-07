@@ -1,8 +1,4 @@
 {
-  "contentcoach": {
-    "repo": "contentcoach/contentcoach", "base": "dev", "checks": "preview", "qa": true, "autoMerge": "dev", "mergeMethod": "merge",
-    "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, private, owned by the contentcoach org (on hold: left on its own app)" }
-  },
   "sayra": {
     "repo": "AzizbekLive/conversation-bot", "base": "staging", "autoMerge": "staging", "mergeMethod": "squash",
     "githubApp": { "id": "5649406", "key": "github-app-factory.pem" }

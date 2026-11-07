@@ -12,9 +12,15 @@ Design: [docs/spec.md](docs/spec.md).
 
 ## Projects
 
-| Project | Repo | Previews | Prefix |
+| Project | Repo | Base (auto-merge) | Previews |
 | --- | --- | --- | --- |
-| contentcoach | contentcoach/contentcoach | `pr<N>.contentcoach.org` (Coolify, `preview.compose.yaml` in the repo) | `cc` |
+| sayra | AzizbekLive/conversation-bot | `staging` | none yet |
+| factory | omardmv/factory | `main` | none |
+
+ContentCoach (`contentcoach/contentcoach`) was retired from the factory on
+2026-11-07: no agents, previews, snapshot or runners. Its production and
+staging still run on the box, outside the factory. `git log -- projects/contentcoach`
+has its preview setup, as the worked example of a project with previews.
 
 A project is a folder in `projects/`: `project.sh` (domain, prefix, repo,
 how to build, how to run e2e, where its data comes from), its
@@ -110,10 +116,10 @@ Telegram at 08:00 Tashkent (`/digest` any time).
 
 **Auto-merge** (`autoMerge` in `agents/projects.json`): when the whole panel
 passes, the factory merges the PR itself, but only into that one branch
-(contentcoach: `dev`, i.e. staging; the factory: `main`), only at the exact
+(Sayra: `staging`; the factory: `main`), only at the exact
 head the panel reviewed (GitHub's sha lock), and only through the branch's
-own protection (dev's required checks). A refused merge retries for about
-20 minutes, then waits for you. contentcoach `main` (production) is never
+own protection (its required checks, if any). A refused merge retries for about
+20 minutes, then waits for you. A project's production branch is never
 merged by the factory: it keeps the staging sign-off. Self-update refuses a
 factory commit whose shell, JavaScript or projects.json does not parse.
 

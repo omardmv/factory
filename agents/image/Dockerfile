@@ -1,6 +1,6 @@
-# One factory agent's workspace: Claude Code headless plus what ContentCoach's
-# local test stack needs (Node, Python + uv, Postgres 16 + pgvector, Chromium
-# via the Playwright base). Runs as the unprivileged user `agent`.
+# One factory agent's workspace: Claude Code headless plus a general Node and
+# Python toolchain (Python + uv, Postgres 16 + pgvector for local test
+# databases, Chromium via the Playwright base). Runs as the unprivileged user `agent`.
 FROM mcr.microsoft.com/playwright:v1.63.0-noble
 
 ENV DEBIAN_FRONTEND=noninteractive

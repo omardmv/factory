@@ -1,6 +1,8 @@
 # Factory: design spec
 
-Status: draft, 2026-10-13. First user: ContentCoach (`contentcoach/contentcoach`).
+Status: draft, 2026-10-13. First user: ContentCoach (`contentcoach/contentcoach`),
+retired from the factory 2026-11-07; the design stays as the reference for
+projects with previews.
 
 ## Goal
 

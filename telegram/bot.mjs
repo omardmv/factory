@@ -1,7 +1,7 @@
 // @omarfactory_bot: the factory on your phone. Long-polls Telegram (no public
 // endpoint), answers only its paired owner, and talks to factory-agents.
-//  - a plain message starts a task ("factory: ..." for the factory repo;
-//    ContentCoach by default); the brief comes back here
+//  - a plain message starts a task ("sayra: ..." for Sayra; the factory by
+//    default); the brief comes back here
 //  - replying to a task's message continues that task ("go", answers)
 //  - new agent / [factory] messages are pushed to you
 //  - "queue:" + one task per line starts a batch: every item runs without a
@@ -72,14 +72,14 @@ async function sendHtml(text, taskId) {
   persist();
 }
 const HELP = `<b>What I understand</b>
-• a plain message starts a task (brief first). Prefix <code>factory:</code> for the factory repo
+• a plain message starts a factory task (brief first). Prefix <code>sayra:</code> for Sayra
 • <code>queue:</code> + one task per line: a batch, no briefs, one summary at the end
 • <code>bug:</code> + what's wrong: triage, reproduce, file the issue (the fix starts by itself if it's clear)
 • <code>program:</code> + a big goal: a plan in phases of PRs; reply "go"
 • reply to a task's message to answer it; ❓ waits for your choice
 • reply <code>/pause</code>, <code>/resume</code> or <code>/stop</code> to a task's message
 • <code>/digest</code> the summary (it also comes at 08:00) · <code>/tasks</code> · <code>/status</code> · <code>/help</code>
-Projects: contentcoach (default) or factory, e.g. <code>bug factory:</code> or <code>program factory:</code>.`;
+Projects: factory (default) or sayra, e.g. <code>bug sayra:</code> or <code>program sayra:</code>.`;
 // one task message, ready to send
 function render(t, m) {
   const head = (icon, label) => `${icon} <b>${esc(label)}</b>\n${esc(short(t.title))} · <code>${t.id}</code>`;
@@ -141,20 +141,20 @@ async function onMessage(msg) {
     const tasks = (await agents('/tasks')).filter((t) => !['done', 'stopped'].includes(t.status)).slice(0, 10);
     return send(tasks.length ? tasks.map((t) => `#${t.id} · ${t.status}${t.pr ? ` · PR ${t.pr.url}` : ''}\n${t.title}`).join('\n\n') : 'No active tasks.');
   }
-  const q = text.match(/^\/?queue(?:\s+(contentcoach|factory))?\s*(?::|(?=\n)|$)/i);
+  const q = text.match(/^\/?queue(?:\s+(sayra|factory))?\s*(?::|(?=\n)|$)/i);
   if (q) {
-    const project = (q[1] ?? 'contentcoach').toLowerCase();
+    const project = (q[1] ?? 'factory').toLowerCase();
     const items = text.slice(q[0].length).split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
-    if (!items.length) return send('A queue is one task per line:\nqueue:\n- make the Save button sticky on phones\n- fix the login redirect\n("queue factory:" for the factory repo)');
+    if (!items.length) return send('A queue is one task per line:\nqueue:\n- make the Save button sticky on phones\n- fix the login redirect\n("queue sayra:" for Sayra)');
     const b = await agents('/batches', { method: 'POST', body: JSON.stringify({ project, items }) });
     state.batches[b.batch] = { ids: b.tasks.map((t) => t.id), project, reported: false };
     for (const t of b.tasks) state.sent[t.id] = 1;
     persist();
     return sendHtml(`📦 <b>Queue started: ${b.tasks.length} tasks</b> (${project})\nEach one runs to a reviewed PR. One summary comes when all are done.\n\n${b.tasks.map((t) => `• ${esc(short(t.title, 70))}`).join('\n')}`);
   }
-  const k = text.match(/^(bug|program)(?:\s+(contentcoach|factory))?\s*:\s*/i);
+  const k = text.match(/^(bug|program)(?:\s+(sayra|factory))?\s*:\s*/i);
   if (k) {
-    const project = (k[2] ?? 'contentcoach').toLowerCase(), rest = text.slice(k[0].length).trim();
+    const project = (k[2] ?? 'factory').toLowerCase(), rest = text.slice(k[0].length).trim();
     if (!rest) return sendHtml(HELP);
     const t = k[1].toLowerCase() === 'bug'
       ? await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, kind: 'report', text: rest }) })
@@ -178,8 +178,8 @@ async function onMessage(msg) {
     await agents(`/tasks/${taskId}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
     return send(`#${taskId}: got it, continuing.`, taskId);
   }
-  const m = text.match(/^(contentcoach|factory)\s*:\s*/i);
-  const project = m ? m[1].toLowerCase() : 'contentcoach';
+  const m = text.match(/^(sayra|factory)\s*:\s*/i);
+  const project = m ? m[1].toLowerCase() : 'factory';
   const task = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, text: m ? text.slice(m[0].length) : text }) });
   state.sent[task.id] = 1; // the person's own message is #0
   persist();

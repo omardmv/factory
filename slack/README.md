@@ -26,8 +26,7 @@ Telegram bot until Slack has proven itself; both talk to factory-agents.
 
 ## Use
 
-- Create a channel `sayra-<something>` (Sayra), `cc-<something>` (ContentCoach)
-  or anything else (the factory)
+- Create a channel `sayra-<something>` (Sayra) or anything else (the factory)
   and write the idea as its first message.
 - Or DM the bot; it makes the channel.
 - Archived when the PR is merged or closed. A bot can archive, not delete;
