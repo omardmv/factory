@@ -55,3 +55,18 @@ export function watchdogDecision(task, { now, running = false, anyRunning = fals
   return { action: 'escalate', state, idleMin, text, ping: true };
 }
 
+
+// Keeps the watchdog's clock on a task; called by server.mjs save() on every save.
+//  - first save of a task from before the watchdog: adopt its status, keep its age, keep the marks
+//  - status changed: the clock restarts and the marks clear, EXCEPT while the nudge's own turn runs
+//    (t.job.from === 'nudge'): that turn takes the task to 'working' and back, which is not progress.
+//    The marks then survive 'working' and the state the nudge was for (t.watchState), so one nudge
+//    is followed by the ping, not by another nudge. Any other status is real movement.
+export function statusClock(t, now) {
+  if (t.statusOf === undefined) { t.statusOf = t.status; t.statusSince ??= t.updatedAt ?? now; return t; }
+  if (t.statusOf === t.status) return t;
+  const ownTurn = t.job?.from === 'nudge' && t.watchNudgedAt && [t.watchState, 'working'].includes(t.status);
+  t.statusOf = t.status; t.statusSince = now;
+  if (!ownTurn) { delete t.watchNudgedAt; delete t.watchEscalatedAt; delete t.watchState; }
+  return t;
+}

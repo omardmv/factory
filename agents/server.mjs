@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
-import { watchdogDecision } from './watchdog.mjs';
+import { watchdogDecision, statusClock } from './watchdog.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
@@ -77,7 +77,7 @@ const load = (id) => JSON.parse(readFileSync(`${dir(id)}/task.json`, 'utf8'));
 // nudge marks restart with it) and that a parked task always says what the person is waited on for.
 const save = (t) => {
   const now = new Date().toISOString();
-  if (t.statusOf !== t.status) { t.statusOf = t.status; t.statusSince = now; delete t.watchNudgedAt; delete t.watchEscalatedAt; }
+  statusClock(t, now);
   const why = parkReason(t);
   if (why) t.waitingOn = why; else delete t.waitingOn;
   t.updatedAt = now; writeFileSync(`${dir(t.id)}/task.json`, JSON.stringify(t, null, 1));
@@ -847,7 +847,7 @@ function watchdog(now = Date.now()) {
       say(t.id, 'factory', d.text, { ping: true });
       continue;
     }
-    update(t.id, (x) => { x.watchNudgedAt = new Date(now).toISOString(); });
+    update(t.id, (x) => { x.watchNudgedAt = new Date(now).toISOString(); x.watchState = d.state; });
     say(t.id, 'factory', d.text);
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue; // a live job is the nudge's target already; the grace period tells whether it moves
     if (d.state === 'queued') pump();

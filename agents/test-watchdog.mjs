@@ -1,6 +1,6 @@
 // node agents/test-watchdog.mjs
 import assert from 'node:assert/strict';
-import { watchdogDecision, LIMIT_MIN, GRACE_MIN } from './watchdog.mjs';
+import { statusClock, watchdogDecision, LIMIT_MIN, GRACE_MIN } from './watchdog.mjs';
 
 let n = 0;
 const test = async (name, f) => { await f(); n++; console.log('ok', name); };
@@ -79,6 +79,31 @@ await test('a stalled fake task: nudge, then ping, then silence', () => {
     if (d.action !== 'none') seen.push([m, d.action]);
   }
   assert.deepEqual(seen, [[LIMIT_MIN['waiting for checks'], 'nudge'], [LIMIT_MIN['waiting for checks'] + GRACE_MIN, 'escalate']]);
+});
+
+await test('waiting for checks: the nudge turn (working and back) keeps the marks; then a ping, never a second nudge', () => {
+  let t = { status: 'waiting for checks' }; statusClock(t, at(0));
+  const seen = [];
+  const step = (m) => {
+    const d = watchdogDecision(t, ctx(m)); if (d.action === 'none') return;
+    seen.push([m, d.action]);
+    if (d.action === 'escalate') t.watchEscalatedAt = at(m);
+    else { t.watchNudgedAt = at(m); t.watchState = d.state; t.job = { from: 'nudge' }; }
+  };
+  for (let m = 1; m <= 200; m++) {
+    step(m);
+    if (m === 32) { t.status = 'working'; statusClock(t, at(m)); }            // the nudge turn starts
+    if (m === 34) { t.status = 'waiting for checks'; statusClock(t, at(m)); delete t.job; } // ...ends, nothing changed
+  }
+  assert.deepEqual(seen.map((x) => x[1]), ['nudge', 'escalate']);
+  assert.ok(seen[1][0] >= 34 + GRACE_MIN);
+});
+await test('real movement (a new status other than the nudge turn) clears the marks', () => {
+  const t = { status: 'waiting for checks', watchNudgedAt: at(30), watchState: 'waiting for checks', job: { from: 'nudge' } }; statusClock(t, at(30)); t.statusOf = 'waiting for checks';
+  t.status = 'reviewing'; statusClock(t, at(40));
+  assert.equal(t.watchNudgedAt, undefined);
+  const u = { status: 'working', watchNudgedAt: at(30) }; statusClock(u, at(31)); // legacy task: adopted, marks kept
+  assert.equal(u.watchNudgedAt, at(30));
 });
 
 console.log(`${n} groups passed`);
