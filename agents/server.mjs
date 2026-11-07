@@ -43,33 +43,17 @@ const INTAKE_LABEL = process.env.INTAKE_LABEL ?? 'ready-for-agent';
 const TRIAGE_LABEL = process.env.TRIAGE_LABEL ?? 'needs-triage';
 const POLL_EVERY_S = Number(process.env.INTAKE_EVERY_S ?? 120);
 const PROJECTS = JSON.parse(readFileSync(new URL('./projects.json', import.meta.url), 'utf8'));
-const PLAYBOOKS = readFileSync(new URL('./playbooks.md', import.meta.url), 'utf8');
-
-const RULES = `You are a factory agent working unattended. No person is watching.
-Follow the repository's factory-rules skill if it has one (.claude/skills/factory-rules). In any case:
-- Never block on the human. Decide reversible things yourself and log each non-obvious decision (decision log + the PR's "Decisions").
-- Pause for the person only for a decision that is expensive to undo later: architecture (data model, a new service or dependency, a public API or URL shape), money, security, or a real product or taste call no experiment can settle. Then end your reply with a block whose first line is exactly "DECISION NEEDED", followed by the options, the trade-off of each, and your recommendation. Everything else you decide yourself.
-- Also stop (with a written reason, no DECISION NEEDED) before an irreversible action or at a genuine dead end after real attempts.
-- Messages starting with [factory] are automated reports about your PR's preview and e2e, or about the factory itself: act on them, never ask about them.
-- Messages starting with [review] come from an independent reviewer who read your PR: fix what is right and push; for what you reject, say why in the PR under "Decisions".
-- Never merge. Never touch production. Never print secrets.
-
-${PLAYBOOKS}`;
-
-const REVIEW_RULES = `You are an independent code reviewer in the factory. You did not write this change and you owe its author nothing: find what is wrong before a person spends time on it.
-- Never change, create or delete a file, never commit, never switch branches. You have no GitHub credentials; work from the checkout.
-- Report only real problems (wrong behaviour, missing parts of the task, bugs, security, data loss, a missing or toothless test, breaking the repository's own rules, a decision-log claim the evidence does not back). No style nits.
-- Write for someone reading on a phone, under 250 words: first one or two plain sentences saying what you concluded; then, only if something blocks, a "## Must fix" section with one bullet per finding (file:line, the problem, the fix; two lines at most); then at most three non-blocking remarks under "## Notes". No list of what you checked.
-- End with exactly one line: "VERDICT: PASS" (nothing blocks a merge) or "VERDICT: CHANGES" (at least one finding must be fixed first).`;
-
-const QA_RULES = `You are an independent QA tester in the factory. Someone else built a change; you check it the way its user would, on a live preview, knowing only what the person asked for.
-- You have no source code and no GitHub access, on purpose: judge the product, not the code. Do not look for the code, the PR or the tests.
-- Your only tools for the app are the e2e browser tools (mcp__e2e__*) and plain HTTP to the preview. Touch no other host.
-- The preview is a disarmed, offline copy of staging (fake model, no payments, nothing leaves it): click anything, create and delete freely.
-- Never print the preview password or a sign-in link.
-- Evidence or it did not happen: a check you could not actually see is UNTESTABLE, never PASS. Inconclusive is not a pass.
-- Write for someone reading on a phone, under 300 words: one or two sentences with your conclusion; a table | # | check | result | video |; for each FAIL, the exact steps to reproduce and what you saw vs. what the task implies.
-- End with exactly one line: "QA VERDICT: PASS" (every check passes or is UNTESTABLE for a reason the preview cannot show), "QA VERDICT: FAIL" (at least one check fails) or "QA VERDICT: NOT APPLICABLE" (nothing in the task is visible to a user of the web app).`;
+// the factory's brain (brain/ in this repo): role prompts, playbooks,
+// knowledge and skills. Read on every run, so a merged brain change applies to
+// the next run without a restart. Knowledge and skills are mounted read-only
+// into every container.
+const BRAIN = process.env.FACTORY_BRAIN ?? new URL('../brain', import.meta.url).pathname;
+const brain = (f) => readFileSync(`${BRAIN}/${f}`, 'utf8').trim();
+const BRAIN_NOTE = `Factory knowledge (read-only): /factory/brain/knowledge, start with index.md and read what bears on your task. Factory-wide skills are installed as skills. The repository's own rules and skills win over the factory's when they disagree.`;
+const RULES = () => `${brain('prompts/agent.md')}\n${BRAIN_NOTE}\n\n${brain('prompts/playbooks.md')}`;
+const REVIEW_RULES = () => `${brain('prompts/review.md')}\n${BRAIN_NOTE}`;
+const QA_RULES = () => `${brain('prompts/qa.md')}\n${BRAIN_NOTE}`;
+const BRAIN_MOUNTS = () => [`${BRAIN}/knowledge:/factory/brain/knowledge:ro`, `${BRAIN}/skills:/home/agent/.claude/skills:ro`];
 
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
 const secret = (n) => readFileSync(`${SECRETS}/${n}`, 'utf8').trim();
@@ -189,7 +173,7 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
     '--cpus', '4', '--memory', '8g', '--pids-limit', '2048', '--shm-size', '1g',
     '--security-opt', 'no-new-privileges:true', '--cap-drop', 'NET_RAW', '--cap-drop', 'MKNOD', '--cap-drop', 'SYS_CHROOT', '--cap-drop', 'AUDIT_WRITE', '--cap-drop', 'SETFCAP',
     '-v', `${dir(id)}/${workspace}:/workspace`, '-v', `${dir(id)}/${claudeDir}:/home/agent/.claude`,
-    ...mounts.flatMap((m) => ['-v', m]),
+    ...[...BRAIN_MOUNTS(), ...mounts].flatMap((m) => ['-v', m]),
     '-e', 'TASK_ID', '-e', 'REPO', '-e', 'BASE', '-e', 'GH_TOKEN', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', ...Object.keys(more).flatMap((k) => ['-e', k])];
   if (RUNTIME) args.push('--runtime', RUNTIME);
   args.push(IMAGE, 'claude', '-p', prompt, '--output-format', 'stream-json', '--verbose', '--max-turns', '300',
@@ -229,7 +213,7 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
 
 async function agentRun({ id, prompt, mode, from }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
-  const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: RULES, disallowed: ['AskUserQuestion'], resume: t.sessionId });
+  const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
   if (r.last) say(id, t.kind === 'program' ? 'coordinator' : 'agent', r.last);
   else say(id, 'factory', `[factory] the agent stopped without a reply. ${r.stderr.trim().slice(-400)}`);
   const done = load(id);
@@ -324,7 +308,7 @@ Sign in: navigate to ${t.previewHost}/_factory/login; it signs you in as the tes
 3. For each criterion: start_recording with name c<k>-<two-word-slug>, do it as a user would, stop_recording, and judge PASS, FAIL or UNTESTABLE (only for what the offline preview cannot show, such as a real model's answer: say why). Screenshot what proves it.
 4. close_session, then reply.`;
   const r = await container(id, {
-    prompt, mode: 'bypassPermissions', claudeDir: `qa-claude/${n}`, workspace: ws, repo: false, ghToken: '', system: QA_RULES, model: QA_MODEL,
+    prompt, mode: 'bypassPermissions', claudeDir: `qa-claude/${n}`, workspace: ws, repo: false, ghToken: '', system: QA_RULES(), model: QA_MODEL,
     disallowed: ['AskUserQuestion', 'Edit', 'Write', 'NotebookEdit', 'WebSearch'],
     env: { QA_PREVIEW_URL: `${t.previewHost}/app/` }, mounts: [`${secrets}/preview-password:/run/factory/preview-password:ro`],
     extra: ['--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { e2e: { command: 'qa-mcp', args: [] } } })],
@@ -377,7 +361,7 @@ Other reviewers look at this PR from other angles at the same time; stay on your
   const results = [];
   for (const [i, member] of REVIEW_PANEL.entries()) {
     const focus = FOCUS[member.focus] ?? { name: member.focus, ask: `Your angle: ${member.focus}.` };
-    const r = await container(id, { prompt: `${base}\n${focus.ask}\nReply with your findings, then the verdict line.`, mode: 'bypassPermissions', claudeDir: `review-claude/${n}-${i + 1}`, ghToken: '', system: REVIEW_RULES, model: member.model, disallowed: ['AskUserQuestion', 'Edit', 'Write', 'NotebookEdit'] });
+    const r = await container(id, { prompt: `${base}\n${focus.ask}\nReply with your findings, then the verdict line.`, mode: 'bypassPermissions', claudeDir: `review-claude/${n}-${i + 1}`, ghToken: '', system: REVIEW_RULES(), model: member.model, disallowed: ['AskUserQuestion', 'Edit', 'Write', 'NotebookEdit'] });
     results.push({ ...member, name: focus.name, verdict: verdictOf(r.last), text: r.last || `no answer. ${r.stderr.trim().slice(-300)}` });
     if (['stopped', 'pausing'].includes(load(id).status)) break;
   }
