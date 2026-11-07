@@ -199,6 +199,37 @@ await step('merged PR or stopped task: the channel is archived, once', async () 
   assert.ok(posted(i, 'C_NEW').some((c) => /PR #7 merged: archiving/.test(c.p.text)));
   const j = calls.length; await bot.pushUpdates(); assert.equal(since(j).filter((c) => c.method !== 'conversations.create').filter((c) => c.method === 'conversations.archive').length, 0);
 });
+await step('an epic gets its own epic- channel: plan once, topic M/T merged + issue, wave message once, archived when done', async () => {
+  const k1 = mk('sayra', 'epic child one', { phase: 'run', status: 'working' }), k2 = mk('sayra', 'epic child two', { phase: 'run', status: 'working' });
+  k1.messages.push({ from: 'agent', text: 'child one working' });
+  const e = mk('sayra', 'epic: redo billing', { kind: 'program', phase: 'run', status: 'running · 0/2 merged', children: [k1.id, k2.id], wavesAnnounced: [], epicIssue: { number: 9, url: 'https://g/issues/9' },
+    plan: [{ key: 'a', title: 'Model', wave: 1, deps: [], taskId: k1.id }, { key: 'b', title: 'UI', wave: 2, deps: ['a'], taskId: k2.id }] });
+  e.messages.push({ from: 'agent', text: 'plan' }, { from: 'factory', text: '[factory] plan approved: 2 tasks in 2 waves.' });
+  const i = calls.length; await bot.pushUpdates();
+  const ch = bot.state.taskChannel[e.id];
+  const made = since(i).find((c) => c.method === 'conversations.create' && /^epic-redo-billing-/.test(c.p.name)); assert.ok(made, 'epic- channel'); assert.match(made.p.name, /^[a-z0-9-]+$/);
+  const summary = posted(i, ch).filter((c) => /Plan approved: 2 tasks in 2 waves/.test(c.p.text)); assert.equal(summary.length, 1);
+  assert.match(summary[0].p.text, /\*Wave 1\*\n• Model[\s\S]*\*Wave 2\*\n• UI/);
+  const topics = (from) => since(from).filter((c) => c.method === 'conversations.setTopic' && c.p.channel === ch);
+  assert.match(topics(i).at(-1).p.topic, /^0\/2 merged · https:\/\/g\/issues\/9/);
+  assert.notEqual(bot.state.taskChannel[k1.id], ch, 'children keep their own channels');
+  // wave 1 merges: one wave line, topic refreshed, nothing repeated
+  k1.pr = { state: 'merged', number: 5, url: 'https://g/5' }; k1.status = 'merged'; e.wavesAnnounced = ['a'];
+  e.messages.push({ from: 'factory', text: '[factory] wave 1 of 2 is merged: Model (https://g/5). Next: UI.' });
+  const j = calls.length; await bot.pushUpdates();
+  assert.equal(posted(j, ch).filter((c) => /wave 1 of 2 is merged/.test(c.p.text)).length, 1);
+  assert.equal(posted(j, ch).filter((c) => /Plan approved/.test(c.p.text)).length, 0, 'plan summary once');
+  assert.match(topics(j).at(-1).p.topic, /^1\/2 merged · https:\/\/g\/issues\/9/);
+  const l = calls.length; await bot.pushUpdates();
+  assert.equal(posted(l, ch).length, 0); assert.equal(topics(l).length, 0, 'topic only on change');
+  assert.equal(since(j).filter((c) => c.method === 'conversations.archive' && c.p.channel === ch).length, 0, 'not archived while running');
+  // done
+  k2.pr = { state: 'merged', number: 6, url: 'https://g/6' }; k2.status = 'merged'; e.status = 'done'; e.messages.push({ from: 'agent', text: 'PROGRAM DONE: all landed' });
+  const m = calls.length; await bot.pushUpdates();
+  assert.match(topics(m).at(-1).p.topic, /^2\/2 merged/);
+  assert.deepEqual(since(m).filter((c) => c.method === 'conversations.archive').map((c) => c.p.channel), [ch], 'the epic channel, once');
+  assert.equal(bot.state.archived[e.id], true);
+});
 await step('projects from channel names', () => {
   assert.equal(bot.projectOfChannel('factory-x'), 'factory'); assert.equal(bot.projectOfChannel('sayra_x'), 'sayra'); assert.equal(bot.projectOfChannel('cc-x'), null);
   assert.equal(bot.projectOfChannel('ideas'), null);

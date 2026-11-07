@@ -31,7 +31,7 @@ const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOS
 
 // ---- state: owner, DM channel, pairing code, task <-> channel, what was sent
 export const state = existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, 'utf8')) : {};
-state.sent ??= {}; state.taskChannel ??= {}; state.channelTask ??= {}; state.archived ??= {}; state.batches ??= {}; state.skip ??= {}; state.fresh ??= {}; state.pending ??= {};
+state.sent ??= {}; state.taskChannel ??= {}; state.channelTask ??= {}; state.archived ??= {}; state.batches ??= {}; state.skip ??= {}; state.fresh ??= {}; state.pending ??= {}; state.planPosted ??= {}; state.topic ??= {};
 if (!state.owner && !state.pairing) state.pairing = randomBytes(4).toString('hex');
 const persist = () => writeFileSync(STATE_FILE, JSON.stringify(state));
 persist();
@@ -118,7 +118,7 @@ export function projectOfChannel(name = '') {
   return null;
 }
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
-export const channelName = (t) => `${PROJECTS[t.project]?.[0] ?? t.project}-${slug(t.title) || 'task'}-${t.id.slice(-6)}`.slice(0, 80);
+export const channelName = (t) => t.kind === 'program' ? `epic-${slug(t.title.replace(/^\s*epic\b\s*:?\s*/i, '')) || 'epic'}-${t.id.slice(-6)}`.slice(0, 80) : `${PROJECTS[t.project]?.[0] ?? t.project}-${slug(t.title) || 'task'}-${t.id.slice(-6)}`.slice(0, 80);
 function bind(taskId, channel) { state.taskChannel[taskId] = channel; state.channelTask[channel] = taskId; persist(); }
 async function channelFor(t) {
   if (state.taskChannel[t.id]) return state.taskChannel[t.id];
@@ -129,6 +129,34 @@ async function channelFor(t) {
   await slack('conversations.invite', { channel: c.id, users: state.owner }).catch((e) => log('invite.error', { error: e.message }));
   await slack('conversations.setTopic', { channel: c.id, topic: `${t.project} · ${t.id} · ${taskLink(t.id)}` }).catch(() => {});
   return c.id;
+}
+// ---- an epic's own channel: topic "M/T merged" + the epic issue, the plan once, then the factory's lines
+let taskList = [];
+const isMerged = (k) => k && (k.pr?.state === 'merged' || k.status === 'merged');
+export function epicTopic(t, list = taskList) {
+  const byId = Object.fromEntries(list.map((k) => [k.id, k]));
+  const plan = t.plan ?? [];
+  const merged = plan.filter((i) => isMerged(byId[i.taskId])).length;
+  return [`${merged}/${plan.length} merged`, t.epicIssue?.url, `${t.project} · ${t.id}`, taskLink(t.id)].filter(Boolean).join(' · ');
+}
+export function planSummary(t) {
+  const plan = t.plan ?? [], w = Math.max(0, ...plan.map((i) => i.wave ?? 1));
+  const lines = [`📋 *Plan approved: ${plan.length} task${plan.length === 1 ? '' : 's'} in ${w} wave${w === 1 ? '' : 's'}*`];
+  for (let n = 1; n <= w; n++) lines.push(`*Wave ${n}*\n${plan.filter((i) => (i.wave ?? 1) === n).map((i) => `• ${esc(short(i.title, 80))}`).join('\n')}`);
+  if (t.epicIssue?.url) lines.push(`Epic issue: <${t.epicIssue.url}|#${t.epicIssue.number}>`);
+  return lines.join('\n');
+}
+async function syncEpicChannel(t, ch) {
+  if (t.kind !== 'program' || !ch) return;
+  if (t.phase === 'run' && t.plan?.length && !state.planPosted[t.id]) {
+    state.planPosted[t.id] = true; persist();
+    await post(ch, planSummary(t));
+  }
+  const topic = epicTopic(t);
+  if (t.plan?.length && state.topic[t.id] !== topic) {
+    await slack('conversations.setTopic', { channel: ch, topic: topic.slice(0, 250) }).catch((e) => log('topic.error', { error: e.message }));
+    state.topic[t.id] = topic; persist();
+  }
 }
 const finished = (t) => ['merged', 'closed'].includes(t.pr?.state) || ['merged', 'done', 'stopped'].includes(t.status);
 async function archiveIfFinished(t) {
@@ -297,7 +325,8 @@ function statusLine() {
 // ---- outgoing: what's new in each task goes to its channel
 export async function pushUpdates() {
   if (!state.owner) return;
-  for (const t of await agents('/tasks')) {
+  taskList = await agents('/tasks');
+  for (const t of taskList) {
     if (state.archived[t.id] || state.skip[t.id]) continue;
     const full = { ...(await agents(`/tasks/${t.id}`)), running: t.running };
     const from = state.sent[t.id] ?? 0;
@@ -307,6 +336,7 @@ export async function pushUpdates() {
       for (const m of fresh) { const r = render(full, m); await post(ch, r.text, { go: r.go, plan: r.plan, taskId: t.id }); }
     }
     state.sent[t.id] = full.messages.length; persist();
+    if (full.kind === 'program') await syncEpicChannel(full, state.taskChannel[t.id]);
     await archiveIfFinished(full);
   }
   await batchSummaries();
