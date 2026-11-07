@@ -2,11 +2,11 @@
   "sayra": {
     "about": "Sayra: a Telegram Mini App (React client, Python API and bot, admin panel) where Uzbek/CIS learners practise spoken English: live voice calls with matched learners or an AI tutor, IELTS examiner, call summaries, streaks, profiles, premium and payments (Paylov), referrals, group rooms, channel posting.",
     "repo": "AzizbekLive/conversation-bot", "base": "staging", "autoMerge": "staging", "mergeMethod": "squash",
-    "githubApp": { "id": "5649406", "key": "github-app-factory.pem" }
+    "githubApp": { "id": "5649406", "key": "github-app-factory.pem", "bot": { "name": "omar-factory[bot]", "email": "353544174+omar-factory[bot]@users.noreply.github.com" } }
   },
   "factory": {
     "about": "The software factory itself (this repo): the agents service, review panel and QA, the brain (prompts, knowledge, skills), the Slack and Telegram bots, the dashboard, PR previews, the box scripts, Coolify setup, CI runners and docs.",
     "repo": "omardmv/factory", "base": "main", "autoMerge": "main", "mergeMethod": "squash",
-    "githubApp": { "id": "5649406", "key": "github-app-factory.pem" }
+    "githubApp": { "id": "5649406", "key": "github-app-factory.pem", "bot": { "name": "omar-factory[bot]", "email": "353544174+omar-factory[bot]@users.noreply.github.com" } }
   }
 }
