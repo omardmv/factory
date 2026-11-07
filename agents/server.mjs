@@ -15,6 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
+import { verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
@@ -163,11 +164,9 @@ function pump() {
 function pickup() {
   for (const t of allTasks()) {
     if (!t.job || running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
-    if (['stopped', 'paused'].includes(t.status)) { update(t.id, (x) => { delete x.job; }); continue; }
-    const j = t.job;
-    if (j.kind === 'review' || j.kind === 'qa') queue.push(j);
-    else if (t.sessionId && j.from !== 'pause') queue.push({ ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup', origin: j.from });
-    else queue.push(j);
+    if (pickupJob(t).drop) { update(t.id, (x) => { delete x.job; }); continue; }
+    const j = t.job, p = pickupJob(t);
+    queue.push(p.job);
     log('pickup', { task: t.id, kind: j.kind, from: j.from });
   }
   saveQueue(); pump();
@@ -230,43 +229,25 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   else say(id, 'factory', `[factory] the agent stopped without a reply. ${r.stderr.trim().slice(-400)}`);
   const done = load(id);
   if (r.sessionId && !done.sessionId) done.sessionId = r.sessionId;
-  if (done.status === 'stopped') { save(done); return pump(); }
+  const out = await afterAgentRun({ task: done, from, origin, mode, reply: r.last, maxCrashRetries: MAX_CRASH_RETRIES }, { findPr, hasChecks, hasQa });
+  if (out.type === 'stopped') { save(done); return pump(); }
   // pause: one more turn to leave a checkpoint, then rest
-  if (done.status === 'pausing' && from !== 'pause') {
+  if (out.type === 'checkpoint') {
     save(done);
     enqueue(id, '[factory] PAUSE requested by the person. Stop the current work: commit what you have as a work-in-progress commit on your branch and push it (no PR changes), add a decision-log row, and reply with a short resume note: what is done, what is next, anything half-finished.', 'bypassPermissions', 'pause');
     return pump();
   }
-  // the process died without a reply (killed itself, crashed, cut off): carry on
-  // by itself, a bounded number of times, instead of parking it on the person
-  if (!r.last && from !== 'pause' && (done.crashRetries ?? 0) < MAX_CRASH_RETRIES) {
-    done.crashRetries = (done.crashRetries ?? 0) + 1; save(done);
-    log('run.crashed', { task: id, retry: done.crashRetries, code: r.code ?? null });
-    enqueue(id, `[factory] Your last turn was cut off: the process exited without a reply (retry ${done.crashRetries} of ${MAX_CRASH_RETRIES}). If you were stopping processes by name pattern, that killed you: your own process matches; kill by PID or port instead. Check \`git status\`, your decision log and your PR, then carry on with what you were doing.`, mode, [from, origin].includes('review') ? 'review' : from);
+  // the process died without a reply: carry on by itself, bounded, instead of parking it on the person
+  if (out.type === 'retry') {
+    done.crashRetries = out.retry; save(done);
+    log('run.crashed', { task: id, retry: out.retry, code: r.code ?? null });
+    enqueue(id, crashRetryPrompt(out.retry, MAX_CRASH_RETRIES), mode, out.from);
     return pump();
   }
-  if (r.last) done.crashRetries = 0;
-  const decision = /^\s*DECISION NEEDED\b/m.test(r.last);
-  let next;
-  if (from === 'pause') next = 'paused';
-  else if (done.kind === 'report') next = decision ? 'decision needed' : mode === 'plan' ? 'waiting for you' : 'done';
-  else if (done.kind === 'program') { save(done); return afterCoordinator(done, mode, from, r.last, decision); }
-  else {
-    done.pr = (await findPr(done)) ?? done.pr ?? null;
-    const head = done.pr?.state === 'open' ? done.pr.head : null;
-    if (mode === 'plan') next = 'waiting for you';
-    else if (decision) next = 'decision needed';
-    else if (!head) next = 'waiting for you';
-    // an answer to review findings goes back to the panel even with no new commit:
-    // the finding may have asked for evidence (a run, a PR comment), not code.
-    // Bounded: every CHANGES verdict counts toward MAX_FACTORY_ROUNDS.
-    else if (head === done.reviewedSha && done.verdict !== 'PASS' && [from, origin].includes('review')) next = 'reviewing';
-    else if (head === done.reviewedSha) next = done.verdict === 'PASS' ? 'ready for you' : 'waiting for you'; // nothing new since the review
-    // green: the QA tester first (once per head; a head the agent kept after a
-    // QA FAIL goes on to the panel, which sees the report and judges the dispute)
-    else if (!hasChecks(done) || (done.greenSha && head.startsWith(done.greenSha))) next = hasQa(done) && head !== done.qaTestedSha ? 'testing' : 'reviewing';
-    else next = 'waiting for checks';
-  }
+  if (out.resetCrash) done.crashRetries = 0;
+  if (out.type === 'coordinator') { save(done); return afterCoordinator(done, mode, from, r.last, out.decision); }
+  if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
+  const next = out.status;
   done.status = next; save(done);
   if (done.pr?.state === 'open') publishTaskMedia(id).catch((e) => log('media.failed', { task: id, error: e.message }));
   log('run.end', { task: id, kind: done.kind, mode, from, pr: done.pr?.number ?? null, status: next });
@@ -281,7 +262,6 @@ async function agentRun({ id, prompt, mode, from, origin }) {
 // PASS / FAIL / NOT APPLICABLE. FAIL goes back to the agent as a failed round;
 // PASS and NOT APPLICABLE go on to the review panel. Videos and the report are
 // published next to the e2e gallery: https://<preview>/_factory/qa/<round>-<sha>/
-const qaVerdictOf = (text) => /QA VERDICT:\s*(PASS|FAIL|NOT APPLICABLE)/i.exec(text ?? '')?.[1]?.toUpperCase() ?? null;
 const projectPrefix = (project) => /^PREFIX=(\w+)/m.exec(readFileSync(new URL(`../projects/${project}/project.sh`, import.meta.url), 'utf8'))?.[1] ?? null;
 function publishQa(t, ws, run, text) {
   try {
@@ -348,16 +328,15 @@ Sign in: navigate to ${t.previewHost}/_factory/login; it signs you in as the tes
     .catch((e) => log('qa.comment_failed', { task: id, error: e.message }));
   const x = load(id);
   x.qaRounds = n; x.qaTestedSha = head; x.qaVerdict = verdict;
-  if (x.status === 'stopped') { save(x); return pump(); }
-  if (x.status === 'pausing') { x.status = 'paused'; save(x); return pump(); }
-  if (verdict === 'PASS' || verdict === 'NOT APPLICABLE') { x.status = 'reviewing'; save(x); enqueueReview(id); }
-  else if (verdict === 'FAIL' && x.factoryRounds < MAX_FACTORY_ROUNDS) {
-    x.factoryRounds += 1; x.status = 'working'; save(x);
+  const o = afterQa({ task: x, verdict, maxRounds: MAX_FACTORY_ROUNDS });
+  if (o.action === 'stopped') { save(x); return pump(); }
+  x.status = o.status;
+  if (o.action === 'paused') { save(x); return pump(); }
+  if (o.action === 'review') { save(x); enqueueReview(id); }
+  else if (o.action === 'fix') {
+    x.factoryRounds = o.factoryRounds; save(x);
     enqueue(id, `[qa] An independent QA tester (no code, only the task and your preview) tested PR #${pr.number} at ${head.slice(0, 7)} and found failures:\n\n${report}\n\nReproduce each failure on the preview or locally, fix the cause, and turn each failed check into an e2e test that fails without your fix; push. If you are sure the tester misread the task, push nothing for that point and say why in the PR under "Decisions": the review panel will read both sides.`, 'bypassPermissions', 'qa');
-  } else {
-    x.status = 'waiting for you'; save(x);
-    say(id, 'factory', verdict === 'FAIL' ? `[factory] round limit (${MAX_FACTORY_ROUNDS}) reached with QA failures open: stopped. A person decides what next.` : '[factory] the QA tester gave no clear verdict: a person decides.');
-  }
+  } else { save(x); say(id, 'factory', o.say); }
   log('qa.end', { task: id, round: n, verdict, videos: link });
   pump();
 }
@@ -365,7 +344,6 @@ Sign in: navigate to ${t.previewHost}/_factory/login; it signs you in as the tes
 // the review panel: fresh sessions (own Claude state, no resume, no GitHub
 // token, no edit tools), one per model and angle, judge the PR head; the PR
 // passes only when every reviewer passes it
-const verdictOf = (text) => /VERDICT:\s*(PASS|CHANGES)/i.exec(text ?? '')?.[1]?.toUpperCase() ?? null;
 async function review({ id }) {
   const t = update(id, (x) => { x.status = 'reviewing'; });
   const token = await githubToken(t.repo);
@@ -391,8 +369,7 @@ Other reviewers look at this PR from other angles at the same time; stay on your
     results.push({ ...member, name: focus.name, verdict: verdictOf(r.last), text: r.last || `no answer. ${r.stderr.trim().slice(-300)}` });
     if (['stopped', 'pausing'].includes(load(id).status)) break;
   }
-  const verdict = results.length === REVIEW_PANEL.length && results.every((r) => r.verdict === 'PASS') ? 'PASS'
-    : results.some((r) => r.verdict === 'CHANGES') ? 'CHANGES' : null;
+  const verdict = panelVerdict(results.map((r) => r.verdict), REVIEW_PANEL.length);
   // one message: each reviewer's conclusion and must-fix, all notes at the end
   const parts = results.map((r) => { const [main, notes = ''] = r.text.replace(/^\s*VERDICT:.*$/gim, '').trim().split(/^#{1,6}\s*Notes\b.*$/im); return { r, main: main.trim(), notes: notes.trim() }; });
   const notes = parts.filter((p) => p.notes).map((p) => p.notes).join('\n');
@@ -402,22 +379,18 @@ Other reviewers look at this PR from other angles at the same time; stay on your
     .catch((e) => log('review.comment_failed', { task: id, error: e.message }));
   const x = load(id);
   x.reviews = n; x.reviewedSha = pr.head.sha; x.verdict = verdict;
-  if (x.status === 'stopped') { save(x); return pump(); }
-  if (x.status === 'pausing') { x.status = 'paused'; save(x); return pump(); }
-  // a head the QA tester failed and the agent kept never merges by itself: the person settles the dispute
-  const disputed = x.qaVerdict === 'FAIL' && x.qaTestedSha === pr.head.sha;
-  if (verdict === 'PASS') {
-    x.status = 'ready for you'; x.mergeWanted = !!PROJECTS[x.project]?.autoMerge && !disputed; x.mergeTries = 0; save(x);
-    if (disputed) say(id, 'factory', '[factory] the review panel passed a head the QA tester failed (the agent disputes the finding): not merged automatically. Read both and decide.');
+  const o = afterReview({ task: x, verdict, headSha: pr.head.sha, autoMerge: PROJECTS[x.project]?.autoMerge, maxRounds: MAX_FACTORY_ROUNDS });
+  if (o.action === 'stopped') { save(x); return pump(); }
+  x.status = o.status;
+  if (o.action === 'paused') { save(x); return pump(); }
+  if (o.action === 'pass') {
+    x.mergeWanted = o.mergeWanted; x.mergeTries = 0; save(x);
+    if (o.disputed) say(id, 'factory', '[factory] the review panel passed a head the QA tester failed (the agent disputes the finding): not merged automatically. Read both and decide.');
     if (x.mergeWanted) autoMerge(id).catch((e) => log('merge.failed', { task: id, error: e.message }));
-  } else if (verdict === 'CHANGES' && x.factoryRounds < MAX_FACTORY_ROUNDS) {
-    x.factoryRounds += 1; x.status = 'working'; save(x);
+  } else if (o.action === 'fix') {
+    x.factoryRounds = o.factoryRounds; save(x);
     enqueue(id, `[review] The review panel read your PR at ${pr.head.sha.slice(0, 7)} and asks for changes:\n\n${combined}`, 'bypassPermissions', 'review');
-  } else {
-    x.status = 'waiting for you'; save(x);
-    if (verdict === 'CHANGES') say(id, 'factory', `[factory] round limit (${MAX_FACTORY_ROUNDS}) reached with review findings open: stopped. A person decides what next.`);
-    else say(id, 'factory', '[factory] the review panel gave no clear verdict: a person decides.');
-  }
+  } else { save(x); say(id, 'factory', o.say); }
   log('review.end', { task: id, round: n, verdict, panel: results.map((r) => `${r.model}:${r.verdict}`) });
   pump();
 }
@@ -571,11 +544,9 @@ async function syncEpic(id, done = false) {
   finally { syncingEpic.delete(id); }
 }
 function afterCoordinator(t, mode, from, last, decision) {
-  if (decision) { t.status = 'decision needed'; save(t); return pump(); }
-  if (/^\s*PROGRAM DONE\b/m.test(last)) { t.status = 'done'; save(t); syncEpic(t.id, true); return pump(); }
-  if (t.phase === 'talk') { t.status = 'waiting for you'; save(t); return pump(); } // discussion: never a plan, the person says "plan"
-  if (t.phase === 'brief') { t.status = 'waiting for you'; save(t); return pump(); } // the plan waits for "go"
-  if (/```plan/.test(last)) { // a revision while it runs: what has started keeps going
+  const o = coordinatorNext({ phase: t.phase, reply: last, decision });
+  if (o.status !== 'running') { t.status = o.status; save(t); if (o.closeEpic) syncEpic(t.id, true); return pump(); }
+  if (o.revise) { // a revision while it runs: what has started keeps going
     const r = parsePlan(last), m = r.error ? r : mergePlan(t.plan, r.tasks);
     if (m.error) say(t.id, 'factory', `[factory] the revised plan was not applied: ${m.error}. The current plan keeps going.`);
     else { t.epicDropped = [...(t.epicDropped ?? []), ...droppedWithIssues(t.plan, m.items)]; t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
@@ -655,14 +626,13 @@ Write nothing anywhere except that one issue. End with exactly one line: \`TRIAG
 function post(id, from, text) {
   const t = load(id); say(id, from, text);
   if (from === 'factory') {
-    if (t.phase !== 'run' || ['stopped', 'paused', 'pausing', 'merged'].includes(t.status) || t.kind !== 'change') return t;
-    // the round limit stops fix loops: only a red report counts (and review CHANGES); green never does
-    const green = text.includes('✅') && /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1];
-    if (!green && t.factoryRounds >= MAX_FACTORY_ROUNDS) { say(id, 'factory', `[factory] round limit (${MAX_FACTORY_ROUNDS} failed rounds) reached: stopped. A person decides what next.`); t.status = 'waiting for you'; save(t); return t; }
-    if (green) { t.greenSha = green; t.previewHost = /preview ready at (https:\/\/[^\s/]+)/.exec(text)?.[1] ?? t.previewHost; }
-    else t.factoryRounds += 1;
+    const o = afterFactoryReport({ task: t, text, maxRounds: MAX_FACTORY_ROUNDS });
+    if (o.action === 'ignore') return t;
+    if (o.action === 'limit') { say(id, 'factory', o.say); t.status = o.status; save(t); return t; }
+    if (o.green) { t.greenSha = o.greenSha; t.previewHost = o.previewHost; }
+    else t.factoryRounds = o.factoryRounds;
     save(t);
-    enqueue(id, text, 'bypassPermissions', green ? 'green' : 'factory');
+    enqueue(id, text, 'bypassPermissions', o.green ? 'green' : 'factory');
     return t;
   }
   if (t.kind === 'program') {
