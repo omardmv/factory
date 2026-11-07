@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS } from './plan.mjs';
+import { parsePlan, mergePlan, progress, wavesReport, MAX_PLAN_TASKS } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
@@ -84,5 +84,24 @@ assert.match(parsePlan('```plan\n{"tasks": []').error, /not closed/);
 const two = parsePlan('old:\n```plan\n' + JSON.stringify({ tasks: [T('old')] }) + '\n```\nnew:\n```plan\n' + JSON.stringify({ tasks: [T('new')] }) + '\n```');
 assert.equal(two.tasks[0].key, 'new');
 ok('fences inside task text are ignored; an unclosed block is refused; the last block wins');
+
+const wp = parsePlan(block([T('a'), T('b'), T('c', ['a', 'b']), T('d', ['c'])])).tasks;
+let r = wavesReport(wp, { a: 'merged', b: 'running', c: 'pending', d: 'pending' });
+assert.deepEqual(r.map((w) => [w.wave, w.merged, w.total, w.complete]), [[1, 1, 2, false], [2, 0, 1, false], [3, 0, 1, false]]);
+r = wavesReport(wp, (i) => (['a', 'b'].includes(i.key) ? 'merged' : 'pending'));
+assert.deepEqual(r.map((w) => w.complete), [true, false, false]);
+assert.equal(r[0].items.length, 2);
+ok('wavesReport: per wave merged/total and complete; takes a map or a function');
+
+// revised plan: a new task joins a finished wave, a started task is dropped from the plan but kept
+const done1 = wp.map((i) => (i.key === 'a' ? { ...i, taskId: 'id-a' } : i));
+const revd = mergePlan(done1, parsePlan(block([T('b'), T('e'), T('c', ['b', 'e'])])).tasks).items;
+const rr = wavesReport(revd, { a: 'merged', b: 'merged', e: 'pending', c: 'pending' });
+assert.deepEqual(rr.map((w) => [w.wave, w.merged, w.total, w.complete]), [[1, 2, 3, false], [2, 0, 1, false]]);
+assert.ok(revd.some((i) => i.key === 'a'));
+const rr2 = wavesReport(revd, { a: 'merged', b: 'merged', e: 'merged', c: 'pending' });
+assert.deepEqual(rr2.map((w) => w.complete), [true, false]);
+assert.deepEqual(wavesReport([], {}), []);
+ok('wavesReport: revised plans (added and kept-though-dropped items) and an empty plan');
 
 console.log(`all ${n} passed`);

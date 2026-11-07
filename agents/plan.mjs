@@ -94,3 +94,17 @@ export function progress(items, stateOf) {
   return { state: st, ready, blocked, waiting, merged: count('merged'), total: items.length,
     done: count('merged') === items.length, stalled: moving === 0 && count('merged') < items.length };
 }
+
+// Per wave: is every item merged, and how many. `state` is the map progress()
+// returns (key → state) or the same function progress() takes. Items dropped
+// from a revised plan but kept because they run (mergePlan) count in the wave
+// they now sit in. Waves are listed in order; a wave with no items is not listed.
+export function wavesReport(items, state) {
+  const stateOf = typeof state === 'function' ? state : (i) => state?.[i.key];
+  const by = new Map();
+  for (const i of items) { if (!by.has(i.wave)) by.set(i.wave, []); by.get(i.wave).push(i); }
+  return [...by.keys()].sort((a, b) => a - b).map((wave) => {
+    const list = by.get(wave), merged = list.filter((i) => stateOf(i) === 'merged').length;
+    return { wave, items: list, merged, total: list.length, complete: merged === list.length };
+  });
+}
