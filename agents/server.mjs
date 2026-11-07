@@ -16,7 +16,7 @@
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
-import { openEpicIssue } from './epic-issue.mjs';
+import { openEpicIssue, refsLine, copyIssueFields } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -507,7 +507,7 @@ function startReady(t) {
   const byKey = Object.fromEntries(t.plan.map((i) => [i.key, i]));
   for (const i of g.ready) {
     const built = i.deps.map((d) => { const k = byKey[d].taskId ? load(byKey[d].taskId) : null; return `- ${byKey[d].title}${k?.pr ? ` (PR #${k.pr.number}, merged)` : ''}`; }).join('\n');
-    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${i.issue ? `\n\nThis task's sub-issue is #${i.issue} in ${t.repo}: put "Refs #${i.issue}" in the PR body (the factory closes it when the PR merges).` : ''}`, true, { parent: t.id, batch: t.id, title: i.title });
+    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title });
     i.taskId = kid.id;
   }
   update(t.id, (x) => { x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
@@ -523,14 +523,18 @@ function approvePlan(t, text) {
   const w = Math.max(...t.plan.map((i) => i.wave));
   say(t.id, 'factory', `[factory] plan approved: ${t.plan.length} tasks in ${w} wave${w === 1 ? '' : 's'}. Each starts as soon as what it depends on has merged.`);
   openingEpic.add(t.id);
-  openEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, goal: messages(t.id)[0]?.text ?? t.title })
-    .catch((e) => ({ error: e.message, message: `[factory] could not open the epic issue on GitHub (${e.message}); the epic carries on without it.` }))
+  openEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, goal: messages(t.id)[0]?.text ?? t.title, onEpic: (e) => update(t.id, (x) => { x.epicIssue = e; }) })
     .then((res) => {
       if (res.message) say(t.id, 'factory', res.message);
       if (res.error) log('epic.issue.failed', { task: t.id, error: res.error });
-      update(t.id, (x) => { x.plan = t.plan; if (t.epicIssue) x.epicIssue = t.epicIssue; });
+      update(t.id, (x) => { if (t.epicIssue) x.epicIssue = t.epicIssue; copyIssueFields(x.plan ?? [], t.plan); });
     })
-    .finally(() => { openingEpic.delete(t.id); try { startReady(load(t.id)); pump(); } catch (e) { log('epic.start.failed', { task: t.id, error: e.message }); } });
+    .catch((e) => log('epic.issue.failed', { task: t.id, error: e.message }))
+    .finally(() => {
+      openingEpic.delete(t.id);
+      try { if (!['stopped', 'paused', 'pausing', 'done'].includes(load(t.id).status)) { startReady(load(t.id)); pump(); } }
+      catch (e) { log('epic.start.failed', { task: t.id, error: e.message }); }
+    });
 }
 function afterCoordinator(t, mode, from, last, decision) {
   if (decision) { t.status = 'decision needed'; save(t); return pump(); }

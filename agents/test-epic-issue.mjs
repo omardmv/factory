@@ -1,6 +1,6 @@
 // node agents/test-epic-issue.mjs
 import assert from 'node:assert/strict';
-import { renderEpicBody, renderSubIssueBody, createEpicIssue, syncEpicIssue, openEpicIssue } from './epic-issue.mjs';
+import { renderEpicBody, renderSubIssueBody, createEpicIssue, syncEpicIssue, openEpicIssue, refsLine, copyIssueFields } from './epic-issue.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const P = (key, deps, wave) => ({ key, title: `Title ${key}`, task: `do ${key}\nmore`, deps, wave });
@@ -131,4 +131,15 @@ ok('new plan items get sub-issues; dropped closes not_planned');
   const r3 = await openEpicIssue({ gh, getToken: async () => 'tok', repo: 'o/r', task: t3, goal: 'G' });
   assert.match(r3.error, /rate limit/); assert.equal(t3.epicIssue.number, 10); // epic kept so it is not opened twice
   ok('a GitHub failure is soft: reported, nothing thrown, partial epic remembered');
+}
+
+{
+  assert.match(refsLine({ issue: 12 }, 'o/r'), /Refs #12/); assert.equal(refsLine({}, 'o/r'), '');
+  const cur = [{ key: 'a' }, { key: 'new' }]; copyIssueFields(cur, [{ key: 'a', issue: 5, issueId: 50 }, { key: 'gone', issue: 6, issueId: 60 }]);
+  assert.deepEqual(cur, [{ key: 'a', issue: 5, issueId: 50 }, { key: 'new' }]);
+  const g = fakeGh(); const saved = []; const t = { title: 'E', plan: mkPlan() };
+  const gh = async (tk, p, m, d) => { if (p.endsWith('/sub_issues') && d.sub_issue_id === 1011) throw new Error('nope'); return g.gh(tk, p, m, d); };
+  const r = await openEpicIssue({ gh, getToken: async () => 'tok', repo: 'o/r', task: t, goal: 'G', onEpic: (e) => saved.push(e) });
+  assert.equal(saved.length, 1); assert.match(r.message, /issues\/10 was opened but not all sub-issues/);
+  ok('Refs line, key-wise issue copy, epic saved right after creation, partial failure names the epic');
 }
