@@ -336,9 +336,11 @@ self_update() {
   install -m 644 "$FACTORY_DIR/box/gateway/nginx.conf" /opt/factory/gateway/default.conf
   install -m 644 "$FACTORY_DIR/box/factory.cron" /etc/cron.d/factory
   # host services that run straight from this checkout
-  # the unit file (drain: KillMode, TimeoutStopSec) is installed from the checkout too
-  if printf '%s\n' "$changed" | grep -q "^agents/factory-agents.service"; then
-    install -m 644 "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service && systemctl daemon-reload
+  # the unit file (drain: KillMode, TimeoutStopSec) is installed from the checkout too, whenever the
+  # installed copy differs: not only when this update changed it (the update that first brought it was
+  # run by the old script, which never installed it, so the box kept the old KillMode)
+  if ! cmp -s "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service; then
+    install -m 644 "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service && systemctl daemon-reload && log "factory-agents unit installed"
   fi
   # restart = drain: the server finishes the running turns (up to 30 min) before it exits, so do not wait here
   # (--no-block); systemd starts the new one when the old one is gone. Containers are never killed by a deploy.
