@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, wavesReport, MAX_PLAN_TASKS } from './plan.mjs';
+import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
@@ -103,5 +103,27 @@ const rr2 = wavesReport(revd, { a: 'merged', b: 'merged', e: 'merged', c: 'pendi
 assert.deepEqual(rr2.map((w) => w.complete), [true, false]);
 assert.deepEqual(wavesReport([], {}), []);
 ok('wavesReport: revised plans (added and kept-though-dropped items) and an empty plan');
+
+const lk = (i) => i.title;
+const gOf = (st) => progress(wp, (i) => st[i.key]);
+let a1 = announcements(wp, gOf({ a: 'merged', b: 'running', c: 'pending', d: 'pending' }), undefined, lk);
+assert.deepEqual(a1.lines, ['[factory] merged: a. 1/4 tasks merged.']);
+let a2 = announcements(wp, gOf({ a: 'merged', b: 'running', c: 'pending', d: 'pending' }), a1.said, lk);
+assert.deepEqual(a2.lines, []);
+const a3 = announcements(wp, gOf({ a: 'merged', b: 'merged', c: 'pending', d: 'pending' }), a1.said, lk);
+assert.deepEqual(a3.lines, ['[factory] merged: b. 2/4 tasks merged.', '[factory] wave 1 done: a; b. 2/4 merged; next: c.']);
+assert.deepEqual(announcements(wp, gOf({ a: 'merged', b: 'merged', c: 'pending', d: 'pending' }), a3.said, lk).lines, []);
+const a4 = announcements(wp, gOf({ a: 'merged', b: 'merged', c: 'merged', d: 'merged' }), a3.said, lk);
+assert.match(a4.lines.at(-1), /wave 3 done: d\. 4\/4 merged; next: nothing, that was the last wave/);
+ok('announcements: first merge, a second pass says nothing, a wave completing, the last wave');
+
+// c announced as wave 2, then a revision puts e before it: c is wave 3 now, and e's wave is announced when e merges
+const w2 = parsePlan(block([T('a'), T('c', ['a'])])).tasks;
+const s1 = announcements(w2, progress(w2, () => 'merged'), undefined, lk).said;
+const w3 = mergePlan(w2.map((i) => ({ ...i, taskId: 'x' })), parsePlan(block([T('a'), T('e', ['a']), T('c', ['e'])])).tasks).items;
+const st3 = { a: 'merged', c: 'pending', e: 'merged' };
+const a5 = announcements(w3, progress(w3, (i) => st3[i.key]), s1, lk);
+assert.ok(a5.lines.some((l) => /wave 2 done: e/.test(l)), a5.lines.join('|'));
+ok('announcements: waves are remembered by their tasks, so renumbering does not hide one');
 
 console.log(`all ${n} passed`);

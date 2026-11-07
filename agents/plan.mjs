@@ -108,3 +108,21 @@ export function wavesReport(items, state) {
     return { wave, items: list, merged, total: list.length, complete: merged === list.length };
   });
 }
+
+// What to say now, given what was said before. `said` = { merged: [task keys], waves: [wave ids] }
+// (a wave id is its task keys, sorted and joined, so a revised plan that renumbers
+// waves does not hide or repeat one). `g` = progress(items, …); `linkOf(item)` → text.
+// Returns { lines, said } with the new lists to remember. Pure.
+export const waveId = (w) => w.items.map((i) => i.key).sort().join('+');
+export function announcements(items, g, said, linkOf) {
+  const merged = said?.merged ?? [], waves = said?.waves ?? [], lines = [];
+  const newly = items.filter((i) => g.state[i.key] === 'merged' && !merged.includes(i.key));
+  for (const i of newly) lines.push(`[factory] merged: ${linkOf(i)}. ${g.merged}/${g.total} tasks merged.`);
+  const reports = wavesReport(items, g.state), fresh = reports.filter((w) => w.complete && !waves.includes(waveId(w)));
+  for (const w of fresh) {
+    const later = reports.find((r) => r.wave > w.wave);
+    const next = later ? later.items.filter((i) => ['pending', 'running'].includes(g.state[i.key])).map((i) => i.title).join('; ') || 'waiting on the earlier tasks' : 'nothing, that was the last wave';
+    lines.push(`[factory] wave ${w.wave} done: ${w.items.map(linkOf).join('; ')}. ${g.merged}/${g.total} merged; next: ${next}.`);
+  }
+  return { lines, said: { merged: [...merged, ...newly.map((i) => i.key)], waves: [...waves, ...fresh.map(waveId)] } };
+}

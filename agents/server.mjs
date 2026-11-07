@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
-import { parsePlan, mergePlan, progress, wavesReport, MAX_PLAN_TASKS } from './plan.mjs';
+import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS } from './plan.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -536,19 +536,13 @@ const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped
 // say once: a task merged (one line), a wave fully merged (what was built, what starts next).
 // What was said is kept on the epic (mergedAnnounced, wavesAnnounced), so a restart repeats nothing.
 function announceProgress(t) {
-  const g = progress(t.plan, itemState), done = t.mergedAnnounced ?? [], doneWaves = t.wavesAnnounced ?? [];
+  const g = progress(t.plan, itemState);
   const link = (i) => { const k = i.taskId ? load(i.taskId) : null; return `${i.title}${k?.pr ? ` (${k.pr.url ?? `PR #${k.pr.number}`})` : ''}`; };
-  const newly = t.plan.filter((i) => g.state[i.key] === 'merged' && !done.includes(i.key));
-  const reports = wavesReport(t.plan, g.state), fresh = reports.filter((w) => w.complete && !doneWaves.includes(w.wave));
-  if (!newly.length && !fresh.length) return;
+  const r = announcements(t.plan, g, { merged: t.mergedAnnounced, waves: t.wavesAnnounced }, link);
+  if (!r.lines.length) return;
   // remember first, then say: a crash in between loses a message rather than repeating one
-  update(t.id, (x) => { x.mergedAnnounced = [...done, ...newly.map((i) => i.key)]; x.wavesAnnounced = [...doneWaves, ...fresh.map((w) => w.wave)]; });
-  for (const i of newly) say(t.id, 'factory', `[factory] merged: ${link(i)}. ${g.merged}/${g.total} tasks merged.`);
-  for (const w of fresh) {
-    const later = reports.find((r) => r.wave > w.wave);
-    const next = later ? later.items.filter((i) => g.state[i.key] === 'pending' || g.state[i.key] === 'running').map((i) => i.title).join('; ') || 'waiting on the earlier tasks' : 'nothing, that was the last wave';
-    say(t.id, 'factory', `[factory] wave ${w.wave} done: ${w.items.map(link).join('; ')}. ${g.merged}/${g.total} merged; next: ${next}.`);
-  }
+  update(t.id, (x) => { x.mergedAnnounced = r.said.merged; x.wavesAnnounced = r.said.waves; });
+  for (const l of r.lines) say(t.id, 'factory', l);
 }
 async function watchPrograms() {
   for (const t of allTasks().filter((x) => x.kind === 'program' && x.phase === 'run' && Array.isArray(x.plan) && x.plan.length && !['done', 'stopped', 'decision needed'].includes(x.status))) {

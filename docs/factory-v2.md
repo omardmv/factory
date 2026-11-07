@@ -170,6 +170,11 @@ plans and tracks, never codes. Founder 2026-11-08.
   the epic shows progress (13/15).
 - **In Slack:** a channel for the epic (plan, progress, decisions, each
   wave's results); each task keeps its own channel.
+- **Reports in the epic's conversation:** `[factory] merged: <task> (PR link). M/T`
+  when a task merges, and `[factory] wave N done: <tasks with PR links>. M/T
+  merged; next: ...` when every task of a wave has merged. Each is said once
+  (remembered on the epic as `mergedAnnounced` / `wavesAnnounced`, a wave by its
+  task keys), also across restarts.
 - **Parallel without jams:** up to 5 agents at once by default (the box fits
   6-8 at 4 CPU / 8 GB each; the Claude plan's usage is the real limit). When
   a parallel PR no longer merges cleanly into staging, the factory sends it
