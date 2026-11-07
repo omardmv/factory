@@ -114,7 +114,8 @@ const readJson = (f, dflt) => existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')
 // installed on each project's repository). Every token is limited to the
 // task's one repository and to this list, unless a project lists its own.
 // Workflows, secrets, settings and administration are never in it.
-const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', issues: 'write', checks: 'read', statuses: 'read', actions: 'read', metadata: 'read' };
+// workflows: write lets agents change CI (.github/workflows); the founder approved it on 2026-11-08 (gates.md)
+const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', issues: 'write', workflows: 'write', checks: 'read', statuses: 'read', actions: 'read', metadata: 'read' };
 async function githubToken(repo) {
   const app = Object.values(PROJECTS).find((p) => p.repo === repo)?.githubApp;
   if (!app) throw new Error(`no GitHub App configured for ${repo}`);
