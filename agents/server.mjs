@@ -19,6 +19,7 @@ import { verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinat
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
+import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync } from 'node:fs';
@@ -295,6 +296,8 @@ async function qa({ id }) {
   const head = pr.head.sha;
   const n = (t.qaRounds ?? 0) + 1, run = `${n}-${head.slice(0, 7)}`;
   const ws = `qa/${n}/workspace`;
+  // the person's images, at the same /workspace/attachments paths the task text names
+  if (existsSync(`${dir(id)}/workspace/attachments`)) cpSync(`${dir(id)}/workspace/attachments`, `${dir(id)}/${ws}/attachments`, { recursive: true });
   // the previews' basic-auth password, for the container's user only
   const secrets = `${dir(id)}/qa/${n}/secrets`;
   mkdirSync(secrets, { recursive: true });
@@ -457,10 +460,11 @@ async function publishTaskMedia(id) {
 const planningPrompt = (note) => `${note}
 Now write the plan. Frame it with the "large" playbook: the definition of done for the whole epic, scope, risks, shaped by the discussion so far. Reply to the person in plain words: the framing, then the waves the dependencies make (wave 1: what starts at once; wave 2: what each waits for; ...) as short lists, then the risks. ${PLAN_RULES}
 Do not change any file.`;
-function createProgram(project, goal) {
+function createProgram(project, goal, attachments) {
   const p = PROJECTS[project]; if (!p) throw new Error(`unknown project ${project}`);
-  if (!goal) throw new Error('empty goal');
+  if (!goal && !attachments?.length) throw new Error('empty goal');
   const id = newId(); mkdirSync(dir(id), { recursive: true });
+  goal = withAttachments(goal, `${dir(id)}/workspace`, attachments);
   const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'talk', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString() };
   save(t); say(id, 'you', goal);
   enqueue(id, `EPIC ${id} in ${p.repo} (base ${p.base}). You are its coordinator: you plan and track; you never write code. Agents do each piece as its own task and PR (each with its own tests and an independent review); approved PRs merge into ${p.autoMerge ?? p.base}${p.autoMerge ? ' by themselves' : ' when the person merges them'}.
@@ -595,11 +599,12 @@ async function watchPrograms() {
 
 // ---------- the conversation ----------
 const newId = () => `${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${randomBytes(3).toString('hex')}`;
-function createTask(project, text, auto, extra = {}) {
+function createTask(project, text, auto, { attachments, ...extra } = {}) {
   const p = PROJECTS[project]; if (!p) throw new Error(`unknown project ${project}`);
-  if (!text) throw new Error('empty task');
+  if (!text && !attachments?.length) throw new Error('empty task');
   const id = newId();
   mkdirSync(dir(id), { recursive: true });
+  text = withAttachments(text, `${dir(id)}/workspace`, attachments).trim();
   const t = { id, project, repo: p.repo, base: p.base, kind: 'change', title: text.split('\n')[0].slice(0, 90), phase: auto ? 'run' : 'brief', auto, status: 'queued', factoryRounds: 0, createdAt: new Date().toISOString(), ...extra };
   save(t); say(id, 'you', text);
   if (t.kind === 'report') enqueue(id, reportPrompt(t, text), 'bypassPermissions', 'start');
@@ -739,7 +744,7 @@ async function digest(hours) {
 
 // ---------- http ----------
 const authOk = (req) => { const h = req.headers.authorization ?? ''; const want = `Bearer ${secret('api-token')}`; return h.length === want.length && timingSafeEqual(Buffer.from(h), Buffer.from(want)); };
-async function body(req) { let b = ''; for await (const c of req) { b += c; if (b.length > 200000) throw new Error('body too large'); } return b ? JSON.parse(b) : {}; }
+async function body(req) { let b = ''; for await (const c of req) { b += c; if (b.length > MAX_BODY_BYTES) throw new Error('body too large'); } return b ? JSON.parse(b) : {}; }
 const handler = async (req, res) => {
   const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
   try {
@@ -748,7 +753,7 @@ const handler = async (req, res) => {
     if (!authOk(req)) return send(401, { error: 'unauthorized' });
     if (url.pathname === '/digest' && req.method === 'GET') return send(200, await digest(Number(url.searchParams.get('hours') ?? 24)));
     if (url.pathname === '/classify' && req.method === 'POST') { const b = await body(req); return send(200, await classify(String(b.text ?? ''))); }
-    if (url.pathname === '/programs' && req.method === 'POST') { const b = await body(req); return send(201, createProgram(b.project, String(b.goal ?? '').trim())); }
+    if (url.pathname === '/programs' && req.method === 'POST') { const b = await body(req); return send(201, createProgram(b.project, String(b.goal ?? '').trim(), b.attachments)); }
     // a batch: independent tasks, each run without a brief to a reviewed PR
     if (url.pathname === '/batches' && req.method === 'POST') {
       const b = await body(req);
@@ -764,12 +769,12 @@ const handler = async (req, res) => {
     if (!id && req.method === 'GET') return send(200, allTasks().map((t) => ({ ...t, running: running.has(t.id), lastActivity: running.has(t.id) ? activity(t.id, 1)[0] ?? null : null, lastAgent: messages(t.id).filter((m) => ['agent', 'coordinator'].includes(m.from)).at(-1)?.text ?? '' })));
     if (!id && req.method === 'POST') {
       const b = await body(req); const text = String(b.text ?? '').trim();
-      if (b.kind === 'report') return send(201, createTask(b.project, text, true, { kind: 'report', title: `bug: ${text.split('\n')[0]}`.slice(0, 90) }));
-      return send(201, createTask(b.project, text, !!b.auto));
+      if (b.kind === 'report') return send(201, createTask(b.project, text, true, { kind: 'report', title: `bug: ${text.split('\n')[0] || 'see the attached image'}`.slice(0, 90), attachments: b.attachments }));
+      return send(201, createTask(b.project, text, !!b.auto, { attachments: b.attachments }));
     }
     if (!existsSync(`${dir(id)}/task.json`)) return send(404, { error: 'no such task' });
     if (!sub && req.method === 'GET') return send(200, { ...load(id), running: running.has(id), messages: messages(id), activity: activity(id), decisions: decisions(id) });
-    if (sub === 'messages' && req.method === 'POST') { const b = await body(req); return send(200, post(id, b.from === 'factory' ? 'factory' : 'you', String(b.text ?? '').trim())); }
+    if (sub === 'messages' && req.method === 'POST') { const b = await body(req); const from = b.from === 'factory' ? 'factory' : 'you'; return send(200, post(id, from, from === 'you' ? withAttachments(String(b.text ?? '').trim(), `${dir(id)}/workspace`, b.attachments).trim() : String(b.text ?? '').trim())); }
     if (sub === 'stop' && req.method === 'POST') {
       dropQueued(id);
       if (containers.has(id)) spawn('docker', ['kill', containers.get(id)], { stdio: 'ignore' });

@@ -47,6 +47,36 @@ async function agents(path, init = {}, timeoutMs = 10000) {
   const j = await r.json(); if (!r.ok) throw new Error(j.error ?? r.status); return j;
 }
 
+// ---- images the person attaches: Slack keeps them private, so the bot fetches
+// them with its own token (needs the files:read scope) and hands them to the
+// agents API, which saves them into the task's workspace
+export const MAX_IMAGES = 6;
+export const imageFilesOf = (ev) => (ev?.files ?? []).filter((f) => /^image\//.test(f?.mimetype ?? '')).slice(0, MAX_IMAGES)
+  .map((f) => ({ id: f.id, name: f.name ?? f.title ?? 'image', url: f.url_private_download ?? f.url_private ?? null }));
+export async function downloadImages(files, { token = secret('slack-bot-token'), get = fetch } = {}) {
+  const attachments = [], problems = [];
+  for (const f of files ?? []) {
+    try {
+      let url = f.url;
+      if (!url) url = (await slack('files.info', { file: f.id }, token)).file?.url_private_download;
+      if (!url) throw new Error('no download link');
+      const r = await get(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // without files:read Slack answers with its sign-in page, not the file
+      if (/text\/html/.test(r.headers.get('content-type') ?? '')) throw new Error('Slack sent a sign-in page: the app needs the files:read permission');
+      attachments.push({ name: f.name, data: Buffer.from(await r.arrayBuffer()).toString('base64') });
+    } catch (e) { problems.push(`${f.name}: ${e.message}`); }
+  }
+  return { attachments, problems };
+}
+// the attachments to send, plus a warning for the person when some could not be read
+async function withImages(files, channel) {
+  if (!files?.length) return [];
+  const { attachments, problems } = await downloadImages(files);
+  if (problems.length) await post(channel ?? state.dm, `⚠️ I couldn't read ${problems.length === files.length ? 'your image' + (files.length > 1 ? 's' : '') : 'some images'}, so the agent won't see ${problems.length > 1 ? 'them' : 'it'}:\n${problems.map((p) => `• ${esc(p)}`).join('\n')}`).catch(() => {});
+  return attachments;
+}
+
 // ---- formatting: Slack mrkdwn, short messages, the full text one tap away
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const short = (s, n = 60) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
@@ -179,7 +209,7 @@ const HELP = `*What I understand*
 
 // ---- what to start, once the project is known
 // kind: task | queue | bug | program; channel: the founder's own channel (task only)
-async function begin(kind, project, text, channel, note = '') {
+async function begin(kind, project, text, channel, note = '', files = []) {
   if (kind === 'queue') {
     const items = text.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
     const b = await agents('/batches', { method: 'POST', body: JSON.stringify({ project, items }) });
@@ -189,15 +219,17 @@ async function begin(kind, project, text, channel, note = '') {
     for (const t of b.tasks) await channelFor(t);
     return dm(`📦 *Queue started: ${b.tasks.length} tasks* (${project}${note}), each in its own channel. One summary comes here when all are done.`);
   }
+  const attachments = await withImages(files, channel);
+  const wait = attachments.length ? 120000 : 10000;
   if (kind === 'bug' || kind === 'program') {
     const t = kind === 'bug'
-      ? await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, kind: 'report', text }) })
-      : await agents('/programs', { method: 'POST', body: JSON.stringify({ project, goal: text }) });
+      ? await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, kind: 'report', text, attachments }) }, wait)
+      : await agents('/programs', { method: 'POST', body: JSON.stringify({ project, goal: text, attachments }) }, wait);
     state.sent[t.id] = 1; persist();
     const ch = await channelFor(t);
     return dm(`${kind === 'bug' ? '🔎 Triage' : '🧭 Epic'} started (${project}${note}) in <#${ch}>.`);
   }
-  const t = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, text }) });
+  const t = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, text, attachments }) }, wait);
   state.sent[t.id] = 1; // the person's own message is #0
   if (channel) bind(t.id, channel); else persist();
   const ch = channel ?? await channelFor(t);
@@ -208,14 +240,14 @@ async function begin(kind, project, text, channel, note = '') {
 
 // ---- no project named: guess from the words, ask when unsure
 const titleCase = (p) => p[0].toUpperCase() + p.slice(1);
-async function resolve(kind, text, channel) {
+async function resolve(kind, text, channel, files = []) {
   let guess = { project: null, why: '' };
-  try { guess = await agents('/classify', { method: 'POST', body: JSON.stringify({ text }) }, 120000); } catch (e) { log('classify.error', { error: e.message }); }
+  try { guess = await agents('/classify', { method: 'POST', body: JSON.stringify({ text: text || '(only an image was sent)' }) }, 120000); } catch (e) { log('classify.error', { error: e.message }); }
   if (guess.project && PROJECTS[guess.project]) {
-    return begin(kind, guess.project, text, channel, `, guessed from your message: ${esc(guess.why || titleCase(guess.project))}. Wrong project? \`/factory stop\` and resend starting with the project name`);
+    return begin(kind, guess.project, text, channel, `, guessed from your message: ${esc(guess.why || titleCase(guess.project))}. Wrong project? \`/factory stop\` and resend starting with the project name`, files);
   }
   const key = randomBytes(4).toString('hex');
-  state.pending[key] = { kind, text, channel: channel ?? null, at: new Date().toISOString() }; persist();
+  state.pending[key] = { kind, text, channel: channel ?? null, files, at: new Date().toISOString() }; persist();
   const where = channel ?? state.dm;
   const why = guess.why ? ` (${esc(guess.why)})` : '';
   await slack('chat.postMessage', { channel: where, text: `Which project is this for?${why}`, blocks: [
@@ -237,35 +269,38 @@ export async function onMessage(ev) {
     }
     return; // silent to strangers
   }
-  if (ev.user !== state.owner || !text) return;
+  const files = imageFilesOf(ev);
+  if (ev.user !== state.owner || (!text && !files.length)) return;
   const taskId = state.channelTask[ev.channel];
   if (taskId) {
     // a bare stop / pause / resume is a command, not an answer for the agent
     const cmd = /^(stop|pause|resume)[.!]?$/i.exec(text)?.[1]?.toLowerCase();
     if (cmd) { const r = await onCommand({ user_id: ev.user, channel_id: ev.channel, text: cmd }); return post(ev.channel, r.text); }
-    await agents(`/tasks/${taskId}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
+    const attachments = await withImages(files, ev.channel);
+    if (!text && !attachments.length) return;
+    await agents(`/tasks/${taskId}/messages`, { method: 'POST', body: JSON.stringify({ text, attachments }) }, attachments.length ? 120000 : 10000);
     return slack('reactions.add', { channel: ev.channel, timestamp: ev.ts, name: 'eyes' }).catch(() => {});
   }
-  if (ev.channel_type === 'im') return onDm(text);
+  if (ev.channel_type === 'im') return onDm(text, files);
   if (state.fresh[ev.channel]) {
     // a channel the founder just created: its first message is the idea.
     // Any other channel the bot happens to be in is never a task.
     delete state.fresh[ev.channel]; persist();
     const info = (await slack('conversations.info', { channel: ev.channel })).channel;
     const named = projectOfChannel(info.name);
-    return named ? begin('task', named, text, ev.channel) : resolve('task', text, ev.channel);
+    return named ? begin('task', named, text, ev.channel, '', files) : resolve('task', text, ev.channel, files);
   }
 }
 
-async function onDm(text) {
+async function onDm(text, files = []) {
   const q = text.match(new RegExp(`^queue(?:\\s+(${NAMES}))?\\s*(?::|(?=\\n)|$)`, 'i'));
   const k = !q && text.match(new RegExp(`^(bug|program|epic)(?:\\s+(${NAMES}))?\\s*:\\s*`, 'i'));
   const m = !q && !k && text.match(new RegExp(`^(${NAMES})\\s*:\\s*`, 'i'));
   const kind = q ? 'queue' : k ? (k[1].toLowerCase() === 'epic' ? 'program' : k[1].toLowerCase()) : 'task';
   const project = (q?.[1] ?? k?.[2] ?? m?.[1])?.toLowerCase() ?? null;
   const rest = (q ? text.slice(q[0].length) : k ? text.slice(k[0].length) : m ? text.slice(m[0].length) : text).trim();
-  if (!rest) return kind === 'queue' ? dm('A queue is one task per line:\n```queue:\n- make the Save button sticky on phones\n- fix the login redirect```') : dm(HELP);
-  return project ? begin(kind, project, rest) : resolve(kind, rest);
+  if (!rest && !(files.length && kind !== 'queue')) return kind === 'queue' ? dm('A queue is one task per line:\n```queue:\n- make the Save button sticky on phones\n- fix the login redirect```') : dm(HELP);
+  return project ? begin(kind, project, rest, undefined, '', kind === 'queue' ? [] : files) : resolve(kind, rest, undefined, kind === 'queue' ? [] : files);
 }
 
 // a channel the founder creates: join it so its first message can become the task
@@ -304,7 +339,7 @@ export async function onAction(p) {
     if (!job || !PROJECTS[project]) return;
     delete state.pending[key]; persist();
     if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, text: `Project: ${project}`, blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: `✔️ ${titleCase(project)}: ${esc(short(job.text.split('\n')[0], 120))}` }] }] }).catch(() => {});
-    return begin(job.kind, project, job.text, job.channel ?? undefined);
+    return begin(job.kind, project, job.text, job.channel ?? undefined, '', job.files ?? []);
   }
   if (!['go', 'plan'].includes(a?.action_id) || !a.value) return;
   const planIt = a.action_id === 'plan';
