@@ -90,6 +90,25 @@ staging. Production stays a manual merge by the founder, always.
   on first try. A brain change whose numbers get worse over the next tasks
   is reverted.
 
+## 5b. One factory, many projects
+
+The factory is general; a project brings what is special about it.
+
+| Layer | Lives in | Example |
+| --- | --- | --- |
+| How every agent works | `brain/` (factory repo) | playbooks, review, QA, security |
+| How this project's previews run | `projects/<name>/` (factory repo) + `preview.compose.yaml` (project repo) | Postgres + pgvector, Redis, a Node or Python app, its snapshot and disarm |
+| What the factory does for it | `agents/projects.json` | base branch, QA on/off, auto-merge target, loops |
+| How to work in its code | the project repo: `AGENTS.md`, `.claude/skills/` | its test commands, conventions, verification skill |
+| What its agents need installed | `projects/<name>/agent.Dockerfile`, `FROM factory-agent-base` | Postgres 16 + pgvector for ContentCoach; Go, Rust or nothing extra for others |
+| Factory-side facts about it | `projects/<name>/knowledge/`, mounted only into that project's containers | its data quirks, its staging, what not to touch |
+
+Today the agent image is ContentCoach's (Postgres + pgvector, Python + uv
+baked in): it splits into a general `factory-agent-base` and a thin image
+per project, built by self-update when its Dockerfile changes. Onboarding
+stays `factory init`: a new project fills these in and nothing in the
+factory changes.
+
 ## 6. Safety gates (never self-modified)
 
 Any change to these is `DECISION NEEDED` and waits for the founder, even
@@ -115,3 +134,4 @@ hold these (list kept in `brain/knowledge/gates.md`) is never auto-merged.
 4. PR-first + researcher stage.
 5. Loops per project.
 6. Retro + metrics.
+7. Per-project agent images and knowledge (5b).
