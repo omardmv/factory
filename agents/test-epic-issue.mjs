@@ -74,3 +74,35 @@ assert.equal(f.calls.filter((c) => c.path.endsWith('/10/sub_issues')).length, 5)
 assert.equal(f.issues[13].state_reason, 'not_planned');
 assert.equal(f.issues[11].state_reason, 'completed');
 ok('new plan items get sub-issues; dropped closes not_planned');
+
+// revise then sync: kept items keep their issue, removed ones are closed, nothing is duplicated
+{
+  const { mergePlan } = await import('./plan.mjs');
+  const g = fakeGh(); const pl = mkPlan();
+  const r = await createEpicIssue({ gh: g.gh, token: 'tok', repo: 'o/r', title: 'E', goal: 'G', plan: pl });
+  const rev = mergePlan(pl, [P('a', [], 1), P('b', ['a'], 2), P('x', ['a'], 2)]).items;
+  assert.deepEqual(rev.filter((i) => i.key !== 'x').map((i) => i.issue), [11, 12]);
+  const before = g.calls.filter((c) => c.method === 'POST' && c.path === '/repos/o/r/issues').length;
+  await syncEpicIssue({ gh: g.gh, token: 'tok', repo: 'o/r', epic: r.epic, goal: 'G', plan: rev, previous: pl, states: {} });
+  assert.equal(g.calls.filter((c) => c.method === 'POST' && c.path === '/repos/o/r/issues').length - before, 1); // only x
+  assert.equal(g.issues[13].state_reason, 'not_planned'); assert.equal(g.issues[14].state_reason, 'not_planned'); // c, d removed
+  ok('revise then sync: no duplicates, removed tasks closed not_planned');
+}
+// link failure: retry re-links, never duplicates; epic number survives; failed-then-merged relabelled; no issue for failed-before-open
+{
+  const g = fakeGh(); const pl = mkPlan(); let boom = true;
+  const gh = async (t, p, m, d) => { if (boom && p.endsWith('/sub_issues') && d.sub_issue_id === 1012) throw new Error('rate limit'); return g.gh(t, p, m, d); };
+  let err; try { await createEpicIssue({ gh, token: 'tok', repo: 'o/r', title: 'E', goal: 'G', plan: pl }); } catch (e) { err = e; }
+  assert.equal(err.partial.epic.number, 10);
+  boom = false;
+  await syncEpicIssue({ gh, token: 'tok', repo: 'o/r', epic: err.partial.epic, goal: 'G', plan: pl, states: {} });
+  assert.equal(g.calls.filter((c) => c.path.endsWith('/10/sub_issues')).length, 4);
+  assert.equal(g.calls.filter((c) => c.method === 'POST' && c.path === '/repos/o/r/issues').length, 5);
+  await syncEpicIssue({ gh, token: 'tok', repo: 'o/r', epic: err.partial.epic, goal: 'G', plan: pl, states: { a: 'failed' } });
+  await syncEpicIssue({ gh, token: 'tok', repo: 'o/r', epic: err.partial.epic, goal: 'G', plan: pl, states: { a: 'merged' } });
+  assert.equal(g.issues[11].state_reason, 'completed');
+  const q = [P('z', [], 1)];
+  await syncEpicIssue({ gh, token: 'tok', repo: 'o/r', epic: err.partial.epic, goal: 'G', plan: q, states: { z: 'failed' } });
+  assert.equal(q[0].issue, undefined);
+  ok('link failure retried without duplicates; failed→merged relabelled; over tasks get no issue');
+}

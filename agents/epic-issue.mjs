@@ -40,35 +40,50 @@ export function renderSubIssueBody(item, epicNumber, plan = []) {
 const link = (gh, token, repo, epic, id) => gh(token, `/repos/${repo}/issues/${epic}/sub_issues`, 'POST', { sub_issue_id: id });
 
 // creates sub-issues for items without one, in plan order, and links each
-async function openMissing({ gh, token, repo, epic, plan }) {
+const skip = new Set(['failed', 'dropped']);
+async function openMissing({ gh, token, repo, epic, plan, states = {} }) {
   const items = {};
   for (const it of plan) {
-    if (it.issue) { items[it.key] = { number: it.issue, id: it.issueId }; continue; }
+    if (it.issue) {
+      if (!it.issueId) it.issueId = (await gh(token, `/repos/${repo}/issues/${it.issue}`)).id;
+      if (it.linked === false) { await link(gh, token, repo, epic, it.issueId); it.linked = true; } // an earlier link failed
+      items[it.key] = { number: it.issue, id: it.issueId }; continue;
+    }
+    // no sub-issue for a task that is already over: nothing to track
+    if (skip.has(stateOf(states, it.key))) continue;
     const made = await gh(token, `/repos/${repo}/issues`, 'POST', { title: it.title ?? it.key, body: renderSubIssueBody(it, epic, plan) });
-    it.issue = made.number; it.issueId = made.id;
+    it.issue = made.number; it.issueId = made.id; it.linked = false;
     items[it.key] = { number: made.number, id: made.id };
     await link(gh, token, repo, epic, made.id);
+    it.linked = true;
   }
   return items;
 }
 
 export async function createEpicIssue({ gh, token, repo, title, goal, plan }) {
   const made = await gh(token, `/repos/${repo}/issues`, 'POST', { title, body: renderEpicBody(goal, plan, {}) });
-  const items = await openMissing({ gh, token, repo, epic: made.number, plan });
+  let items;
+  try { items = await openMissing({ gh, token, repo, epic: made.number, plan }); }
+  catch (e) { e.partial = { epic: { number: made.number, url: made.html_url } }; throw e; } // retry with syncEpicIssue, not a second epic
   await gh(token, `/repos/${repo}/issues/${made.number}`, 'PATCH', { body: renderEpicBody(goal, plan, {}) }); // now with issue numbers
   return { epic: { number: made.number, url: made.html_url }, items };
 }
 
 // epic = {number, goal?}; opts.goal / opts.tasksUrl for the body. Returns {items}.
-export async function syncEpicIssue({ gh, token, repo, epic, goal, plan, states = {}, tasksUrl }) {
+// previous: the plan before a revision; its items no longer in `plan` get closed as not planned
+export async function syncEpicIssue({ gh, token, repo, epic, goal, plan, states = {}, tasksUrl, previous = [] }) {
   const R = `/repos/${repo}`;
-  const items = await openMissing({ gh, token, repo, epic: epic.number, plan });
-  for (const it of plan) {
-    const st = stateOf(states, it.key);
+  const items = await openMissing({ gh, token, repo, epic: epic.number, plan, states });
+  const gone = previous.filter((p) => p.issue && !plan.some((i) => i.key === p.key));
+  for (const it of [...plan.filter((i) => i.issue), ...gone.map((p) => ({ ...p, _gone: true }))]) {
+    const st = it._gone ? 'dropped' : stateOf(states, it.key);
     const want = st === 'merged' ? 'completed' : (st === 'failed' || st === 'dropped') ? 'not_planned' : null;
     if (!want) continue;
     const cur = await gh(token, `${R}/issues/${it.issue}`);
-    if (cur.state === 'closed') continue;
+    if (cur.state === 'closed') { // failed earlier, merged later: correct the label
+      if (want === 'completed' && cur.state_reason !== 'completed') await gh(token, `${R}/issues/${it.issue}`, 'PATCH', { state: 'closed', state_reason: 'completed' });
+      continue;
+    }
     if (want === 'not_planned') await gh(token, `${R}/issues/${it.issue}/comments`, 'POST', { body: st === 'failed' ? 'The factory could not finish this task (its PR was closed or the agent stopped), so it is closed as not planned.' : 'This task was dropped from the epic\'s plan.' });
     await gh(token, `${R}/issues/${it.issue}`, 'PATCH', { state: 'closed', state_reason: want });
   }

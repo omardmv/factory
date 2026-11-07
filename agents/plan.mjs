@@ -64,7 +64,10 @@ export function waves(tasks) {
 // started (has a task id) keeps going, under its key, whatever the new plan says.
 export function mergePlan(current, next) {
   const started = new Map(current.filter((i) => i.taskId).map((i) => [i.key, i]));
-  const merged = next.map((t) => (started.has(t.key) ? { ...t, taskId: started.get(t.key).taskId } : { ...t }));
+  const old = new Map(current.map((i) => [i.key, i]));
+  // a kept key keeps its GitHub sub-issue (issue/issueId/linked) so a revision never opens a second one
+  const gh = (k) => { const o = old.get(k); return o?.issue ? { issue: o.issue, issueId: o.issueId, ...(o.linked === undefined ? {} : { linked: o.linked }) } : {}; };
+  const merged = next.map((t) => ({ ...t, ...gh(t.key), ...(started.has(t.key) ? { taskId: started.get(t.key).taskId } : {}) }));
   for (const [k, i] of started) if (!next.some((t) => t.key === k)) merged.push(i); // dropped from the plan but already running
   const w = waves(merged);
   if (w.error) return { error: w.error };
