@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, isPlanCommand, talkAction, talkReply } from './plan.mjs';
+import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS, isPlanCommand, talkAction, talkReply } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
@@ -92,6 +92,59 @@ assert.match(parsePlan('```plan\n{"tasks": []').error, /not closed/);
 const two = parsePlan('old:\n```plan\n' + JSON.stringify({ tasks: [T('old')] }) + '\n```\nnew:\n```plan\n' + JSON.stringify({ tasks: [T('new')] }) + '\n```');
 assert.equal(two.tasks[0].key, 'new');
 ok('fences inside task text are ignored; an unclosed block is refused; the last block wins');
+
+const wp = parsePlan(block([T('a'), T('b'), T('c', ['a', 'b']), T('d', ['c'])])).tasks;
+let r = wavesReport(wp, { a: 'merged', b: 'running', c: 'pending', d: 'pending' });
+assert.deepEqual(r.map((w) => [w.wave, w.merged, w.total, w.complete]), [[1, 1, 2, false], [2, 0, 1, false], [3, 0, 1, false]]);
+r = wavesReport(wp, (i) => (['a', 'b'].includes(i.key) ? 'merged' : 'pending'));
+assert.deepEqual(r.map((w) => w.complete), [true, false, false]);
+assert.equal(r[0].items.length, 2);
+ok('wavesReport: per wave merged/total and complete; takes a map or a function');
+
+// revised plan: a new task joins a finished wave, a started task is dropped from the plan but kept
+const done1 = wp.map((i) => (i.key === 'a' ? { ...i, taskId: 'id-a' } : i));
+const revd = mergePlan(done1, parsePlan(block([T('b'), T('e'), T('c', ['b', 'e'])])).tasks).items;
+const rr = wavesReport(revd, { a: 'merged', b: 'merged', e: 'pending', c: 'pending' });
+assert.deepEqual(rr.map((w) => [w.wave, w.merged, w.total, w.complete]), [[1, 2, 3, false], [2, 0, 1, false]]);
+assert.ok(revd.some((i) => i.key === 'a'));
+const rr2 = wavesReport(revd, { a: 'merged', b: 'merged', e: 'merged', c: 'pending' });
+assert.deepEqual(rr2.map((w) => w.complete), [true, false]);
+assert.deepEqual(wavesReport([], {}), []);
+ok('wavesReport: revised plans (added and kept-though-dropped items) and an empty plan');
+
+const lk = (i) => i.title;
+const gOf = (st) => progress(wp, (i) => st[i.key]);
+let a1 = announcements(wp, gOf({ a: 'merged', b: 'running', c: 'pending', d: 'pending' }), undefined, lk);
+assert.deepEqual(a1.lines, ['[factory] merged: a. 1/4 tasks merged.']);
+let a2 = announcements(wp, gOf({ a: 'merged', b: 'running', c: 'pending', d: 'pending' }), a1.said, lk);
+assert.deepEqual(a2.lines, []);
+const a3 = announcements(wp, gOf({ a: 'merged', b: 'merged', c: 'pending', d: 'pending' }), a1.said, lk);
+assert.deepEqual(a3.lines, ['[factory] merged: b. 2/4 tasks merged.', '[factory] wave 1 done: a; b. 2/4 merged; next: c.']);
+assert.deepEqual(announcements(wp, gOf({ a: 'merged', b: 'merged', c: 'pending', d: 'pending' }), a3.said, lk).lines, []);
+const a4 = announcements(wp, gOf({ a: 'merged', b: 'merged', c: 'merged', d: 'merged' }), a3.said, lk);
+assert.match(a4.lines.at(-1), /wave 3 done: d\. 4\/4 merged; next: nothing, that was the last wave/);
+ok('announcements: first merge, a second pass says nothing, a wave completing, the last wave');
+
+// c announced as wave 2, then a revision puts e before it: c is wave 3 now, and e's wave is announced when e merges
+const w2 = parsePlan(block([T('a'), T('c', ['a'])])).tasks;
+const s1 = announcements(w2, progress(w2, () => 'merged'), undefined, lk).said;
+const w3 = mergePlan(w2.map((i) => ({ ...i, taskId: 'x' })), parsePlan(block([T('a'), T('e', ['a']), T('c', ['e'])])).tasks).items;
+const st3 = { a: 'merged', c: 'pending', e: 'merged' };
+const a5 = announcements(w3, progress(w3, (i) => st3[i.key]), s1, lk);
+assert.ok(a5.lines.some((l) => /wave 2 done: e/.test(l)), a5.lines.join('|'));
+ok('announcements: waves are remembered by their tasks, so renumbering does not hide one');
+
+// a wave that gains a task after it was announced is announced again when the new task merges (new work finished)
+const w1 = parsePlan(block([T('a'), T('b'), T('c', ['a', 'b'])])).tasks;
+const sA = announcements(w1, progress(w1, (i) => (i.key === 'c' ? 'pending' : 'merged')), undefined, lk).said;
+const w1r = mergePlan(w1.map((i) => ({ ...i, taskId: 'x' })), parsePlan(block([T('a'), T('b'), T('e'), T('c', ['a', 'b'])])).tasks).items;
+const stR = { a: 'merged', b: 'merged', e: 'running', c: 'pending' };
+assert.deepEqual(announcements(w1r, progress(w1r, (i) => stR[i.key]), sA, lk).lines, []);
+stR.e = 'merged';
+const aR = announcements(w1r, progress(w1r, (i) => stR[i.key]), sA, lk);
+assert.match(aR.lines.at(-1), /wave 1 done: a; b; e\. 3\/4 merged; next: c\./);
+assert.deepEqual(announcements(w1r, progress(w1r, (i) => stR[i.key]), aR.said, lk).lines.filter((l) => /wave/.test(l)), []);
+ok('announcements: a wave that gains a task is announced again once, when the new task merges; "next" only names what can start');
 
 for (const y of ['plan', 'Plan it', 'plan:', 'plan it!', 'make the plan', '  Make a plan please', 'PLAN!']) assert.ok(isPlanCommand(y), y);
 for (const x of ['go', 'planning is hard', 'what is the plan?', 'I would not plan yet', 'Plan B looks better', 'plan it later', 'plans', '', null]) assert.ok(!isPlanCommand(x), String(x));

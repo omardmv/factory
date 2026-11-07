@@ -98,6 +98,38 @@ export function progress(items, stateOf) {
     done: count('merged') === items.length, stalled: moving === 0 && count('merged') < items.length };
 }
 
+// Per wave: is every item merged, and how many. `state` is the map progress()
+// returns (key → state) or the same function progress() takes. Items dropped
+// from a revised plan but kept because they run (mergePlan) count in the wave
+// they now sit in. Waves are listed in order; a wave with no items is not listed.
+export function wavesReport(items, state) {
+  const stateOf = typeof state === 'function' ? state : (i) => state?.[i.key];
+  const by = new Map();
+  for (const i of items) { if (!by.has(i.wave)) by.set(i.wave, []); by.get(i.wave).push(i); }
+  return [...by.keys()].sort((a, b) => a - b).map((wave) => {
+    const list = by.get(wave), merged = list.filter((i) => stateOf(i) === 'merged').length;
+    return { wave, items: list, merged, total: list.length, complete: merged === list.length };
+  });
+}
+
+// What to say now, given what was said before. `said` = { merged: [task keys], waves: [wave ids] }
+// (a wave id is its task keys, sorted and joined, so a revised plan that renumbers
+// waves does not hide or repeat one). `g` = progress(items, …); `linkOf(item)` → text.
+// Returns { lines, said } with the new lists to remember. Pure.
+export const waveId = (w) => w.items.map((i) => i.key).sort().join('+');
+export function announcements(items, g, said, linkOf) {
+  const merged = said?.merged ?? [], waves = said?.waves ?? [], lines = [];
+  const newly = items.filter((i) => g.state[i.key] === 'merged' && !merged.includes(i.key));
+  for (const i of newly) lines.push(`[factory] merged: ${linkOf(i)}. ${g.merged}/${g.total} tasks merged.`);
+  const reports = wavesReport(items, g.state), fresh = reports.filter((w) => w.complete && !waves.includes(waveId(w)));
+  for (const w of fresh) {
+    const later = reports.some((r) => r.wave > w.wave);
+    const next = later ? items.filter((i) => i.wave > w.wave && (g.state[i.key] === 'running' || (g.state[i.key] === 'pending' && i.deps.every((d) => g.state[d] === 'merged')))).map((i) => i.title).join('; ') || 'nothing yet: the rest waits on unfinished tasks' : 'nothing, that was the last wave';
+    lines.push(`[factory] wave ${w.wave} done: ${w.items.map(linkOf).join('; ')}. ${g.merged}/${g.total} merged; next: ${next}.`);
+  }
+  return { lines, said: { merged: [...merged, ...newly.map((i) => i.key)], waves: [...waves, ...fresh.map(waveId)] } };
+}
+
 // A message that tells the coordinator to stop talking and write the plan:
 // "plan", "plan it", "plan:" or "make the plan" at the start, then end of message or ":" / "!" / ".".
 // Not "go" (that approves a plan) and not "Plan B looks better".

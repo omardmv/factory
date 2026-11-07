@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
-import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
+import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
@@ -585,6 +585,18 @@ function afterCoordinator(t, mode, from, last, decision) {
   pump();
 }
 const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
+// say once: a task merged (one line), a wave fully merged (what was built, what starts next).
+// What was said is kept on the epic (mergedAnnounced, wavesAnnounced), so a restart repeats nothing.
+function announceProgress(t) {
+  const g = progress(t.plan, itemState);
+  const link = (i) => { const k = i.taskId ? load(i.taskId) : null; return `${i.title}${k?.pr ? ` (${k.pr.url ?? `PR #${k.pr.number}`})` : ''}`; };
+  const cur = load(t.id); // fresh from disk: what an overlapping poll just said counts too
+  const r = announcements(t.plan, g, { merged: cur.mergedAnnounced, waves: cur.wavesAnnounced }, link);
+  if (!r.lines.length) return;
+  // remember first, then say: a crash in between loses a message rather than repeating one
+  update(t.id, (x) => { x.mergedAnnounced = r.said.merged; x.wavesAnnounced = r.said.waves; });
+  for (const l of r.lines) say(t.id, 'factory', l);
+}
 async function watchPrograms() {
   // a finished epic whose issue is still open: the close is retried until it works
   for (const t of allTasks().filter((x) => x.kind === 'program' && x.status === 'done' && x.epicIssue?.number && !x.epicClosed)) await syncEpic(t.id, true);
@@ -595,6 +607,7 @@ async function watchPrograms() {
       if (k.pr?.state !== 'merged') { const pr = await findPr(k); if (pr && pr.state !== k.pr?.state) { k.pr = pr; if (pr.state === 'merged') k.status = 'merged'; save(k); } }
     }
     if (openingEpic.has(t.id)) continue;
+    announceProgress(t);
     const g = startReady(t);
     await syncEpic(t.id);
     const status = g.done ? 'verifying' : g.stalled ? 'waiting for you' : `running · ${g.merged}/${g.total} merged`;
