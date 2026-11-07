@@ -52,7 +52,7 @@ export function checksLine(checks, head) {
   return s === h ? `${word} on the final head \`${h}\`.` : `⚠️ ${word} on \`${s}\`, **not the final head \`${h}\`**: nothing reported a result on the head itself.`;
 }
 
-export function buildReport({ taskId, repo, pr, head, outcome, title, mapping, items = [], checks, findings = {}, dashboard, tests = null }) {
+export function buildReport({ taskId, repo, pr, head, outcome, title, taskText, mapping, items = [], checks, findings = {}, dashboard, tests = null }) {
   const url = (i, raw) => `https://github.com/${repo}/blob/${i.commit}/${i.repoPath.split('/').map(encodeURIComponent).join('/')}${raw ? '?raw=true' : ''}`;
   const rows = (mapping ?? []).map((e, k) => {
     const p = resolveProof(e, items);
@@ -70,7 +70,7 @@ export function buildReport({ taskId, repo, pr, head, outcome, title, mapping, i
   return [REPORT_MARK,
     `### ${stopped ? '🛑 Evidence report: the loop stopped' : '✅ Evidence report: ready'}`,
     `Task \`${taskId}\` · PR #${pr} at \`${(head ?? '').slice(0, 7)}\` · [everything on the dashboard](${dashboard}/?task=${taskId})`,
-    title ? `\n**Expected:** ${title}` : '',
+    title || taskText ? `\n**The task asked for:** ${title ?? ''}${taskText ? `\n<details><summary>Task as given</summary>\n\n${clip(taskText, 1500)}\n\n</details>` : ''}` : '',
     `\n**Expected results and their proof**\n${rows.length ? rows.join('\n') : '❌ The agent gave no expectation → proof mapping: nothing is claimed as shown.'}`,
     `\n**Results on the final head**\n${checksLine(checks, head)}${tests ? `\n${tests}` : ''}`,
     stopped ? `\n**Still failing and why** (the round limit stopped the loop; the last findings, in their own words)\n${open.length ? open.map(([who, t]) => `<details open><summary>${who}</summary>\n\n${clip(t.trim(), 3000)}\n\n</details>`).join('\n\n') : 'No review or QA findings were recorded; see the checks line above.'}` : '',
@@ -78,6 +78,15 @@ export function buildReport({ taskId, repo, pr, head, outcome, title, mapping, i
     pics.length ? `\n**Screenshots**\n\n${pics.length > 1 ? '| | |\n|---|---|\n' : '| |\n|---|\n'}${gallery.join('\n')}` : '',
     !pics.length && !vids.length ? '\n_No screenshots or videos were recorded._' : '',
     `\n<sub>Written by the factory; only the expectation → proof mapping is the agent's claim. Edited in place on every final outcome.</sub>`].filter(Boolean).join('\n');
+}
+
+// Only findings that are still open on this head: the review's if it said CHANGES on this head, QA's if it said FAIL on this head.
+// last(from) → the newest message text of that kind.
+export function openFindings(task, head, last) {
+  return {
+    review: task.verdict === 'CHANGES' && task.reviewedSha === head ? last('review') : undefined,
+    qa: task.qaVerdict === 'FAIL' && task.qaTestedSha === head ? last('qa') : undefined,
+  };
 }
 
 // the one-line Slack summary

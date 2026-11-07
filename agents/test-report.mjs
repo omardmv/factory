@@ -1,6 +1,6 @@
 // node agents/test-report.mjs
 import assert from 'node:assert/strict';
-import { buildReport, parseMapping, mappingFrom, REPORT_MARK, reportSummary, checksLine } from './report.mjs';
+import { openFindings, buildReport, parseMapping, mappingFrom, REPORT_MARK, reportSummary, checksLine } from './report.mjs';
 
 let n = 0;
 const test = (name, f) => { f(); n++; console.log('ok', name); };
@@ -64,5 +64,18 @@ test('summary: one line with the PR link and the count', () => {
 });
 test('summary: warns when there is no mapping', () => {
   assert.match(reportSummary({ outcome: 'ready', pr: 7, prUrl: 'https://x/pr', mapping: null, items }), /no expectation → proof mapping/);
+});
+const last = (f) => `${f} text`;
+test('open findings: review stopped at the limit → only the review, not the passing QA', () => {
+  assert.deepEqual(openFindings({ verdict: 'CHANGES', reviewedSha: 'h', qaVerdict: 'PASS', qaTestedSha: 'h' }, 'h', last), { review: 'review text', qa: undefined });
+});
+test('open findings: QA stopped at the limit → only the QA, not an older round review', () => {
+  assert.deepEqual(openFindings({ verdict: 'CHANGES', reviewedSha: 'old', qaVerdict: 'FAIL', qaTestedSha: 'h' }, 'h', last), { review: undefined, qa: 'qa text' });
+});
+test('open findings: nothing for a different head', () => {
+  assert.deepEqual(openFindings({ verdict: 'CHANGES', reviewedSha: 'a', qaVerdict: 'FAIL', qaTestedSha: 'b' }, 'h', last), { review: undefined, qa: undefined });
+});
+test('the task text is shown in the report', () => {
+  assert.match(buildReport({ ...base, outcome: 'ready', mapping: null, taskText: 'Make the login work, done when X' }), /Make the login work, done when X/);
 });
 console.log(`${n} passed`);

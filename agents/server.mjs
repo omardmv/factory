@@ -21,7 +21,7 @@ import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, af
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia, upsertComment, mediaFiles } from './media.mjs';
-import { REPORT_MARK, buildReport, mappingFrom, reportSummary } from './report.mjs';
+import { REPORT_MARK, buildReport, mappingFrom, reportSummary, openFindings } from './report.mjs';
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
 import { evidenceSection } from './evidence.mjs';
@@ -520,7 +520,7 @@ async function publishReport(id, outcome) {
   const last = (from) => msgs.findLast((x) => x.from === from)?.text;
   const checks = t.lastChecks ?? (t.greenSha ? { state: 'green', sha: t.greenSha } : null);
   const body = buildReport({ taskId: t.id, repo: t.repo, pr: t.pr.number, head: pr.head.sha, outcome, title: t.title, mapping: mappingFrom(msgs), items: m.items, checks,
-    findings: outcome === 'stopped' ? { review: last('review'), qa: last('qa') } : {}, dashboard: DASHBOARD });
+    taskText: msgs.find((x) => x.from === 'you')?.text, findings: outcome === 'stopped' ? openFindings(load(id), pr.head.sha, last) : {}, dashboard: DASHBOARD });
   const c = await upsertComment({ gh, token, repo: t.repo, pr: t.pr.number, mark: REPORT_MARK, body });
   update(id, (x) => { x.mediaPublished = m.done; x.reportComment = c.html_url; });
   say(id, 'factory', reportSummary({ outcome, pr: t.pr.number, prUrl: pr.html_url, reportUrl: c.html_url, mapping: mappingFrom(msgs), items: m.items }));
