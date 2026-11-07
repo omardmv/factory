@@ -23,6 +23,7 @@ import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfCh
 import { publishMedia, mediaFiles } from './media.mjs';
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
+import { evidenceSection } from './evidence.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync } from 'node:fs';
@@ -127,6 +128,17 @@ async function githubToken(repo) {
   const inst = await gh(jwt, `/repos/${repo}/installation`);
   return (await gh(jwt, `/app/installations/${inst.id}/access_tokens`, 'POST', { repositories: [repo.split('/')[1]], permissions: app.permissions ?? TOKEN_PERMISSIONS })).token;
 }
+// the PR's comments (oldest first; the last pages hold the newest), for the panels' evidence section
+async function prComments(token, repo, pr) {
+  const all = [];
+  for (let page = 1; page <= 10; page++) {
+    const r = await gh(token, `/repos/${repo}/issues/${pr}/comments?per_page=100&page=${page}`);
+    all.push(...r);
+    if (r.length < 100) break;
+  }
+  return all;
+}
+const evidenceFor = async (token, t, msgs) => evidenceSection(await prComments(token, t.repo, t.pr.number).catch((e) => { log('evidence.comments_failed', { task: t.id, error: e.message }); return []; }), msgs);
 async function gh(token, url, method = 'GET', payload) {
   const r = await fetch(`https://api.github.com${url}`, { method, headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'factory-agents', ...(payload ? { 'content-type': 'application/json' } : {}) }, body: payload ? JSON.stringify(payload) : undefined });
   if (!r.ok) throw new Error(`github ${url}: ${r.status} ${(await r.text()).slice(0, 200)}`);
@@ -357,11 +369,12 @@ async function qa({ id }) {
   writeFileSync(`${secrets}/preview-password`, readFileSync(PREVIEW_PASSWORD_FILE, 'utf8'), { mode: 0o400 });
   chownSync(`${secrets}/preview-password`, 1001, 1001);
   const task = messages(id)[0]?.text ?? t.title;
+  const evidence = await evidenceFor(token, t, messages(id));
   const prompt = `QA of factory task ${id}: PR #${pr.number} in ${t.repo} at ${head.slice(0, 7)}, QA round ${n}.
 
 THE TASK, as the person gave it (all you know about the change):
 ${task}
-
+${evidence}
 THE PREVIEW of this change: ${t.previewHost}/app/
 Sign in: navigate to ${t.previewHost}/_factory/login; it signs you in as the test account and lands in the app.
 
@@ -407,6 +420,7 @@ async function review({ id }) {
   const msgs = messages(id);
   const brief = t.auto ? null : msgs.find((m) => m.from === 'agent')?.text;
   const n = (t.reviews ?? 0) + 1;
+  const evidence = await evidenceFor(token, t, msgs);
   const qaReport = t.qaTestedSha === pr.head.sha ? msgs.filter((m) => m.from === 'qa').at(-1)?.text : null;
   const base = `Review PR #${pr.number} of ${t.repo} (factory task ${id}, branch agent/${id} into ${t.base}). This is review round ${n}.
 
@@ -415,7 +429,7 @@ ${msgs[0]?.text ?? t.title}
 ${brief ? `\nTHE AGENT'S BRIEF (its plan and definition of done):\n${brief}\n` : ''}
 THE PR: ${pr.title}
 ${(pr.body ?? '').slice(0, 20000)}
-${qaReport ? `\nTHE INDEPENDENT QA TESTER'S REPORT on this head (it tested the preview as a user, without the code):\n${qaReport.slice(0, 8000)}\nIf it says FAIL and the agent kept the code anyway, judge from the task and the code who is right; a real failure blocks the merge.\n` : ''}
+${evidence}${qaReport ? `\nTHE INDEPENDENT QA TESTER'S REPORT on this head (it tested the preview as a user, without the code):\n${qaReport.slice(0, 8000)}\nIf it says FAIL and the agent kept the code anyway, judge from the task and the code who is right; a real failure blocks the merge.\n` : ''}
 The checkout in /workspace/repo is at the PR head (${pr.head.sha.slice(0, 7)}). See the change with \`git diff origin/${t.base}...HEAD\` and \`git log origin/${t.base}..HEAD\`; read the surrounding code and the repository's own rules (AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills). The agent's decision log is /workspace/decisions.tsv (it may be missing).
 Other reviewers look at this PR from other angles at the same time; stay on yours, but report anything that would block a merge.`;
   const results = [];
