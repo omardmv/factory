@@ -130,6 +130,8 @@ export function render(t, m) {
     const label = verdict === 'PASS' ? 'QA passed on the preview: on to review' : verdict === 'FAIL' ? 'QA found failures: the agent is on it' : verdict === 'NOT APPLICABLE' ? 'Nothing for QA to test: on to review' : 'QA finished without a verdict';
     return { text: `${head(verdict === 'PASS' ? '🧪' : verdict === 'FAIL' ? '🔁' : verdict === 'NOT APPLICABLE' ? '➖' : '⚠️', label)}\n${mrkdwn(body.text)}${body.cut ? '\n…' : ''}\n${links}` };
   }
+  // the watchdog's escalation: names the person, says exactly what is stuck and why, and what is waited on
+  if (m.from === 'factory' && m.ping) return { text: `🚨 ${state.owner ? `<@${state.owner}> ` : ''}*Stuck*\n${mrkdwn(clip(m.text.replace(/^\[factory\]\s*(STUCK:\s*)?/, ''), 1200).text)}\n${links}` };
   if (m.from === 'factory') return { text: `🏭 ${mrkdwn(clip(m.text.replace(/^\[factory\]\s*/, '').split('\n')[0], 400).text)}` };
   const decision = /^\s*DECISION NEEDED\b/m.test(m.text);
   const body = clip(m.text, 3500);
@@ -142,7 +144,8 @@ export function render(t, m) {
     : triage ? `Triage: ${triage[1]} → ${triage[2]}`
     : brief ? 'Brief: Go, or reply with your answers' : 'Agent';
   const icon = decision ? '❓' : t.kind === 'program' ? '🧭' : t.kind === 'report' ? '🔎' : '🤖';
-  return { text: `${head(icon, label)}\n${mrkdwn(body.text)}${body.cut ? '\n…' : ''}\n${links}`, go: brief, plan: talk };
+  const waiting = t.waitingOn && decision ? `\n_Waiting on: ${esc(t.waitingOn)}_` : '';
+  return { text: `${head(icon, label)}\n${mrkdwn(body.text)}${body.cut ? '\n…' : ''}${waiting}\n${links}`, go: brief, plan: talk };
 }
 async function post(channel, text, { go, plan, taskId } = {}) {
   const chunks = []; for (let i = 0; i < text.length; i += 3900) chunks.push(text.slice(i, i + 3900));
@@ -338,7 +341,7 @@ export async function onCommand(p) {
   if (cmd === 'digest') { sendDigest(24).catch((e) => log('digest.error', { error: e.message })); return { text: 'The summary is on its way to our DM.' }; }
   if (cmd === 'tasks') {
     const tasks = (await agents('/tasks')).filter((t) => !finished(t)).slice(0, 15);
-    return { text: tasks.length ? tasks.map((t) => `• \`${t.id}\` ${esc(short(t.title))} · ${t.status}${state.taskChannel[t.id] ? ` · <#${state.taskChannel[t.id]}>` : ''}`).join('\n') : 'No active tasks.' };
+    return { text: tasks.length ? tasks.map((t) => `• \`${t.id}\` ${esc(short(t.title))} · ${t.status}${t.waitingOn ? ` (waiting on ${esc(short(t.waitingOn))})` : ''}${state.taskChannel[t.id] ? ` · <#${state.taskChannel[t.id]}>` : ''}`).join('\n') : 'No active tasks.' };
   }
   return { text: help() };
 }

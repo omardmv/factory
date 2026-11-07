@@ -7,6 +7,22 @@ export const verdictOf = (text) => /VERDICT:\s*(PASS|CHANGES)/i.exec(text ?? '')
 export const qaVerdictOf = (text) => /QA VERDICT:\s*(PASS|FAIL|NOT APPLICABLE)/i.exec(text ?? '')?.[1]?.toUpperCase() ?? null;
 export const isDecision = (text) => /^\s*DECISION NEEDED\b/m.test(text ?? '');
 
+// Statuses where the task rests on the person. Every one of them carries a
+// one-line `waitingOn`: what the person is waited on for. Silent parking is the
+// bug, so server.mjs refuses to save a parked task without one (parkReason).
+export const PARKED = ['waiting for you', 'decision needed', 'ready for you', 'paused', 'waiting for merges'];
+export const isParked = (status) => PARKED.includes(status);
+// the reason a parked status gets when its caller gave none (never empty)
+export const waitingOnFor = (status, task = {}) => ({
+  'waiting for you': 'your reply: the task stopped and needs your call on what happens next',
+  'decision needed': 'your answer to the decision the agent asked for',
+  'ready for you': task.mergeWanted ? 'the automatic merge (retrying); nothing needed from you yet' : 'your merge of the reviewed PR',
+  'paused': 'your reply to resume the task',
+  'waiting for merges': 'your merges of the PRs that block the next tasks',
+}[status] ?? null);
+// the reason to save with a task: the given one, else the default; none when not parked
+export const parkReason = (task) => isParked(task.status) ? (String(task.waitingOn ?? '').trim() || waitingOnFor(task.status, task)) : undefined;
+
 // a job that came back from a review, or was restarted while answering one, is a review fix
 const reviewOrigin = (from, origin) => [from, origin].includes('review');
 
@@ -27,26 +43,32 @@ export async function afterAgentRun({ task, from, origin, mode, reply, unasked =
   const resetCrash = !!reply;
   // unasked: the reply asked the person something in plain text (agents/unasked.mjs); same as a DECISION NEEDED block
   const decision = isDecision(reply) || unasked;
-  if (from === 'pause') return { type: 'status', status: 'paused', pr: task.pr ?? null, resetCrash };
-  if (task.kind === 'report') return { type: 'status', status: decision ? 'decision needed' : mode === 'plan' ? 'waiting for you' : 'done', pr: task.pr ?? null, resetCrash, decision };
+  if (from === 'pause') return { type: 'status', status: 'paused', waitingOn: waitingOnFor('paused'), pr: task.pr ?? null, resetCrash };
+  if (task.kind === 'report') {
+    const status = decision ? 'decision needed' : mode === 'plan' ? 'waiting for you' : 'done';
+    return { type: 'status', status, ...(isParked(status) ? { waitingOn: decision ? waitingOnFor('decision needed') : 'your go-ahead on the triage plan' } : {}), pr: task.pr ?? null, resetCrash, decision };
+  }
   if (task.kind === 'program') return { type: 'coordinator', decision, resetCrash };
   const pr = (await deps.findPr(task)) ?? task.pr ?? null;
   const head = pr?.state === 'open' ? pr.head : null;
   const t = { ...task, pr };
-  let status;
-  if (mode === 'plan') status = 'waiting for you';
-  else if (decision) status = 'decision needed';
-  else if (!head) status = 'waiting for you';
+  let status, waitingOn;
+  if (mode === 'plan') { status = 'waiting for you'; waitingOn = 'your go-ahead on the plan (or your changes to it)'; }
+  else if (decision) { status = 'decision needed'; waitingOn = 'your answer to the decision the agent is asking for'; }
+  else if (!head) { status = 'waiting for you'; waitingOn = 'your reply: the agent finished its turn but there is no open PR to review'; }
   // an answer to review findings goes back to the panel even with no new commit:
   // the finding may have asked for evidence (a run, a PR comment), not code.
   // Bounded: every CHANGES verdict counts toward the round limit.
   else if (head === task.reviewedSha && task.verdict !== 'PASS' && reviewOrigin(from, origin)) status = 'reviewing';
-  else if (head === task.reviewedSha) status = task.verdict === 'PASS' ? 'ready for you' : 'waiting for you'; // nothing new since the review
+  else if (head === task.reviewedSha) { // nothing new since the review
+    status = task.verdict === 'PASS' ? 'ready for you' : 'waiting for you';
+    waitingOn = task.verdict === 'PASS' ? 'your merge of the reviewed PR' : 'your call: the agent pushed nothing new since the review asked for changes';
+  }
   // green: the QA tester first (once per head; a head the agent kept after a
   // QA FAIL goes on to the panel, which sees the report and judges the dispute)
   else if (!deps.hasChecks(t) || (task.greenSha && head.startsWith(task.greenSha))) status = deps.hasQa(t) && head !== task.qaTestedSha ? 'testing' : 'reviewing';
   else status = 'waiting for checks';
-  return { type: 'status', status, pr, resetCrash, decision };
+  return { type: 'status', status, ...(isParked(status) ? { waitingOn } : {}), pr, resetCrash, decision };
 }
 
 // the prompt of the carry-on turn after a death without a reply
@@ -54,10 +76,10 @@ export const crashRetryPrompt = (retry, max) => `[factory] Your last turn was cu
 
 // A coordinator's reply: its next status, and whether a revised plan is in it.
 export function afterCoordinator({ phase, reply, decision }) {
-  if (decision) return { status: 'decision needed' };
+  if (decision) return { status: 'decision needed', waitingOn: 'your answer to the coordinator\'s decision' };
   if (/^\s*PROGRAM DONE\b/m.test(reply ?? '')) return { status: 'done', closeEpic: true };
-  if (phase === 'talk') return { status: 'waiting for you' }; // discussion: never a plan, the person says "plan"
-  if (phase === 'brief') return { status: 'waiting for you' }; // the plan waits for "go"
+  if (phase === 'talk') return { status: 'waiting for you', waitingOn: 'your side of the discussion; say "plan" when you want the plan' }; // discussion: never a plan, the person says "plan"
+  if (phase === 'brief') return { status: 'waiting for you', waitingOn: 'your "go" on the epic plan (or your changes to it)' }; // the plan waits for "go"
   return { status: 'running', revise: /```plan/.test(reply ?? '') }; // a revision while it runs
 }
 
@@ -79,10 +101,10 @@ export function pickupJob(task) {
 //  stopped | paused | review | fix | wait
 export function afterQa({ task, verdict, maxRounds }) {
   if (task.status === 'stopped') return { action: 'stopped' };
-  if (task.status === 'pausing') return { action: 'paused', status: 'paused' };
+  if (task.status === 'pausing') return { action: 'paused', status: 'paused', waitingOn: waitingOnFor('paused') };
   if (verdict === 'PASS' || verdict === 'NOT APPLICABLE') return { action: 'review', status: 'reviewing' };
   if (verdict === 'FAIL' && task.factoryRounds < maxRounds) return { action: 'fix', status: 'working', factoryRounds: task.factoryRounds + 1 };
-  return { action: 'wait', status: 'waiting for you', say: verdict === 'FAIL' ? `[factory] round limit (${maxRounds}) reached with QA failures open: stopped. A person decides what next.` : '[factory] the QA tester gave no clear verdict: a person decides.' };
+  return { action: 'wait', status: 'waiting for you', waitingOn: verdict === 'FAIL' ? 'your call: QA failures are still open at the round limit' : 'your call: the QA tester gave no clear verdict', say: verdict === 'FAIL' ? `[factory] round limit (${maxRounds}) reached with QA failures open: stopped. A person decides what next.` : '[factory] the QA tester gave no clear verdict: a person decides.' };
 }
 
 // The panel passes only when every reviewer passes; any CHANGES is CHANGES.
@@ -95,12 +117,12 @@ export function panelVerdict(verdicts, panelSize) {
 //  stopped | paused | pass | fix | wait. autoMerge: the project's merge branch, or falsy.
 export function afterReview({ task, verdict, headSha, autoMerge, maxRounds }) {
   if (task.status === 'stopped') return { action: 'stopped' };
-  if (task.status === 'pausing') return { action: 'paused', status: 'paused' };
+  if (task.status === 'pausing') return { action: 'paused', status: 'paused', waitingOn: waitingOnFor('paused') };
   // a head the QA tester failed and the agent kept never merges by itself: the person settles the dispute
   const disputed = task.qaVerdict === 'FAIL' && task.qaTestedSha === headSha;
-  if (verdict === 'PASS') return { action: 'pass', status: 'ready for you', mergeWanted: !!autoMerge && !disputed, disputed };
+  if (verdict === 'PASS') return { action: 'pass', status: 'ready for you', waitingOn: 'your merge of the reviewed PR', mergeWanted: !!autoMerge && !disputed, disputed };
   if (verdict === 'CHANGES' && task.factoryRounds < maxRounds) return { action: 'fix', status: 'working', factoryRounds: task.factoryRounds + 1 };
-  return { action: 'wait', status: 'waiting for you', say: verdict === 'CHANGES' ? `[factory] round limit (${maxRounds}) reached with review findings open: stopped. A person decides what next.` : '[factory] the review panel gave no clear verdict: a person decides.' };
+  return { action: 'wait', status: 'waiting for you', waitingOn: verdict === 'CHANGES' ? 'your call: review findings are still open at the round limit' : 'your call: the review panel gave no clear verdict', say: verdict === 'CHANGES' ? `[factory] round limit (${maxRounds}) reached with review findings open: stopped. A person decides what next.` : '[factory] the review panel gave no clear verdict: a person decides.' };
 }
 
 // A [factory] report from the checks (preview/e2e). Only a red report counts
@@ -109,7 +131,7 @@ export function afterReview({ task, verdict, headSha, autoMerge, maxRounds }) {
 export function afterFactoryReport({ task, text, maxRounds }) {
   if (task.phase !== 'run' || ['stopped', 'paused', 'pausing', 'merged'].includes(task.status) || task.kind !== 'change') return { action: 'ignore' };
   const greenSha = text.includes('✅') ? /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1] : undefined;
-  if (!greenSha && task.factoryRounds >= maxRounds) return { action: 'limit', status: 'waiting for you', say: `[factory] round limit (${maxRounds} failed rounds) reached: stopped. A person decides what next.` };
+  if (!greenSha && task.factoryRounds >= maxRounds) return { action: 'limit', status: 'waiting for you', waitingOn: 'your call: the checks keep failing at the round limit', say: `[factory] round limit (${maxRounds} failed rounds) reached: stopped. A person decides what next.` };
   if (greenSha) return { action: 'run', green: true, greenSha, previewHost: /preview ready at (https:\/\/[^\s/]+)/.exec(text)?.[1] ?? task.previewHost };
   return { action: 'run', green: false, factoryRounds: task.factoryRounds + 1 };
 }

@@ -15,8 +15,9 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
+import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
-import { verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
+import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
@@ -74,7 +75,15 @@ mkdirSync(`${HOME}/tasks`, { recursive: true });
 // ---------- tasks on disk: tasks/<id>/task.json + messages.jsonl ----------
 const dir = (id) => `${HOME}/tasks/${id}`;
 const load = (id) => JSON.parse(readFileSync(`${dir(id)}/task.json`, 'utf8'));
-const save = (t) => { t.updatedAt = new Date().toISOString(); writeFileSync(`${dir(t.id)}/task.json`, JSON.stringify(t, null, 1)); };
+// save also keeps two things true for every task: when its status last changed (the watchdog's clock; the
+// nudge marks restart with it) and that a parked task always says what the person is waited on for.
+const save = (t) => {
+  const now = new Date().toISOString();
+  statusClock(t, now);
+  const why = parkReason(t);
+  if (why) t.waitingOn = why; else delete t.waitingOn;
+  t.updatedAt = now; writeFileSync(`${dir(t.id)}/task.json`, JSON.stringify(t, null, 1));
+};
 const update = (id, f) => { const t = load(id); f(t); save(t); return t; };
 const say = (id, from, text, extra = {}) => appendFileSync(`${dir(id)}/messages.jsonl`, JSON.stringify({ at: new Date().toISOString(), from, text, ...extra }) + '\n');
 const messages = (id) => existsSync(`${dir(id)}/messages.jsonl`) ? readFileSync(`${dir(id)}/messages.jsonl`, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
@@ -141,8 +150,9 @@ const QUEUE_FILE = `${HOME}/queue.json`;
 const queue = readJson(QUEUE_FILE, []); // { id, kind: 'agent' | 'qa' | 'review', prompt?, mode?, from? }
 const saveQueue = () => writeFileSync(QUEUE_FILE, JSON.stringify(queue));
 function enqueue(id, prompt, mode, from, origin) { queue.push({ id, kind: 'agent', prompt, mode, from, ...(origin ? { origin } : {}) }); saveQueue(); pump(); }
-function enqueueReview(id) { if (!queue.some((j) => j.id === id && j.kind === 'review')) queue.push({ id, kind: 'review' }); saveQueue(); pump(); }
-function enqueueQa(id) { if (!queue.some((j) => j.id === id && j.kind === 'qa')) queue.push({ id, kind: 'qa' }); saveQueue(); pump(); }
+function enqueueReview(id, from) { if (!queue.some((j) => j.id === id && j.kind === 'review')) queue.push({ id, kind: 'review', ...(from ? { from } : {}) }); saveQueue(); pump(); }
+function enqueueQa(id) { return enqueueQaFrom(id); }
+function enqueueQaFrom(id, from) { if (!queue.some((j) => j.id === id && j.kind === 'qa')) queue.push({ id, kind: 'qa', ...(from ? { from } : {}) }); saveQueue(); pump(); }
 const JOB_NAME = { agent: 'agent', qa: 'QA tester', review: 'reviewer' };
 function dropQueued(id) { for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === id) queue.splice(i, 1); saveQueue(); }
 function pump() {
@@ -151,14 +161,14 @@ function pump() {
     if (i < 0) break;
     const [job] = queue.splice(i, 1); saveQueue();
     job.seq = randomBytes(4).toString('hex');
-    update(job.id, (t) => { t.job = job; });
+    update(job.id, (t) => { t.job = job; jobStarted(t, job); });
     // forget the job once it ended, unless the next job of this task already took its place
     const forget = (t) => { if (t.job?.seq === job.seq) delete t.job; };
     (job.kind === 'review' ? review(job) : job.kind === 'qa' ? qa(job) : agentRun(job)).then(() => update(job.id, forget)).catch((e) => {
       running.delete(job.id); containers.delete(job.id);
       log('run.crashed', { task: job.id, kind: job.kind, error: e.message });
       say(job.id, 'factory', `[factory] the ${JOB_NAME[job.kind] ?? job.kind} could not run: ${e.message}`);
-      update(job.id, (t) => { forget(t); t.status = 'waiting for you'; });
+      update(job.id, (t) => { forget(t); t.status = 'waiting for you'; t.waitingOn = `your call: the ${JOB_NAME[job.kind] ?? job.kind} could not run (${String(e.message).replace(/\s+/g, ' ').slice(0, 120)})`; });
       pump();
     });
   }
@@ -266,7 +276,7 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     say(id, 'agent', decisionMessage(asked), { unasked: true });
     done.waitingOn = waitingOnLine(asked);
     log('unasked.caught', { task: id, question: asked.question });
-  } else delete done.waitingOn;
+  } else done.waitingOn = out.waitingOn;
   if (out.type === 'coordinator') { save(done); return afterCoordinator(done, mode, from, r.last, out.decision); }
   if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
   const next = out.status;
@@ -354,7 +364,7 @@ Sign in: navigate to ${t.previewHost}/_factory/login; it signs you in as the tes
   x.qaRounds = n; x.qaTestedSha = head; x.qaVerdict = verdict;
   const o = afterQa({ task: x, verdict, maxRounds: MAX_FACTORY_ROUNDS });
   if (o.action === 'stopped') { save(x); return pump(); }
-  x.status = o.status;
+  x.status = o.status; x.waitingOn = o.waitingOn;
   if (o.action === 'paused') { save(x); return pump(); }
   if (o.action === 'review') { save(x); enqueueReview(id); }
   else if (o.action === 'fix') {
@@ -405,7 +415,7 @@ Other reviewers look at this PR from other angles at the same time; stay on your
   x.reviews = n; x.reviewedSha = pr.head.sha; x.verdict = verdict;
   const o = afterReview({ task: x, verdict, headSha: pr.head.sha, autoMerge: PROJECTS[x.project]?.autoMerge, maxRounds: MAX_FACTORY_ROUNDS });
   if (o.action === 'stopped') { save(x); return pump(); }
-  x.status = o.status;
+  x.status = o.status; x.waitingOn = o.waitingOn;
   if (o.action === 'paused') { save(x); return pump(); }
   if (o.action === 'pass') {
     x.mergeWanted = o.mergeWanted; x.mergeTries = 0; save(x);
@@ -565,7 +575,7 @@ async function syncEpic(id, done = false) {
 }
 function afterCoordinator(t, mode, from, last, decision) {
   const o = coordinatorNext({ phase: t.phase, reply: last, decision });
-  if (o.status !== 'running') { t.status = o.status; save(t); if (o.closeEpic) syncEpic(t.id, true); return pump(); }
+  if (o.status !== 'running') { t.status = o.status; t.waitingOn = o.waitingOn; save(t); if (o.closeEpic) syncEpic(t.id, true); return pump(); }
   if (o.revise) { // a revision while it runs: what has started keeps going
     const r = parsePlan(last), m = r.error ? r : mergePlan(t.plan, r.tasks);
     if (m.error) say(t.id, 'factory', `[factory] the revised plan was not applied: ${m.error}. The current plan keeps going.`);
@@ -602,7 +612,7 @@ async function watchPrograms() {
     const g = startReady(t);
     await syncEpic(t.id);
     const status = g.done ? 'verifying' : g.stalled ? 'waiting for you' : `running · ${g.merged}/${g.total} merged`;
-    if (t.status !== status) update(t.id, (x) => { x.status = status; });
+    if (t.status !== status) update(t.id, (x) => { x.status = status; x.waitingOn = g.stalled ? 'your help: no task of the epic can move (see the factory message above for which are stuck)' : undefined; });
     if (g.done && !t.finalCheck) {
       update(t.id, (x) => { x.finalCheck = true; });
       enqueue(t.id, `[factory] Every task of the epic has merged (${g.total}). Check what actually landed on ${t.base} (fetch it) against the epic's definition of done. If it is met, verify it and reply with a line "PROGRAM DONE" and the evidence. If something is missing, add the missing tasks: send the whole plan again (keep every key) with the new tasks. Do not change any file.`, 'plan', 'next-phase');
@@ -649,7 +659,7 @@ function post(id, from, text) {
   if (from === 'factory') {
     const o = afterFactoryReport({ task: t, text, maxRounds: MAX_FACTORY_ROUNDS });
     if (o.action === 'ignore') return t;
-    if (o.action === 'limit') { say(id, 'factory', o.say); t.status = o.status; save(t); return t; }
+    if (o.action === 'limit') { say(id, 'factory', o.say); t.status = o.status; t.waitingOn = o.waitingOn; save(t); return t; }
     if (o.green) { t.greenSha = o.greenSha; t.previewHost = o.previewHost; }
     else t.factoryRounds = o.factoryRounds;
     save(t);
@@ -817,7 +827,7 @@ const handler = async (req, res) => {
         say(id, 'factory', '[factory] pausing: the agent leaves a checkpoint and a resume note. Reply to resume.');
         if (containers.has(id)) spawn('docker', ['kill', containers.get(id)], { stdio: 'ignore' });
         running.get(id)?.kill('SIGTERM');
-      } else { update(id, (x) => { x.status = 'paused'; }); say(id, 'factory', '[factory] paused. Reply to resume.'); }
+      } else { update(id, (x) => { x.status = 'paused'; x.waitingOn = 'your reply to resume the task'; }); say(id, 'factory', '[factory] paused. Reply to resume.'); }
       return send(200, load(id));
     }
     return send(405, { error: 'method not allowed' });
@@ -828,5 +838,30 @@ pickup();
 const poll = () => intake().catch((e) => log('intake.failed', { error: e.message }))
   .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
   .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }));
+// ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
+const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);
+const NUDGE_PROMPT = '[factory] Nudge: the factory saw no progress on this task for a while. Check `git status`, your decision log, your PR and its checks, then carry on with what you were doing. If you are blocked, say exactly on what.';
+function watchdog(now = Date.now()) {
+  for (const t of allTasks()) {
+    const act = `${dir(t.id)}/activity.log`;
+    const d = watchdogDecision(t, { now, running: running.has(t.id), anyRunning: running.size > 0, inQueue: queue.some((j) => j.id === t.id), slotsFull: running.size >= MAX_PARALLEL, lastActivityAt: existsSync(act) ? statSync(act).mtime.toISOString() : undefined });
+    if (d.action === 'none') continue;
+    log(`watchdog.${d.action}`, { task: t.id, state: d.state, idleMin: d.idleMin });
+    if (d.action === 'escalate') {
+      update(t.id, (x) => { x.watchEscalatedAt = new Date(now).toISOString(); });
+      say(t.id, 'factory', d.text, { ping: true });
+      continue;
+    }
+    update(t.id, (x) => { x.watchNudgedAt = new Date(now).toISOString(); x.watchState = d.state; });
+    say(t.id, 'factory', d.text);
+    if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue; // a live job is the nudge's target already; the grace period tells whether it moves
+    if (d.state === 'queued') pump();
+    else if (d.state === 'reviewing') enqueueReview(t.id, 'nudge');
+    else if (d.state === 'testing') enqueueQaFrom(t.id, 'nudge');
+    else enqueue(t.id, NUDGE_PROMPT, d.state === 'planning' || d.state === 'briefing' ? 'plan' : 'bypassPermissions', 'nudge', t.job?.origin ?? t.job?.from); // keeps a review fix a review fix
+  }
+}
+setInterval(() => { try { watchdog(); } catch (e) { log('watchdog.failed', { error: e.message }); } }, WATCHDOG_EVERY_S * 1000);
+
 setTimeout(poll, 15000);
 setInterval(poll, POLL_EVERY_S * 1000);
