@@ -1,0 +1,24 @@
+#!/bin/sh
+# factory: agent containers on their own docker network may not OPEN
+# connections to the host itself (prod/staging APIs, Coolify, Traefik, the
+# gateway all listen there). The internet (GitHub, npm, the model API) stays
+# reachable. Replies to connections the host opened (ESTABLISHED,RELATED) must
+# pass, and that rule must sit BEFORE the DROP: a DROP on the subnet alone also
+# drops the replies of anything on it (cost ~15 min of an outage once).
+# Containers on the network cannot talk to each other (icc off).
+#   factory-agents-firewall start|stop [network]   (default: factory-agents)
+set -e
+NET=${2:-factory-agents}
+docker network inspect "$NET" >/dev/null 2>&1 ||
+  docker network create -o com.docker.network.bridge.enable_icc=false "$NET" >/dev/null
+S=$(docker network inspect "$NET" -f "{{(index .IPAM.Config 0).Subnet}}")
+EST="-s $S -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+case "$1" in
+  stop)
+    iptables -D INPUT -s "$S" -j DROP 2>/dev/null || true
+    iptables -D INPUT $EST 2>/dev/null || true ;;
+  *)
+    # DROP first at the top, then ACCEPT above it: the accept always wins
+    iptables -C INPUT -s "$S" -j DROP 2>/dev/null || iptables -I INPUT -s "$S" -j DROP
+    iptables -C INPUT $EST 2>/dev/null || iptables -I INPUT $EST ;;
+esac

@@ -355,15 +355,15 @@ status() {
     done
     printf '],'
     printf '"services":{'
-    printf '"firewall":"%s",' "$(systemctl is-active factory-sandbox-firewall 2>/dev/null)"
-    printf '"agent_shim":"%s",' "$(systemctl is-active open-inspect-sandbox-shim 2>/dev/null)"
+    printf '"firewall":"%s",' "$(systemctl is-active factory-agents-firewall 2>/dev/null)"
+    printf '"agents":"%s",' "$(systemctl is-active factory-agents 2>/dev/null)"
     printf '"gateway":"%s",' "$(docker inspect -f '{{.State.Status}}' factory-gateway-1 2>/dev/null || echo missing)"
     printf '"preview_postgres":"%s",' "$(docker inspect -f '{{.State.Status}}' factory-pg-1 2>/dev/null || echo missing)"
     printf '"coolify":"%s",' "$(docker inspect -f '{{.State.Health.Status}}' coolify 2>/dev/null || echo missing)"
     printf '"coolify_proxy":"%s"' "$(docker inspect -f '{{.State.Status}}' coolify-proxy 2>/dev/null || echo missing)"
     printf '},'
     printf '"gvisor":"%s",' "$(runsc --version 2>/dev/null | head -1 | awk '{print $3}')"
-    printf '"agent_sandboxes_running":%s,' "$(docker ps -q --filter name=oi-sb- | wc -l)"
+    printf '"agent_containers_running":%s,' "$(docker ps -q --filter name=fa- | wc -l)"
     printf '"snapshots":['
     first=1
     local conf

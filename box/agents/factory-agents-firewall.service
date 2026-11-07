@@ -1,0 +1,13 @@
+[Unit]
+Description=factory: agent containers (network factory-agents) may not reach the host itself
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/factory-agents-firewall start
+ExecStop=/usr/local/sbin/factory-agents-firewall stop
+
+[Install]
+WantedBy=multi-user.target
