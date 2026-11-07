@@ -156,20 +156,40 @@ project's rules, skills and AGENTS.md; then human review on staging.
 A big goal becomes an **epic** (today's "program"): a coordinator agent that
 plans and tracks, never codes. Founder 2026-11-08.
 
-- **Talk first.** You and the coordinator discuss what to build and how to
-  improve it; it reads the code, proposes options and trade-offs. It writes
-  the plan only when you say so.
+- **Talk first** (done). A new epic starts in a discussion (`phase: talk`):
+  you and the coordinator talk through what to build and how to improve it;
+  it reads the code, proposes options and trade-offs, and is told not to
+  write a plan block or change files. It writes the plan only when you write
+  `plan` (also `plan it`, `plan:`, `make the plan`; not "Plan B looks
+  better") or press **Plan it** in Slack, which sends the same word. A bare
+  `go` in the discussion gets "there is no plan yet". After `plan` the
+  coordinator writes the whole plan, you can still reply to revise it, and
+  `go` (the **Go** button in Slack) approves it and starts the work.
 - **The whole plan up front:** every task, each one PR an agent can finish
   and prove alone, with what it **depends on**. Waves are just the result:
   wave 1 = no dependencies, wave 2 = depends only on wave 1, and so on.
 - **A task starts as soon as everything it depends on has merged**, not when
   the whole previous wave has. Unrelated work never waits. After each merge
   the coordinator may revise the rest from what actually landed.
-- **On GitHub:** an epic issue (goal, waves, build order, tables) with one
-  sub-issue per task, in order; a sub-issue closes when its PR merges, so
-  the epic shows progress (13/15).
-- **In Slack:** a channel for the epic (plan, progress, decisions, each
-  wave's results); each task keeps its own channel.
+- **On GitHub** (done): when you approve the plan (`go`), the factory opens
+  one epic issue in the project repo (goal, progress `M/T tasks merged`,
+  waves, build order, a table of each task's dependencies, wave and state)
+  and one sub-issue per planned task, in plan order, linked to the epic. A
+  started task is told to put `Refs #<sub-issue>` in its PR, and the
+  sub-issue is closed when that PR merges, so the epic shows progress
+  (13/15). No tasks start until the issues are opened; if GitHub fails the
+  epic carries on without them and says so. The epic issue is kept in step:
+  a revised plan adds sub-issues for new tasks and closes dropped ones as
+  not planned, a failed task's sub-issue is closed as not planned, and the
+  epic issue is closed on `PROGRAM DONE`. It is updated only when something
+  changed.
+- **In Slack** (done): the epic gets its own channel named `epic-<title>-<id>`
+  where the discussion happens (with the Plan it button) and the plan gets a
+  Go button. Once the plan is approved the bot posts a plan summary (tasks
+  by wave, link to the epic issue) once, and keeps the channel topic at
+  `M/T merged` plus the epic issue link. The factory's reports (task merged,
+  wave done, stuck) arrive in the same channel; each task keeps its own
+  channel. The epic's channel is archived when the epic is done or stopped.
 - **Reports in the epic's conversation:** `[factory] merged: <task> (PR link). M/T`
   when a task merges, and `[factory] wave N done: <tasks with PR links>. M/T
   merged; next: ...` when every task of a wave has merged. Each is said once
@@ -183,9 +203,9 @@ plans and tracks, never codes. Founder 2026-11-08.
   checks; then it is reviewed and merged again. At most 3 such rounds, then
   it waits for the founder.
 
-Build order: (1) conflicts back to the agent + more agents at once; (2)
-task-level dependencies; (3) the epic issue and sub-issues; (4) discussion
-mode and the epic channel.
+Build order (all four done): (1) conflicts back to the agent + more agents
+at once; (2) task-level dependencies; (3) the epic issue and sub-issues; (4)
+discussion mode and the epic channel.
 
 ## 6. Safety gates (never self-modified)
 

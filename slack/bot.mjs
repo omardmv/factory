@@ -7,7 +7,7 @@
 //    "bug:", "epic:" (or "program:") as on Telegram ("sayra:" / "factory:" picks the project)
 //  - tasks from issues, queues and programs get their own channel too
 //  - everything you write in a task's channel goes to that task; briefs and
-//    plans get a Go button
+//    plans get a Go button; an epic starts in a discussion with a Plan it button
 //  - when the PR is merged or closed (or the task is stopped or done), the
 //    channel is archived
 //  - /factory pause | resume | stop (in a task's channel), status, tasks,
@@ -173,7 +173,7 @@ async function archiveIfFinished(t) {
 const HELP = `*What I understand*
 • create a channel and write your idea: that's the task (name it \`sayra-…\` or \`factory-…\` to pick the project, or I'll work it out and ask if unsure)
 • or DM me: a plain message starts a task in a new channel (I work out the project from your words and ask if unsure; \`sayra:\` / \`factory:\` at the start picks it)
-• \`queue:\` + one task per line · \`bug:\` + what's wrong · \`epic:\` + a big goal: the coordinator plans every task with what it depends on, you talk it through, press Plan it, then Go; unrelated tasks run in parallel (add the project, e.g. \`epic sayra:\`)
+• \`queue:\` + one task per line · \`bug:\` + what's wrong · \`epic:\` + a big goal: you talk it through with the coordinator, press Plan it (or write plan) and it plans every task with what it depends on, then press Go; unrelated tasks run in parallel (add the project, e.g. \`epic sayra:\`)
 • in a task's channel, everything you write goes to the agent; Go starts a brief or a plan; Plan it ends an epic discussion
 • \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`help\` anywhere`;
 
