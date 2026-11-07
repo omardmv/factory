@@ -5,7 +5,7 @@ the script writes /etc/docker/daemon.json and restarts Docker, which would
 restart every container on the box (production included).
 
 Guard rails, all verified after install (no public listener added, no
-container restarted, prod/staging/Open-Inspect 200 throughout):
+container restarted, prod/staging 200 throughout):
 
 | What | Where | Why |
 | --- | --- | --- |

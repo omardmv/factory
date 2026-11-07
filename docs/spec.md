@@ -4,7 +4,7 @@ Status: draft, 2026-10-13. First user: ContentCoach (`contentcoach/contentcoach`
 
 ## Goal
 
-Code from anywhere (laptop, phone, Open-Inspect agents) and have every pull
+Code from anywhere (laptop, phone, the factory's own agents) and have every pull
 request become something you can open, click and watch without checking
 anything by hand:
 
@@ -32,7 +32,7 @@ make that sign-off a two-minute phone check.
 | Media | prod volume 57 GB, staging 1.3 GB |
 | TLS | Cloudflare origin cert `/etc/ssl/cloudflare/contentcoach.org.pem` covers `*.contentcoach.org` until 2041 |
 | Proxy | host nginx (all projects' vhosts) + `kamal-proxy` (staging api) |
-| Agents | Open-Inspect at `software.contentcoach.org` (writes PRs) |
+| Agents | `factory-agents` (agents/): Claude Code per task in a locked-down container (writes PRs) |
 | Other tenants | satstation, ugcstation, sayra, other bots: the factory must never touch their containers, volumes or vhosts |
 
 ## Shape
