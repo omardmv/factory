@@ -12,13 +12,13 @@
 #   factory push                                 push this factory repo (the box pulls it in <=5 min)
 #
 # <target> is `staging` or a PR number (`458`, `pr458`). Project: -p <name>
-# or FACTORY_PROJECT (default contentcoach). API paths are relative to the
+# or FACTORY_PROJECT (required for environment commands). API paths are relative to the
 # project's API root (`/me`, `/threads`), page paths to the app root (`/`,
 # `/reports`). Sessions are cached in ~/.cache/factory; nothing is printed
 # that carries a token except `login`'s own output.
 set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
-project="${FACTORY_PROJECT:-contentcoach}"
+project="${FACTORY_PROJECT:-}"
 if [ "${1:-}" = "-p" ]; then project="$2"; shift 2; fi
 
 # commands that are not about a running environment
@@ -72,6 +72,7 @@ NEXT
     exit 0 ;;
 esac
 
+[ -n "$project" ] || { echo "which project? -p <name> or FACTORY_PROJECT" >&2; exit 2; }
 conf="$FACTORY_DIR/projects/$project/project.sh"
 [ -f "$conf" ] || { echo "unknown project: $project (no $conf)" >&2; exit 2; }
 # shellcheck source=/dev/null

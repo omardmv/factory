@@ -26,10 +26,10 @@ Telegram bot until Slack has proven itself; both talk to factory-agents.
 
 ## Use
 
-- Create a channel `sayra-<something>` (Sayra) or anything else (the factory)
-  and write the idea as its first message.
+- Create a channel `<project>-<something>` (a project) or anything else (the
+  factory) and write the idea as its first message.
 - Or DM the bot; it makes the channel.
-- Epics: DM the bot `epic: <a big goal>` (or `epic sayra: …`). It makes a
+- Epics: DM the bot `epic: <a big goal>` (or `epic <project>: …`). It makes a
   channel `epic-<title>-<id>` in *talk mode*: the coordinator discusses
   options and trade-offs with you and writes no plan yet. Reply as often as
   you like; write `plan` or press **Plan it** when you want the plan. The

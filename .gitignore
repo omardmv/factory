@@ -1,0 +1,3 @@
+
+# the projects this factory serves live on the box (/opt/factory/agents/projects.json), not in the repo
+agents/projects.json

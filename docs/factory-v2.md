@@ -68,7 +68,7 @@ staging. Production stays a manual merge by the founder, always.
 
 - Kinds: performance, security, cleanup / tech debt, docs drift.
 - **Per project, switched on by the founder** ("run security weekly on
-  contentcoach"). Stored per project in `agents/projects.json`
+  shop"). Stored per project in `agents/projects.json`
   (`loops: { security: "weekly", ... }`).
 - A project with no loops configured: the factory asks once in its
   channel which loops to run and how often, and asks again if it stays
@@ -134,11 +134,11 @@ The factory is general; a project brings what is special about it.
 | How this project's previews run | `projects/<name>/` (factory repo) + `preview.compose.yaml` (project repo) | Postgres + pgvector, Redis, a Node or Python app, its snapshot and disarm |
 | What the factory does for it | `agents/projects.json` | base branch, QA on/off, auto-merge target, loops |
 | How to work in its code | the project repo: `AGENTS.md`, `.claude/skills/` | its test commands, conventions, verification skill |
-| What its agents need installed | `projects/<name>/agent.Dockerfile`, `FROM factory-agent-base` | Postgres 16 + pgvector for ContentCoach; Go, Rust or nothing extra for others |
+| What its agents need installed | `projects/<name>/agent.Dockerfile`, `FROM factory-agent-base` | Postgres 16 + pgvector for a project that needs it; Go, Rust or nothing extra for others |
 | Factory-side facts about it | `projects/<name>/knowledge/`, mounted only into that project's containers | its data quirks, its staging, what not to touch |
 
-Today the agent image is ContentCoach's (Postgres + pgvector, Python + uv
-baked in): it splits into a general `factory-agent-base` and a thin image
+Today the agent image is shaped by the factory's first project (Postgres +
+pgvector, Python + uv baked in): it splits into a general `factory-agent-base` and a thin image
 per project, built by self-update when its Dockerfile changes. Onboarding
 stays `factory init`: a new project fills these in and nothing in the
 factory changes.

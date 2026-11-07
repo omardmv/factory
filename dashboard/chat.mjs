@@ -141,11 +141,17 @@ select,input[type=text]{font:inherit;padding:8px 10px;border:1px solid #d3d1c7;b
 a.back{display:none}
 @media (max-width:760px){a.back{display:inline}.app{grid-template-columns:minmax(0,1fr)}.side{border-right:none}.app.has-task .side{display:none}.app:not(.has-task) .main{display:none}}`;
 
+// the projects this factory serves, from factory-agents (box config)
+export async function projectNames() {
+  try { return (await agents('/projects')).map((p) => p.name); } catch { return ['factory']; }
+}
+
 export async function chatView({ taskId, healthy, list = false }) {
   let tasks = [], task = null, err = '';
+  const known = await projectNames();
   try { tasks = await agents('/tasks'); if (taskId && taskId !== 'new') task = await agents(`/tasks/${encodeURIComponent(taskId)}`); }
   catch (e) { err = e.message; }
-  const projects = [...new Set(['factory', 'sayra', ...tasks.map((t) => t.project)])];
+  const projects = [...new Set([...known, ...tasks.map((t) => t.project)])];
   const side = projects.map((p) => {
     const ts = tasks.filter((t) => t.project === p);
     if (!ts.length) return '';
@@ -177,7 +183,7 @@ export async function chatView({ taskId, healthy, list = false }) {
     main = `<div class="msgs"><div class="empty"><a href="/?list=1" class="hint back" style="font-size:12px">← tasks</a><h2 style="font-weight:500">New task</h2>
       <p class="hint">Describe what you want. The agent replies once with questions (if any), a plan and what "done" means. After your "go" it works until its PR is green, without asking.</p>
       <form method="post" action="/tasks" class="card" style="text-align:left">
-        <select name="project">${['factory', 'sayra'].map((p) => `<option>${p}</option>`).join('')}</select>
+        <select name="project">${known.map((p) => `<option>${p}</option>`).join('')}</select>
         <select name="kind"><option value="change">a change</option><option value="report">a bug report (triage)</option><option value="program">a program (phases of PRs)</option></select>
         <textarea name="text" required style="width:100%;min-height:110px;margin:10px 0;font:inherit;padding:9px;border:1px solid #d3d1c7;border-radius:10px" placeholder="e.g. Make the schedule sheet's Save button stay visible on phones"></textarea>
         <label class="hint" style="display:block;margin-bottom:12px"><input type="checkbox" name="auto">skip the brief, start right away</label><button>Start</button></form>

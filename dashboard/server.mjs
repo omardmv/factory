@@ -5,7 +5,7 @@
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, readdirSync, createReadStream } from 'node:fs';
-import { chatView, chatCss, agents, mediaFile } from './chat.mjs';
+import { chatView, chatCss, agents, mediaFile, projectNames } from './chat.mjs';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const SECRETS = process.env.SECRETS_DIR ?? '/run/factory';
@@ -95,6 +95,9 @@ const pill = (text, kind = '') => `<span class="pill ${kind}">${esc(text)}</span
 const ago = (t) => { if (!t) return ''; const m = Math.round((Date.now() - new Date(t)) / 60000); return m < 60 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 
 async function dashboard() {
+  // a PR link per project the factory serves (box config, via factory-agents)
+  let repoLinks = '';
+  try { repoLinks = (await agents('/projects')).filter((p) => p.name !== 'factory' && /^[\w.-]+\/[\w.-]+$/.test(p.repo)).map((p) => `<a href="https://github.com/${p.repo}/pulls">${esc(p.name)} PRs</a>`).join(''); } catch {}
   const facts = readJson(`${STATE}/status.json`) ?? {};
   const all = [];
   for (const p of PROJECTS) for (const v of await previews(p)) all.push({ ...v, project: p });
@@ -137,7 +140,7 @@ async function dashboard() {
   <h2>Agents</h2><div class="card row"><div class="grow">${facts.agent_containers_running ?? 0} agent container${facts.agent_containers_running === 1 ? '' : 's'} running on this server</div>
     <a href="https://claude.ai/code">Claude cloud sessions</a></div>
   <h2>Factory health</h2><div class="grid">${tiles}</div>
-  <h2>Places</h2><div class="card links"><a href="${LINKS.coolify}">Coolify</a><a href="${LINKS.factoryRepo}">factory repo</a><a href="https://github.com/AzizbekLive/conversation-bot/pulls">Sayra PRs</a></div>
+  <h2>Places</h2><div class="card links"><a href="${LINKS.coolify}">Coolify</a><a href="${LINKS.factoryRepo}">factory repo</a>${repoLinks}</div>
   <p class="muted" style="margin-top:28px">This page redeploys itself: push to the factory repo and the server picks it up within 5 minutes.</p>`);
 }
 
@@ -175,7 +178,7 @@ createServer(async (req, res) => {
     if (url.pathname === '/') return send(200, appPage('Factory', await chatView({ taskId: url.searchParams.get('task'), healthy: healthy(), list: url.searchParams.get('list') === '1' })));
     if (url.pathname === '/tasks' && req.method === 'POST') {
       const f = await readForm(req);
-      if (!fromUs(req) || !['factory', 'sayra'].includes(f.project) || !String(f.text ?? '').trim()) return send(400, 'bad request');
+      if (!fromUs(req) || !(await projectNames()).includes(f.project) || !String(f.text ?? '').trim()) return send(400, 'bad request');
       const t = f.kind === 'program' ? await agents('/programs', { method: 'POST', body: JSON.stringify({ project: f.project, goal: f.text }) })
         : await agents('/tasks', { method: 'POST', body: JSON.stringify({ project: f.project, text: f.text, auto: f.auto === 'on', kind: f.kind === 'report' ? 'report' : undefined }) });
       return send(303, '', { location: `/?task=${t.id}` });

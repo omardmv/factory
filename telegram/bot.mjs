@@ -1,7 +1,7 @@
 // @omarfactory_bot: the factory on your phone. Long-polls Telegram (no public
 // endpoint), answers only its paired owner, and talks to factory-agents.
-//  - a plain message starts a task ("sayra: ..." for Sayra; the factory by
-//    default); the brief comes back here
+//  - a plain message starts a task ("<project>: ..." picks a project; the
+//    factory by default); the brief comes back here
 //  - replying to a task's message continues that task ("go", answers)
 //  - new agent / [factory] messages are pushed to you
 //  - "queue:" + one task per line starts a batch: every item runs without a
@@ -71,15 +71,20 @@ async function sendHtml(text, taskId) {
   if (taskId) state.msgTask[m.message_id] = taskId;
   persist();
 }
-const HELP = `<b>What I understand</b>
-• a plain message starts a factory task (brief first). Prefix <code>sayra:</code> for Sayra
+// the projects come from the factory (GET /projects), refreshed every few minutes
+let NAMES = 'factory';
+async function loadProjects() {
+  try { const names = (await agents('/projects')).map((p) => String(p?.name ?? '').toLowerCase()).filter((n) => /^[a-z0-9][a-z0-9_-]{0,30}$/.test(n)); if (names.length) NAMES = names.join('|'); } catch (e) { log('projects.error', { error: e.message }); }
+}
+const help = () => `<b>What I understand</b>
+• a plain message starts a factory task (brief first). Prefix <code>&lt;project&gt;:</code> for another project
 • <code>queue:</code> + one task per line: a batch, no briefs, one summary at the end
 • <code>bug:</code> + what's wrong: triage, reproduce, file the issue (the fix starts by itself if it's clear)
 • <code>program:</code> + a big goal: a plan in phases of PRs; reply "go"
 • reply to a task's message to answer it; ❓ waits for your choice
 • reply <code>/pause</code>, <code>/resume</code> or <code>/stop</code> to a task's message
 • <code>/digest</code> the summary (it also comes at 08:00) · <code>/tasks</code> · <code>/status</code> · <code>/help</code>
-Projects: factory (default) or sayra, e.g. <code>bug sayra:</code> or <code>program sayra:</code>.`;
+Projects: ${NAMES.split('|').join(', ')} (factory is the default), e.g. <code>bug &lt;project&gt;:</code> or <code>program &lt;project&gt;:</code>.`;
 // one task message, ready to send
 function render(t, m) {
   const head = (icon, label) => `${icon} <b>${esc(label)}</b>\n${esc(short(t.title))} · <code>${t.id}</code>`;
@@ -129,33 +134,33 @@ async function onMessage(msg) {
     if (state.pairing && code.length === state.pairing.length && timingSafeEqual(Buffer.from(code), Buffer.from(state.pairing))) {
       state.owner = msg.from.id; delete state.pairing; persist();
       log('paired', { owner: msg.from.id });
-      return sendHtml(`Paired.\n\n${HELP}`);
+      return sendHtml(`Paired.\n\n${help()}`);
     }
     return; // silent to strangers
   }
   if (msg.from.id !== state.owner) return;
   if (text === '/status') return send(statusLine());
-  if (text === '/help') return sendHtml(HELP);
+  if (text === '/help') return sendHtml(help());
   if (text === '/digest') return sendDigest(24);
   if (text === '/tasks' || text === '/start') {
     const tasks = (await agents('/tasks')).filter((t) => !['done', 'stopped'].includes(t.status)).slice(0, 10);
     return send(tasks.length ? tasks.map((t) => `#${t.id} · ${t.status}${t.pr ? ` · PR ${t.pr.url}` : ''}\n${t.title}`).join('\n\n') : 'No active tasks.');
   }
-  const q = text.match(/^\/?queue(?:\s+(sayra|factory))?\s*(?::|(?=\n)|$)/i);
+  const q = text.match(new RegExp(`^\\/?queue(?:\\s+(${NAMES}))?\\s*(?::|(?=\\n)|$)`, 'i'));
   if (q) {
     const project = (q[1] ?? 'factory').toLowerCase();
     const items = text.slice(q[0].length).split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
-    if (!items.length) return send('A queue is one task per line:\nqueue:\n- make the Save button sticky on phones\n- fix the login redirect\n("queue sayra:" for Sayra)');
+    if (!items.length) return send('A queue is one task per line:\nqueue:\n- make the Save button sticky on phones\n- fix the login redirect\n("queue <project>:" for another project)');
     const b = await agents('/batches', { method: 'POST', body: JSON.stringify({ project, items }) });
     state.batches[b.batch] = { ids: b.tasks.map((t) => t.id), project, reported: false };
     for (const t of b.tasks) state.sent[t.id] = 1;
     persist();
     return sendHtml(`📦 <b>Queue started: ${b.tasks.length} tasks</b> (${project})\nEach one runs to a reviewed PR. One summary comes when all are done.\n\n${b.tasks.map((t) => `• ${esc(short(t.title, 70))}`).join('\n')}`);
   }
-  const k = text.match(/^(bug|program)(?:\s+(sayra|factory))?\s*:\s*/i);
+  const k = text.match(new RegExp(`^(bug|program)(?:\\s+(${NAMES}))?\\s*:\\s*`, 'i'));
   if (k) {
     const project = (k[2] ?? 'factory').toLowerCase(), rest = text.slice(k[0].length).trim();
-    if (!rest) return sendHtml(HELP);
+    if (!rest) return sendHtml(help());
     const t = k[1].toLowerCase() === 'bug'
       ? await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, kind: 'report', text: rest }) })
       : await agents('/programs', { method: 'POST', body: JSON.stringify({ project, goal: rest }) });
@@ -178,7 +183,7 @@ async function onMessage(msg) {
     await agents(`/tasks/${taskId}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
     return send(`#${taskId}: got it, continuing.`, taskId);
   }
-  const m = text.match(/^(sayra|factory)\s*:\s*/i);
+  const m = text.match(new RegExp(`^(${NAMES})\\s*:\\s*`, 'i'));
   const project = m ? m[1].toLowerCase() : 'factory';
   const task = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, text: m ? text.slice(m[0].length) : text }) });
   state.sent[task.id] = 1; // the person's own message is #0
@@ -263,5 +268,6 @@ if (!state.primed) { try { for (const t of await agents('/tasks')) state.sent[t.
 setInterval(() => pushUpdates().catch((e) => log('push.error', { error: e.message })), 15000);
 state.lastDigest ??= new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10); persist(); // first summary tomorrow, not on deploy
 setInterval(morning, 60000);
+loadProjects(); setInterval(loadProjects, 5 * 60000);
 log('started', { paired: !!state.owner });
 poll();

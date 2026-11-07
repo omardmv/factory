@@ -1,0 +1,18 @@
+{
+  "factory": {
+    "about": "The factory itself: agents, Slack and Telegram bots, dashboard, box scripts, brain.",
+    "repo": "omardmv/factory",
+    "base": "main",
+    "autoMerge": "main",
+    "mergeMethod": "squash",
+    "githubApp": { "id": "<app id>", "key": "github-app-factory.pem", "bot": { "name": "<app slug>[bot]", "email": "<user id>+<app slug>[bot]@users.noreply.github.com" } }
+  },
+  "shop": {
+    "about": "One line on what this project is, so the factory can tell from a message which project it is about.",
+    "repo": "<owner>/<repo>",
+    "base": "staging",
+    "autoMerge": "staging",
+    "mergeMethod": "squash",
+    "githubApp": { "id": "<app id>", "key": "github-app-factory.pem", "bot": { "name": "<app slug>[bot]", "email": "<user id>+<app slug>[bot]@users.noreply.github.com" } }
+  }
+}

@@ -1,8 +1,7 @@
 # Factory: design spec
 
-Status: draft, 2026-10-13. First user: ContentCoach (`contentcoach/contentcoach`),
-retired from the factory 2026-11-07; the design stays as the reference for
-projects with previews.
+Status: draft, 2026-10-13. Written for the factory's first project with
+previews; the design stays as the reference for any project with previews.
 
 ## Goal
 
@@ -21,7 +20,7 @@ anything by hand:
 
 Not in scope (from the "agentic software factory" picture): triage and
 prioritizer agents, formal verification, auto-merge by blast radius. The
-founder stays the gate to `main` (contentcoach AGENTS.md, step 4); previews
+founder stays the gate to `main` (the project's own AGENTS.md); previews
 make that sign-off a two-minute phone check.
 
 ## What the box already has (checked 2026-10-13)
@@ -30,12 +29,12 @@ make that sign-off a two-minute phone check.
 | --- | --- |
 | CPU / RAM / disk | 12 cores, 47 GB (35 GB free), 299 GB free on ext4 |
 | Load | under 1; all of prod uses ~1.2 GB |
-| Databases | prod `contentcoach` 2.9 GB, staging 137 MB, both pgvector pg17 |
+| Databases | prod DB 2.9 GB, staging 137 MB, both pgvector pg17 |
 | Media | prod volume 57 GB, staging 1.3 GB |
-| TLS | Cloudflare origin cert `/etc/ssl/cloudflare/contentcoach.org.pem` covers `*.contentcoach.org` until 2041 |
+| TLS | Cloudflare origin cert per project domain, e.g. `/etc/ssl/cloudflare/<domain>.pem` covers `*.<domain>` until 2041 |
 | Proxy | host nginx (all projects' vhosts) + `kamal-proxy` (staging api) |
 | Agents | `factory-agents` (agents/): Claude Code per task in a locked-down container (writes PRs) |
-| Other tenants | satstation, ugcstation, sayra, other bots: the factory must never touch their containers, volumes or vhosts |
+| Other tenants | other apps on the same box: the factory must never touch their containers, volumes or vhosts |
 
 ## Shape
 
@@ -43,8 +42,8 @@ Two halves:
 
 - **The factory** (this repo), installed once on the VPS at `/opt/factory`:
   a `factory` CLI (bash), a gateway container, a Postgres for previews, the
-  nightly snapshot job, the self-hosted runner. Knows nothing about
-  ContentCoach.
+  nightly snapshot job, the self-hosted runner. Knows nothing about any one
+  project.
 - **The project** describes itself in `.factory/preview.yml` in its own
   repo: how to build, which services, env, migrate command, how to mint a
   sign-in link, how to run e2e.
@@ -59,37 +58,37 @@ without rewriting anything.
 push to PR branch
   └─ GitHub ─▶ self-hosted runner on the VPS (no GitHub minutes)
        ├─ static checks (guard.py, check.mjs, …)   ← today's ci.yml, runs-on: self-hosted
-       ├─ factory up contentcoach 123 <sha>
+       ├─ factory up <project> 123 <sha>
        │    ├─ build images from the branch (docker build, local cache)
-       │    ├─ first push only: CREATE DATABASE cc_pr_123 TEMPLATE cc_snapshot
+       │    ├─ first push only: CREATE DATABASE <prefix>_pr_123 TEMPLATE <prefix>_snapshot
        │    │                   media: cp -al snapshot → pr_123 (hardlinks, instant, 0 bytes)
-       │    ├─ migrate (one-shot container), then compose up project cc-pr-123
+       │    ├─ migrate (one-shot container), then compose up project <prefix>-pr-123
        │    └─ wait for health
-       ├─ factory e2e contentcoach 123  → videos + report to /srv/factory/artifacts/…
+       ├─ factory e2e <project> 123  → videos + report to /srv/factory/artifacts/…
        └─ factory comment               → one PR comment, edited on every push
-PR closed/merged ─▶ factory down contentcoach 123 (containers, DB, media, artifacts)
-nightly ─▶ factory snapshot contentcoach (staging → cc_snapshot, disarmed) + factory gc
+PR closed/merged ─▶ factory down <project> 123 (containers, DB, media, artifacts)
+nightly ─▶ factory snapshot <project> (staging → <prefix>_snapshot, disarmed) + factory gc
 ```
 
 ## Routing: one DNS record, then nothing per PR
 
 - Cloudflare, once: `A  *  <VPS IP>  proxied`. Records set by name
   (`staging`, `admin`, `software`, …) keep winning over the wildcard.
-- Names are `<feature>-pr<N>.contentcoach.org`, e.g.
-  `sidebar-no-telegram-link-pr458.contentcoach.org` (founder 2026-10-13).
+- Names are `<feature>-pr<N>.<domain>`, e.g.
+  `sidebar-no-telegram-link-pr458.example.org` (founder 2026-10-13).
   `<feature>` is the branch name minus its `feat/`, `fix/`, … prefix,
   lowercased, anything outside `a-z0-9` turned into `-`, cut to 40
   characters (a DNS label tops out at 63). One level deep, because the
-  free certificate covers only `*.contentcoach.org`.
+  free certificate covers only `*.<domain>`.
 - Routing only trusts the number: `anything-pr458` reaches PR 458, and a
   name that isn't the current one (branch renamed, typo) gets a 302 to the
   right name. A host with no `-pr<N>` ending matches nothing and gets 404.
 - Host nginx, once: one server block,
-  `server_name ~^(?<slug>[a-z0-9-]+)-pr(?<n>\d+)\.contentcoach\.org$;` with the
+  `server_name ~^(?<slug>[a-z0-9-]+)-pr(?<n>\d+)\.<domain>$;` with the
   existing origin cert, basic auth, `proxy_pass` to the gateway on
   `127.0.0.1:<port>`.
 - Gateway (an nginx container on the docker network `factory`, resolver
-  `127.0.0.11`): sends the request to `http://cc-pr-$n-web`. Docker's own DNS
+  `127.0.0.11`): sends the request to `http://<prefix>-pr-$n-web`. Docker's own DNS
   finds the container by name, so there's no config to write per PR. A preview
   that doesn't exist returns a "no preview for this PR" page, not a 502.
 - `/_factory/` on each preview host is served by the gateway from the
@@ -102,25 +101,25 @@ nightly ─▶ factory snapshot contentcoach (staging → cc_snapshot, disarmed)
 A dedicated `factory-pg` container (pgvector pg17, same image as prod),
 not the staging cluster: a heavy preview can't slow staging down, and
 `DROP DATABASE` mistakes can only ever hit preview data. It holds
-`cc_snapshot` (the template, nobody connects to it) and one `cc_pr_<n>`
+`<prefix>_snapshot` (the template, nobody connects to it) and one `<prefix>_pr_<n>`
 per open PR.
 
 `CREATE DATABASE … TEMPLATE` refuses a template with open connections,
 which is why the snapshot is a database nothing ever connects to.
 At 137 MB a copy takes under a second.
 
-### Nightly snapshot (`factory snapshot contentcoach`)
+### Nightly snapshot (`factory snapshot <project>`)
 
 1. `pg_dump -Fc` of **staging** (read-only, from `staging-db-1`). Staging,
    not prod: the founder works on staging with their own account
    (`1000000000000001`), which on prod is a different, real creator, so a
    prod copy would sign them in as someone else (founder 2026-10-13).
-2. Restore into `cc_snapshot_next` in `factory-pg`.
+2. Restore into `<prefix>_snapshot_next` in `factory-pg`.
 3. **Disarm** (see below).
-4. Swap: rename `cc_snapshot` → `cc_snapshot_old`, `next` → `cc_snapshot`,
+4. Swap: rename `<prefix>_snapshot` → `<prefix>_snapshot_old`, `next` → `<prefix>_snapshot`,
    drop old. Previews already running keep their own copy.
 5. Media: `rsync -a --link-dest` from the `staging_media` volume (1.3 GB)
-   into `/srv/factory/media/contentcoach/snapshot`: hardlinks, so it costs
+   into `/srv/factory/media/<prefix>/snapshot`: hardlinks, so it costs
    nothing new and a run takes seconds after the first.
 
 Founder decision 2026-10-13: real data is fine, no anonymizing. Staging is
@@ -129,33 +128,33 @@ never refreshed from prod (it holds the founder's working account).
 ### Disarm: real data, no real side effects
 
 Offline mode (`composition.build(offline=True)`) swaps in fakes for the
-model, scraper, downloader, understanding and embedding, but **not** for
-Telegram delivery or payments. Staging runs `PAYLOV_CARDS_LIVE=true`, so its
-copy can hold real card tokens and real Telegram ids: a loaded gun. Disarm runs on every snapshot, in SQL,
+model and other external calls, but **not** for message delivery or
+payments. Staging can hold real card tokens and real delivery ids: a loaded
+gun. Disarm runs on every snapshot, in SQL,
 before anything can connect:
 
 | What | Action |
 | --- | --- |
-| `jobs` | delete everything not finished (no inherited renewals, refreshes, deliveries) |
-| `paylov_cards` | null the card tokens; previews can never charge a real card |
-| `billing` / LS subscription ids | keep the rows (plans still show), but previews get no LS/Paylov keys |
-| `connect_tokens`, `web_login_tokens` | delete (staging sign-in links must not work on previews) |
-| OAuth tokens (Google, LinkedIn integrations) | delete |
-| `scheduled_posts` | keep the rows, no worker can post them (no keys) |
+| unfinished jobs | delete everything not finished (no inherited renewals, refreshes, deliveries) |
+| payment card tokens | null them; previews can never charge a real card |
+| billing / subscription ids | keep the rows (plans still show), but previews get no live billing keys |
+| sign-in / connect tokens | delete (staging sign-in links must not work on previews) |
+| third-party OAuth tokens | delete |
+| scheduled outbound messages | keep the rows, no worker can send them (no keys) |
 
 On top of that, the preview **env is an allowlist**, not a copy of
-staging's env: no Telegram bot token, no Paylov/LS/Apify/Gemini keys, no
-PostHog key (founder 2026-10-13: previews are recorded by the e2e runner
+staging's env: no bot token, no payment or external API keys, no
+analytics key (founder 2026-10-13: previews are recorded by the e2e runner
 only).
 A service with no key fails closed. The exact table and column list is
-fixed in the implementation PR by reading `tables.py`, and a
+fixed in the implementation PR by reading the project's own schema, and a
 `factory doctor` check refuses to start a preview if a known secret
 column is non-null in its database.
 
 ### Per-PR copy
 
-- First `factory up` for a PR: `CREATE DATABASE cc_pr_<n> TEMPLATE cc_snapshot`,
-  then `cp -al` the media snapshot to `/srv/factory/media/contentcoach/pr-<n>`.
+- First `factory up` for a PR: `CREATE DATABASE <prefix>_pr_<n> TEMPLATE <prefix>_snapshot`,
+  then `cp -al` the media snapshot to `/srv/factory/media/<prefix>/pr-<n>`.
 - Later pushes keep the database, so state you built while testing
   survives a push. The `fresh-db` PR label (or `factory reset`) re-copies.
 - The branch's migrations run on every push (one-shot container), so a
@@ -172,15 +171,15 @@ merged, and fills staging with test junk. Data worth keeping becomes a
 seed or scenario script in the PR. Staging stays what the founder makes
 it on staging itself; previews only ever read a copy of it.
 
-## The preview stack (ContentCoach)
+## The preview stack (example)
 
-Compose project `cc-pr-<n>` on the `factory` network:
+Compose project `<prefix>-pr-<n>` on the `factory` network:
 
 | Service | What |
 | --- | --- |
-| `migrate` | one-shot, the branch's alembic upgrade |
-| `api` | `cc api`, offline, DB `cc_pr_<n>` |
-| `work` | one `cc work` (its own DB, so it can't eat staging's jobs) |
+| `migrate` | one-shot, the branch's migration command |
+| `api` | the app's API process, offline, DB `<prefix>_pr_<n>` |
+| `work` | one background worker (its own DB, so it can't eat staging's jobs) |
 | `web` | nginx serving the branch's SPA build + `/app/api` → `api`, the same paths prod uses |
 
 No bot (web only, founder 2026-10-13), no admin, no webhook.
@@ -188,9 +187,9 @@ No bot (web only, founder 2026-10-13), no admin, no webhook.
 ### Real model: only when necessary
 
 Every preview runs offline ($0) by default. A PR that can't be judged
-without the real model (prompt or coach-behaviour work) gets the `live`
-label: `factory up` then adds the Gemini key (and Apify only if the
-project's `live.keys` lists it) and the preview runs `offline=False`.
+without the real model (prompt or behaviour work) gets the `live`
+label: `factory up` then adds the model's key (and any others the
+project's `live.keys` lists) and the preview runs `offline=False`.
 Before switching on, it checks the day's spend across dev + staging +
 previews against the $10/day testing cap (Tashkent day) and refuses
 past it. Removing the label goes back to offline on the next push. The
@@ -199,39 +198,39 @@ limits per container; at most 15 previews running, the rest queue.
 
 ### Signing in
 
-Google OAuth can't list a redirect URI per PR and the Telegram widget has
-no domain, so previews sign in with a minted link: `factory up` runs the
-project's `login` command (ContentCoach: `e2e/support/mint_login.py`) for
-the founder's account and puts a 24-hour link in the PR comment, behind
+An OAuth provider can't list a redirect URI per PR, and some sign-in
+widgets have no per-PR domain either, so previews sign in with a minted
+link: `factory up` runs the project's own `login` command for the
+founder's account and puts a 24-hour link in the PR comment, behind
 basic auth anyway.
 
 ## E2E and recordings
 
-- ContentCoach gets a `preview` target in `e2e/e2e.config.ts`
+- The project gets a `preview` target in `e2e/e2e.config.ts`
   (`APP_URL` = the preview URL) and `e2e/run.sh preview`.
 - The factory runs it on the box with
   `npx e2e run --target preview --video on --reporter list,json,markdown`.
   Chromium is installed once on the runner host.
-- Results are copied to `/srv/factory/artifacts/contentcoach/pr-<n>/<run>/`
-  and served at `https://<feature>-pr<n>.contentcoach.org/_factory/`: an
+- Results are copied to `/srv/factory/artifacts/<prefix>/pr-<n>/<run>/`
+  and served at `https://<feature>-pr<n>.<domain>/_factory/`: an
   index page built from `report.json`, with every test, its status, its
   WebM video playing inline, and the trace page on failure. The last 5
   runs per PR are kept.
 - Which tests: the whole model-free suite. Tests seed their own synthetic
   users in the preview DB, so they don't depend on what's in the snapshot.
-- No PostHog on previews (founder 2026-10-13): the only recordings are the
-  e2e runner's (tester-army) videos. The preview's web build gets no
-  PostHog key, so it records nothing.
+- No analytics on previews (founder 2026-10-13): the only recordings are
+  the e2e runner's (tester-army) videos. The preview's web build gets no
+  analytics key, so it records nothing.
 
 ## The PR comment
 
 One comment, edited on every push:
 
 ```
-Preview  https://<feature>-pr123.contentcoach.org/app   (ready, sha 1a2b3c4)
+Preview  https://<feature>-pr123.<domain>/app   (ready, sha 1a2b3c4)
 Sign in  <24h link>
-E2E      41 passed, 1 failed → https://<feature>-pr123.contentcoach.org/_factory/
-         ✗ web-entry › connect › keeps the round      ▶ video  ▶ trace
+E2E      41 passed, 1 failed → https://<feature>-pr123.<domain>/_factory/
+         ✗ checkout › keeps the cart › survives a refresh      ▶ video  ▶ trace
 Data     copied from staging snapshot of 2026-10-13 03:00 (Tashkent)
 ```
 
@@ -244,10 +243,10 @@ same-repo PRs).
   minutes (GitHub announced a $0.002/min self-hosted fee for Mar 2026, then
   postponed it with no date; if it comes back, Woodpecker CI on the same box
   runs the same `factory` commands).
-- contentcoach's `ci.yml` moves to `runs-on: [self-hosted, factory]`. Its
+- The project's `ci.yml` moves to `runs-on: [self-hosted, factory]`. Its
   path filters stay. A new `preview.yml` workflow listens for
   `pull_request: [opened, synchronize, reopened, closed, labeled]`.
-- Runner registered at the `contentcoach` org level (serves every repo
+- Runner registered at the project's GitHub org level (serves every repo
   there). Repos under other owners register their own runner on the same
   box when they join.
 
@@ -259,7 +258,7 @@ agents push. Limits:
 
 - the runner is its own Linux user `factory`, not root, ephemeral (fresh
   for every job, systemd restarts it);
-- it can read nothing in `/opt/contentcoach`, `/opt/contentcoach-staging`
+- it can read nothing in `/opt/<project>`, `/opt/<project>-staging`
   or the prod/staging docker volumes; staging dump access goes through one
   root-owned script the runner may run with `sudo` (sudoers allows exactly
   that path);
@@ -284,16 +283,16 @@ agents push. Limits:
 
 1. **Box setup, once**: DNS wildcard (founder, steps below), host nginx
    block, gateway, `factory-pg`, runner. Proof: a hello container at
-   `hello-pr0.contentcoach.org`.
-2. **Previews**: `factory up/down`, snapshot + disarm, ContentCoach's
+   `hello-pr0.<domain>`.
+2. **Previews**: `factory up/down`, snapshot + disarm, the project's own
    `.factory/preview.yml`, PR comment with URL + sign-in link. Proof: a
    real PR opens, signs in as the founder's staging account, closes clean.
 3. **E2E + recordings**: `preview` target, `factory e2e`, `/_factory/`
    gallery. Proof: a PR comment with playing videos.
 4. **CI moves home**: `ci.yml` on the self-hosted runner, GitHub-hosted
    minutes at ~0.
-5. **Second project** (sayra or satstation): whatever turned out to be
-   ContentCoach-specific gets fixed here.
+5. **Second project**: whatever turned out to be specific to the first
+   project gets fixed here.
 
 ## Decided 2026-10-13
 
@@ -303,10 +302,10 @@ agents push. Limits:
 
 ## One-time DNS step (founder)
 
-Cloudflare dashboard → `contentcoach.org` → DNS → Records → Add record:
+Cloudflare dashboard → the project's domain → DNS → Records → Add record:
 
-- Type `CNAME`, Name `*`, Target `staging.contentcoach.org`,
+- Type `CNAME`, Name `*`, Target `staging.<domain>`,
   Proxy status: **Proxied** (orange cloud), TTL Auto → Save.
 
-Nothing changes for existing names. Check: `dig +short hello-pr0.contentcoach.org`
+Nothing changes for existing names. Check: `dig +short hello-pr0.<domain>`
 returns Cloudflare IPs.

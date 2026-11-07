@@ -12,17 +12,16 @@ Design: [docs/spec.md](docs/spec.md).
 
 ## Projects
 
-| Project | Repo | Base (auto-merge) | Previews |
-| --- | --- | --- | --- |
-| sayra | AzizbekLive/conversation-bot | `staging` | none yet |
-| factory | omardmv/factory | `main` | none |
+Projects are configured on the box in `/opt/factory/agents/projects.json`
+(outside this repo: which projects the factory serves is box configuration,
+not code; the bots and the dashboard read it through `GET /projects`).
+`agents/projects.example.json` here shows the shape: one entry per
+project, keyed by name, with `about`, `repo`, `base`, `autoMerge`,
+`mergeMethod` and `githubApp` (`id`, `key`, `bot`). The factory itself is
+one project too (`factory`, repo `omardmv/factory`, base `main`): this
+repo can name itself.
 
-ContentCoach (`contentcoach/contentcoach`) was retired from the factory on
-2026-11-07: no agents, previews, snapshot or runners. Its production and
-staging still run on the box, outside the factory. `git log -- projects/contentcoach`
-has its preview setup, as the worked example of a project with previews.
-
-A project is a folder in `projects/`: `project.sh` (domain, prefix, repo,
+A project is also a folder in `projects/`: `project.sh` (domain, prefix, repo,
 how to build, how to run e2e, where its data comes from), its
 `preview.compose.yaml`, and whatever it needs (a disarm script, a login
 helper). Everything on the box is named by the prefix: containers
@@ -116,9 +115,9 @@ an interrupted job resumes its session, told it was interrupted. `/pause`
 leaves a work-in-progress commit and a resume note. A summary arrives on
 Telegram at 08:00 Tashkent (`/digest` any time).
 
-**Auto-merge** (`autoMerge` in `agents/projects.json`): when the whole panel
+**Auto-merge** (`autoMerge` in the project's config): when the whole panel
 passes, the factory merges the PR itself, but only into that one branch
-(Sayra: `staging`; the factory: `main`), only at the exact
+(e.g. a project whose base is `staging`; the factory: `main`), only at the exact
 head the panel reviewed (GitHub's sha lock), and only through the branch's
 own protection (its required checks, if any). A PR that no longer merges cleanly
 (another one landed first and conflicts) goes back to its agent to merge the
