@@ -96,6 +96,13 @@ export function mergePlan(current, next) {
   return { items: merged.map((i) => ({ ...i, wave: w.wave[i.key] })) };
 }
 
+// every task `key` depends on, directly or through others
+export function ancestors(items, key) {
+  const by = new Map(items.map((i) => [i.key, i])), seen = new Set(), stack = [...(by.get(key)?.deps ?? [])];
+  while (stack.length) { const k = stack.pop(); if (seen.has(k)) continue; seen.add(k); stack.push(...(by.get(k)?.deps ?? [])); }
+  return [...seen];
+}
+
 // stateOf(item) → 'pending' (not started) | 'running' | 'merged' | 'failed'
 //   (closed without merging, stopped) | 'stuck' (waiting on the person: decision,
 //   round limit, refused merge)
@@ -111,7 +118,7 @@ export function progress(items, stateOf) {
   for (const i of items) {
     if (st[i.key] !== 'pending') continue;
     if (isBlocked.has(i.key)) blocked.push({ item: i, on: i.deps.filter((d) => ['failed', 'stuck'].includes(st[d]) || isBlocked.has(d)) });
-    else if (i.deps.every((d) => st[d] === 'merged')) ready.push(i);
+    else if (ancestors(items, i.key).every((d) => st[d] === 'merged')) ready.push(i); // the whole chain, not only direct deps: a link that merged early must not let what follows it skip ahead
     else waiting.push(i);
   }
   const count = (s) => items.filter((i) => st[i.key] === s).length;
