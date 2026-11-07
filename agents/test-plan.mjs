@@ -186,4 +186,11 @@ assert.ok(!parsePlan(block([F('a', null), F('b', null), F('c', ['x'])])).error);
 assert.match(parsePlan(block([F('a', ['s.mjs']), F('b', ['s.mjs'], ['c']), F('c', null)])).error, /"a" and "b"/);
 ok('tasks without files are unaffected; a dependency on a third task does not excuse an overlap');
 
+{
+  const typed = parsePlan(block([{ ...T('a'), type: 'Refactor' }, { ...T('b', ['a']), type: 'banana' }, T('c')]));
+  assert.ok(!typed.error, typed.error);
+  assert.deepEqual(typed.tasks.map((t) => t.type ?? null), ['refactor', null, null]);
+}
+ok('a plan task keeps a known type (any case) and drops an unknown one');
+
 console.log(`all ${n} passed`);

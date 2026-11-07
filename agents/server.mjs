@@ -492,12 +492,12 @@ async function publishTaskMedia(id) {
 const planningPrompt = (note) => `${note}
 Now write the plan. Frame it with the "large" playbook: the definition of done for the whole epic, scope, risks, shaped by the discussion so far. Reply to the person in plain words: the framing, then the waves the dependencies make (wave 1: what starts at once; wave 2: what each waits for; ...) as short lists, then the risks. ${PLAN_RULES}
 Do not change any file.`;
-function createProgram(project, goal, attachments) {
+function createProgram(project, goal, attachments, extra = {}) {
   const p = PROJECTS[project]; if (!p) throw new Error(`unknown project ${project}`);
   if (!goal && !attachments?.length) throw new Error('empty goal');
   const id = newId(); mkdirSync(dir(id), { recursive: true });
   goal = withAttachments(goal, `${dir(id)}/workspace`, attachments);
-  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'talk', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString() };
+  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'talk', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString(), type: 'epic', ...extra };
   save(t); say(id, 'you', goal);
   enqueue(id, `EPIC ${id} in ${p.repo} (base ${p.base}). You are its coordinator: you plan and track; you never write code. Agents do each piece as its own task and PR (each with its own tests and an independent review); approved PRs merge into ${p.autoMerge ?? p.base}${p.autoMerge ? ' by themselves' : ' when the person merges them'}.
 
@@ -525,7 +525,7 @@ function startReady(t) {
   const byKey = Object.fromEntries(t.plan.map((i) => [i.key, i]));
   for (const i of g.ready) {
     const built = i.deps.map((d) => { const k = byKey[d].taskId ? load(byKey[d].taskId) : null; return `- ${byKey[d].title}${k?.pr ? ` (PR #${k.pr.number}, merged)` : ''}`; }).join('\n');
-    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title });
+    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title, ...(i.type ? { type: i.type } : {}) });
     i.taskId = kid.id;
   }
   update(t.id, (x) => { copyIssueFields(t.plan, x.plan ?? []); x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
@@ -641,10 +641,10 @@ function createTask(project, text, auto, { attachments, ...extra } = {}) {
   save(t); say(id, 'you', text);
   if (t.kind === 'report') enqueue(id, reportPrompt(t, text), 'bypassPermissions', 'start');
   else if (auto) enqueue(id, runPrompt(t, text, 'Pre-approved: no brief, start now. First pick your playbook and write your definition of done as checks anyone can run; it goes in the PR description under "Done".'), 'bypassPermissions', 'start');
-  else enqueue(id, `TASK ${id} in ${p.repo} (base ${p.base}).\n\n${text}\n\nThis is the BRIEF. Read the code you need (and the repository's own rules: AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills, if present). Reply with ONE message: your playbook, the questions you genuinely need answered (or "no questions"), your plan in a few lines, and the definition of done as checks anyone can run. Do not change any file.`, 'plan', 'start');
+  else enqueue(id, `TASK ${id} in ${p.repo} (base ${p.base}).\n\n${text}\n\n${prTitleLine(t)}\n\nThis is the BRIEF. Read the code you need (and the repository's own rules: AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills, if present). Reply with ONE message: your playbook, the questions you genuinely need answered (or "no questions"), your plan in a few lines, and the definition of done as checks anyone can run. Do not change any file.`, 'plan', 'start');
   return t;
 }
-const runPrompt = (t, task, reply) => `${reply}\n\nNow RUN task ${t.id}: ${task}\nYou are on branch agent/${t.id} in /workspace/repo (base ${t.base}). Work until your definition of done is met. Commit, push the branch, and open a PR into ${t.base} with \`gh pr create\` (title: the task in one line; body: Done / Decisions / Attention). ${hasChecks(t) ? 'Every push builds a preview and runs e2e; the results arrive here as [factory] messages. ' : ''}When it is done, an independent reviewer reads the PR; its findings arrive as [review] messages. Do not ask questions.`;
+const runPrompt = (t, task, reply) => `${reply}\n\nNow RUN task ${t.id}: ${task}\n${prTitleLine(t)}\nYou are on branch agent/${t.id} in /workspace/repo (base ${t.base}). Work until your definition of done is met. Commit, push the branch, and open a PR into ${t.base} with \`gh pr create\` (title: the task in one line; body: Done / Decisions / Attention). ${hasChecks(t) ? 'Every push builds a preview and runs e2e; the results arrive here as [factory] messages. ' : ''}When it is done, an independent reviewer reads the PR; its findings arrive as [review] messages. Do not ask questions.`;
 const reportPrompt = (t, text) => `TRIAGE task ${t.id} for ${t.repo} (default branch ${t.base}). Use the "bug" playbook's first steps, but do not change code, push, or open a PR in this task.
 THE REPORT${t.issue ? `: GitHub issue #${t.issue.number} (${t.issue.url})` : ', from the person (Telegram)'}:
 ${text}
@@ -700,14 +700,24 @@ async function oneShot(prompt, timeoutMs = 90000) {
   });
   try { return JSON.parse(out).result ?? ''; } catch { throw new Error('the one-shot call gave no answer'); }
 }
+// the factory's naming standard: a type and a few words. Channels are
+// <type>-<title> (pr-<N>-<type>-<title> once the PR opens); PR titles are
+// conventional commits, <prefix>(<scope>): <summary>
+export const TASK_TYPES = ['feature', 'fix', 'hotfix', 'refactor', 'perf', 'design', 'test', 'docs', 'ci', 'chore', 'research', 'epic'];
+const PR_PREFIX = { feature: 'feat', design: 'feat', research: 'docs' };
+const cleanType = (x) => (TASK_TYPES.includes(String(x ?? '').toLowerCase()) ? String(x).toLowerCase() : undefined);
+const cleanTitle = (x) => { const s = String(x ?? '').replace(/[\r\n`*_#<>]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60); return s || undefined; };
+const named = (b) => Object.fromEntries(Object.entries({ type: cleanType(b.type), title: cleanTitle(b.title) }).filter(([, v]) => v));
+const prTitleLine = (t) => `PR title: \`${PR_PREFIX[t.type] ?? t.type ?? '<type>'}(<scope>): <what changes, under 70 chars>\` (conventional commits${t.type ? `; this task is a ${t.type}` : ': feat, fix, hotfix, refactor, perf, test, docs, ci or chore'}; scope is the area, e.g. profile).`;
+
 async function classify(text) {
   const names = Object.keys(PROJECTS);
-  const prompt = `Projects:\n${names.map((n) => `- ${n}: ${PROJECTS[n].about ?? PROJECTS[n].repo}`).join('\n')}\n\nMessage from the founder:\n"""\n${text.slice(0, 4000)}\n"""\n\nWhich project is this message about? Answer with ONE line of JSON and nothing else: {"project": "<one of: ${names.join(', ')}>" or null if it could fit more than one or none, "why": "<at most 12 words>"}. Pick a project only when the message clearly points to it.`;
+  const prompt = `Projects:\n${names.map((n) => `- ${n}: ${PROJECTS[n].about ?? PROJECTS[n].repo}`).join('\n')}\n\nMessage from the founder:\n"""\n${text.slice(0, 4000)}\n"""\n\nWhich project is this message about, what kind of work is it, and what is it in a few words? Answer with ONE line of JSON and nothing else: {"project": "<one of: ${names.join(', ')}>" or null if it could fit more than one or none, "why": "<at most 12 words>", "type": "<one of: ${TASK_TYPES.join(', ')}>", "title": "<3 to 6 plain words naming the main thing, e.g. profile crop screen>"}. Pick a project only when the message clearly points to it. type is epic only when the message asks for a large multi-part effort or says epic; hotfix only for something broken in production that needs fixing now.`;
   let result = ''; try { result = await oneShot(prompt); } catch { return { project: null, why: 'classifier gave no answer' }; }
   const j = /\{[^{}]*\}/.exec(result); let ans = {}; try { ans = JSON.parse(j?.[0] ?? '{}'); } catch {}
   const project = names.includes(ans.project) ? ans.project : null;
   log('classify', { project, why: ans.why });
-  return { project, why: String(ans.why ?? '').slice(0, 200) };
+  return { project, why: String(ans.why ?? '').slice(0, 200), ...named(ans) };
 }
 
 // ---------- intake: labelled issues become tasks by themselves ----------
@@ -791,15 +801,16 @@ const handler = async (req, res) => {
     // names and repos only: never the GitHub App ids or key files
     if (url.pathname === '/projects' && req.method === 'GET') return send(200, Object.entries(PROJECTS).map(([name, p]) => ({ name, about: p.about ?? '', repo: p.repo, base: p.base, autoMerge: p.autoMerge ?? null })));
     if (url.pathname === '/classify' && req.method === 'POST') { const b = await body(req); return send(200, await classify(String(b.text ?? ''))); }
-    if (url.pathname === '/programs' && req.method === 'POST') { const b = await body(req); return send(201, createProgram(b.project, String(b.goal ?? '').trim(), b.attachments)); }
+    if (url.pathname === '/programs' && req.method === 'POST') { const b = await body(req); return send(201, createProgram(b.project, String(b.goal ?? '').trim(), b.attachments, named(b))); }
     // a batch: independent tasks, each run without a brief to a reviewed PR
     if (url.pathname === '/batches' && req.method === 'POST') {
       const b = await body(req);
-      const items = (Array.isArray(b.items) ? b.items : []).map((s) => String(s).trim()).filter(Boolean);
+      // an item is its text, or { text, type, title } (the Slack bot names each one)
+      const items = (Array.isArray(b.items) ? b.items : []).map((x) => (typeof x === 'object' && x ? { text: String(x.text ?? '').trim(), ...named(x) } : { text: String(x).trim() })).filter((x) => x.text);
       if (!items.length) return send(400, { error: 'no items' });
       if (items.length > 20) return send(400, { error: 'at most 20 items in a batch' });
       const batch = `b${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${randomBytes(2).toString('hex')}`;
-      return send(201, { batch, tasks: items.map((text) => createTask(b.project, text, true, { batch })) });
+      return send(201, { batch, tasks: items.map(({ text, ...nm }) => createTask(b.project, text, true, { batch, ...nm })) });
     }
     // a task's screenshots and videos (workspace/screens, workspace/videos), for the
     // Slack bot to post: the list, or one file. Only files mediaFiles lists are
@@ -820,7 +831,7 @@ const handler = async (req, res) => {
     if (!id && req.method === 'POST') {
       const b = await body(req); const text = String(b.text ?? '').trim();
       if (b.kind === 'report') return send(201, createTask(b.project, text, true, { kind: 'report', title: `bug: ${text.split('\n')[0] || 'see the attached image'}`.slice(0, 90), attachments: b.attachments }));
-      return send(201, createTask(b.project, text, !!b.auto, { attachments: b.attachments }));
+      return send(201, createTask(b.project, text, !!b.auto, { attachments: b.attachments, ...named(b) }));
     }
     if (!existsSync(`${dir(id)}/task.json`)) return send(404, { error: 'no such task' });
     if (!sub && req.method === 'GET') return send(200, { ...load(id), running: running.has(id), messages: messages(id), activity: activity(id), decisions: decisions(id) });

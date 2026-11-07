@@ -13,11 +13,13 @@ export const MAX_PLAN_TASKS = 40;
 const KEY = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 // What the coordinator is told when it writes or revises a plan.
+export const PLAN_TYPES = ['feature', 'fix', 'hotfix', 'refactor', 'perf', 'design', 'test', 'docs', 'ci', 'chore', 'research'];
 export const PLAN_RULES = `The plan lists EVERY task of the epic. Each task is one PR an agent can finish and prove on its own (its own tests, its own review): say what to change, where, and how done is checked, in a few sentences, self-contained (the agent sees only the epic's goal and its own task). Give each task a short key (lowercase letters, digits, dashes) and "depends_on": the keys of the tasks that must be MERGED before it can start, and only real dependencies (code it builds on, a flag it needs, a file it would conflict on): everything else runs in parallel, so do not chain tasks just to order them. Tasks that edit the same files (agents/server.mjs, agents/plan.mjs, the Slack bot, ...) must depend on each other (directly or through a chain) or be merged into one task: two parallel tasks on the same file conflict. Give each task a "files" list of the files it edits; a plan where two tasks share a file and neither depends on the other is refused. At most ${MAX_PLAN_TASKS} tasks; split the epic if it needs more.
 End your reply with the whole plan as a fenced block exactly like:
 \`\`\`plan
-{"tasks": [{"key": "flag", "title": "one line", "task": "what to do, where, how done is checked", "depends_on": [], "files": ["agents/plan.mjs"]}, {"key": "next-thing", "title": "...", "task": "...", "depends_on": ["flag"], "files": ["agents/plan.mjs", "agents/server.mjs"]}]}
-\`\`\``;
+{"tasks": [{"key": "flag", "type": "feature", "title": "3 to 6 words naming the main thing", "task": "what to do, where, how done is checked", "depends_on": [], "files": ["agents/plan.mjs"]}, {"key": "next-thing", "type": "refactor", "title": "...", "task": "...", "depends_on": ["flag"], "files": ["agents/plan.mjs", "agents/server.mjs"]}]}
+\`\`\`
+The type is one of: feature, fix, hotfix, refactor, perf, design, test, docs, ci, chore, research.`;
 
 export function parsePlan(text) {
   // fences only count on a line of their own: a task's text may mention "```plan"
@@ -41,7 +43,8 @@ export function parsePlan(text) {
     if (!task) return { error: `task "${key}" has no task text` };
     const deps = Array.isArray(t?.depends_on) ? t.depends_on.map(String) : [];
     const files = Array.isArray(t?.files) ? [...new Set(t.files.map((f) => String(f).trim().replace(/^\.\//, '')).filter(Boolean))] : [];
-    out.push({ key, title: String(t?.title ?? task.split('\n')[0]).trim().slice(0, 90), task, deps: [...new Set(deps)], ...(files.length ? { files } : {}) });
+    const type = PLAN_TYPES.includes(String(t?.type ?? '').toLowerCase()) ? String(t.type).toLowerCase() : null;
+    out.push({ key, title: String(t?.title ?? task.split('\n')[0]).trim().slice(0, 90), task, deps: [...new Set(deps)], ...(files.length ? { files } : {}), ...(type ? { type } : {}) });
   }
   for (const t of out) for (const d of t.deps) {
     if (d === t.key) return { error: `task "${t.key}" depends on itself` };
