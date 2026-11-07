@@ -93,10 +93,12 @@ after a change in `agents/image`, run
   with the repo's own tools, file or update the issue and label it
   `ready-for-agent` / `ready-for-human` / `needs-info`. A `ready-for-agent`
   issue then becomes a change by itself.
-- **program** (orchestrate): a coordinator plans phases of independent
-  changes; you approve the plan once ("go"); each phase runs as a batch; when
-  you have merged a phase, the coordinator plans the next from what landed,
-  until `PROGRAM DONE`.
+- **epic** (`program`): a coordinator plans every task of a big goal with
+  what it depends on (`agents/plan.mjs`); you approve the plan once ("go").
+  Each task starts as soon as everything it depends on has merged, so
+  unrelated work runs in parallel and waves are just the result. Reply at any
+  time to revise what has not started; it ends with `PROGRAM DONE` once what
+  landed meets the epic's definition of done.
 
 **The brain** (`brain/`, see its README): the role prompts, playbooks,
 knowledge and factory-wide skills every agent gets, on every project.

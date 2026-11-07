@@ -4,7 +4,7 @@
 //    channel name can pick the project (sayra-… / factory-…); otherwise the
 //    factory works it out from the words and asks with buttons when unsure
 //  - or DM the bot: a plain message starts a task in a new channel; "queue:",
-//    "bug:", "program:" as on Telegram ("sayra:" / "factory:" picks the project)
+//    "bug:", "epic:" (or "program:") as on Telegram ("sayra:" / "factory:" picks the project)
 //  - tasks from issues, queues and programs get their own channel too
 //  - everything you write in a task's channel goes to that task; briefs and
 //    plans get a Go button
@@ -93,7 +93,7 @@ export function render(t, m) {
   const triage = t.kind === 'report' && /^TRIAGE:\s*(\S+)\s+(\S+)\s*(\S*)/m.exec(m.text);
   const brief = !decision && isBriefLike(t);
   const label = decision ? 'Decision needed: reply here with your choice'
-    : t.kind === 'program' ? (t.phase === 'brief' ? 'Program plan: Go, or reply to change it' : 'Program coordinator')
+    : t.kind === 'program' ? (t.phase === 'brief' ? 'Epic plan: Go, or reply to change it' : 'Epic coordinator')
     : triage ? `Triage: ${triage[1]} → ${triage[2]}`
     : brief ? 'Brief: Go, or reply with your answers' : 'Agent';
   const icon = decision ? '❓' : t.kind === 'program' ? '🧭' : t.kind === 'report' ? '🔎' : '🤖';
@@ -142,7 +142,7 @@ async function archiveIfFinished(t) {
 const HELP = `*What I understand*
 • create a channel and write your idea: that's the task (name it \`sayra-…\` or \`factory-…\` to pick the project, or I'll work it out and ask if unsure)
 • or DM me: a plain message starts a task in a new channel (I work out the project from your words and ask if unsure; \`sayra:\` / \`factory:\` at the start picks it)
-• \`queue:\` + one task per line · \`bug:\` + what's wrong · \`program:\` + a big goal (add \`factory\`, e.g. \`bug factory:\`)
+• \`queue:\` + one task per line · \`bug:\` + what's wrong · \`epic:\` + a big goal: the coordinator plans every task with what it depends on, you press Go, unrelated tasks run in parallel (add the project, e.g. \`epic sayra:\`)
 • in a task's channel, everything you write goes to the agent; Go starts a brief or a plan
 • \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`help\` anywhere`;
 
@@ -164,7 +164,7 @@ async function begin(kind, project, text, channel, note = '') {
       : await agents('/programs', { method: 'POST', body: JSON.stringify({ project, goal: text }) });
     state.sent[t.id] = 1; persist();
     const ch = await channelFor(t);
-    return dm(`${kind === 'bug' ? '🔎 Triage' : '🧭 Program'} started (${project}${note}) in <#${ch}>.`);
+    return dm(`${kind === 'bug' ? '🔎 Triage' : '🧭 Epic'} started (${project}${note}) in <#${ch}>.`);
   }
   const t = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, text }) });
   state.sent[t.id] = 1; // the person's own message is #0
@@ -228,9 +228,9 @@ export async function onMessage(ev) {
 
 async function onDm(text) {
   const q = text.match(new RegExp(`^queue(?:\\s+(${NAMES}))?\\s*(?::|(?=\\n)|$)`, 'i'));
-  const k = !q && text.match(new RegExp(`^(bug|program)(?:\\s+(${NAMES}))?\\s*:\\s*`, 'i'));
+  const k = !q && text.match(new RegExp(`^(bug|program|epic)(?:\\s+(${NAMES}))?\\s*:\\s*`, 'i'));
   const m = !q && !k && text.match(new RegExp(`^(${NAMES})\\s*:\\s*`, 'i'));
-  const kind = q ? 'queue' : k ? k[1].toLowerCase() : 'task';
+  const kind = q ? 'queue' : k ? (k[1].toLowerCase() === 'epic' ? 'program' : k[1].toLowerCase()) : 'task';
   const project = (q?.[1] ?? k?.[2] ?? m?.[1])?.toLowerCase() ?? null;
   const rest = (q ? text.slice(q[0].length) : k ? text.slice(k[0].length) : m ? text.slice(m[0].length) : text).trim();
   if (!rest) return kind === 'queue' ? dm('A queue is one task per line:\n```queue:\n- make the Save button sticky on phones\n- fix the login redirect```') : dm(HELP);
