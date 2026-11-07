@@ -12,6 +12,12 @@ EnvironmentFile=-/opt/factory/agents/env
 ExecStart=/opt/factory/node/bin/node /opt/factory/src/agents/server.mjs
 Restart=on-failure
 RestartSec=5
+# A stop (every deploy) is a drain: on SIGTERM the server starts no new job, lets the running turns finish
+# (agents/drain.mjs, 30 min) and exits by itself. So: SIGTERM only the server (KillMode=process), not the
+# `docker run` clients, which would forward it to the agents' containers; and wait longer than the drain
+# before systemd gives up and SIGKILLs.
+KillMode=process
+TimeoutStopSec=1900
 
 [Install]
 WantedBy=multi-user.target
