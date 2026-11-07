@@ -225,11 +225,22 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
   return { last, stderr, sessionId };
 }
 
+const UNASKED_TIMEOUT_MS = 60000;
 async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
   const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
   if (r.last) say(id, t.kind === 'program' ? 'coordinator' : 'agent', r.last);
   else say(id, 'factory', `[factory] the agent stopped without a reply. ${r.stderr.trim().slice(-400)}`);
+  // a plain-text question to the person (no DECISION NEEDED block): one cheap check per turn, fails open.
+  // Run before the task is loaded and while it still holds its running slot, so a Stop/Pause
+  // pressed meanwhile is not overwritten and no second turn of this task starts. Not in plan
+  // mode (a plan awaiting approval already waits for the person).
+  let asked = { asks: false };
+  if (from !== 'pause' && mode !== 'plan' && r.last && !['stopped', 'pausing'].includes(load(id).status)) {
+    const hold = { kill() {} }; running.set(id, hold);
+    try { asked = await checkUnasked(r.last, { ask: (p) => oneShot(p, UNASKED_TIMEOUT_MS), timeoutMs: UNASKED_TIMEOUT_MS, log }); }
+    finally { if (running.get(id) === hold) running.delete(id); }
+  }
   const done = load(id);
   if (r.sessionId && !done.sessionId) done.sessionId = r.sessionId;
   if (done.status === 'stopped') { save(done); return pump(); }
@@ -249,8 +260,6 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   }
   if (r.last) done.crashRetries = 0;
   const decision = hasDecisionBlock(r.last);
-  // a plain-text question to the person (no DECISION NEEDED block): one cheap check per turn, fails open
-  const asked = from === 'pause' || !r.last ? { asks: false } : await checkUnasked(r.last, { ask: oneShot, log });
   if (asked.asks) {
     say(id, 'agent', decisionMessage(asked), { unasked: true });
     done.waitingOn = waitingOnLine(asked);
