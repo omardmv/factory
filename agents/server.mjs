@@ -16,7 +16,7 @@
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
-import { openEpicIssue, refsLine, copyIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
+import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -551,7 +551,7 @@ async function syncEpic(id, done = false) {
     const r = await syncEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, states, goal: messages(id)[0]?.text ?? t.title, tasksUrl: `${DASHBOARD}/?task=${id}`, done });
     // saved either way: sub-issues opened before a failure must not be opened twice.
     // Only the dropped keys sent to GitHub are cleared, and only on success; a revision saved meanwhile keeps its own.
-    update(id, (x) => { copyIssueFields(x.plan ?? [], t.plan); for (const k of ['epicSyncHash', 'epicClosed']) x[k] = t[k]; if (!r.error) x.epicDropped = (x.epicDropped ?? []).filter((p) => !sent.has(p.key)); });
+    update(id, (x) => { saveIssueFields(x.plan ?? [], t.plan); for (const k of ['epicSyncHash', 'epicClosed']) x[k] = t[k]; if (!r.error) x.epicDropped = (x.epicDropped ?? []).filter((p) => !sent.has(p.key)); });
     if (r.error) log('epic.sync.failed', { task: id, error: r.error }); else if (r.changed) log('epic.synced', { task: id });
   } catch (e) { log('epic.sync.failed', { task: id, error: e.message }); }
   finally { syncingEpic.delete(id); }

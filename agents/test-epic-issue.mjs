@@ -1,6 +1,6 @@
 // node agents/test-epic-issue.mjs
 import assert from 'node:assert/strict';
-import { renderEpicBody, renderSubIssueBody, createEpicIssue, syncEpicIssue, openEpicIssue, refsLine, copyIssueFields, syncEpicIfChanged, droppedWithIssues } from './epic-issue.mjs';
+import { renderEpicBody, renderSubIssueBody, createEpicIssue, syncEpicIssue, openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged, droppedWithIssues } from './epic-issue.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const P = (key, deps, wave) => ({ key, title: `Title ${key}`, task: `do ${key}\nmore`, deps, wave });
@@ -188,4 +188,21 @@ ok('new plan items get sub-issues; dropped closes not_planned');
   assert.deepEqual(await syncEpicIfChanged({ ...args, getToken: async () => { throw new Error('x'); }, states: { a: 'merged', b: 'running' } }), { changed: false, error: 'x' });
   assert.deepEqual(await syncEpicIfChanged({ ...args, task: { plan: mkPlan() } }), { changed: false });
   ok('sync: failures are returned, not thrown, and retried next pass; no epic means no calls');
+}
+
+{
+  // a link fails once: the repair must survive being saved, so later syncs never re-link
+  const g = fakeGh(); const task = { title: 'Epic', plan: mkPlan() };
+  let fail = true;
+  const gh = async (t, p, m, d) => { if (fail && p.endsWith('/sub_issues') && d.sub_issue_id === 1012) { fail = false; throw new Error('rate limit'); } return g.gh(t, p, m, d); };
+  await openEpicIssue({ gh, getToken: async () => 'tok', repo: 'o/r', task, goal: 'G' });
+  const stored = () => JSON.parse(JSON.stringify(task.plan)); // what the server keeps on disk
+  let disk = stored();
+  const pass = async (states) => { const t = { ...task, plan: JSON.parse(JSON.stringify(disk)) }; const r = await syncEpicIfChanged({ gh: g.gh, getToken: async () => 'tok', repo: 'o/r', task: t, states, goal: 'G' }); saveIssueFields(disk, t.plan); Object.assign(task, { epicSyncHash: t.epicSyncHash }); return r; };
+  assert.equal(disk.find((i) => i.key === 'b').linked, false);
+  await pass({ a: 'merged' });
+  assert.equal(disk.find((i) => i.key === 'b').linked, true);
+  const n = g.calls.length; await pass({ a: 'merged', b: 'merged' });
+  assert.equal(g.calls.slice(n).filter((c) => c.path.endsWith('/sub_issues')).length, 0);
+  ok('sync: a repaired link is saved, later syncs do not link again');
 }

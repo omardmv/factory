@@ -155,3 +155,10 @@ export async function syncEpicIfChanged({ gh, getToken, repo, task, states, goal
 export function droppedWithIssues(before, after) {
   return before.filter((p) => p.issue && !after.some((i) => i.key === p.key));
 }
+
+// after a sync: write the sub-issue fields back by key, overwriting (a repaired link, a fetched issueId)
+export function saveIssueFields(current, from) {
+  const by = new Map(from.filter((i) => i.issue).map((i) => [i.key, i]));
+  for (const i of current) { const f = by.get(i.key); if (f && (!i.issue || i.issue === f.issue)) { i.issue = f.issue; i.issueId = f.issueId; if (f.linked === undefined) delete i.linked; else i.linked = f.linked; } }
+  return current;
+}
