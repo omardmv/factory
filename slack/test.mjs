@@ -185,6 +185,9 @@ await step('a bare "stop" in a task channel is a command, not an answer', async 
 await step('decision needed, QA and review render with their labels', async () => {
   const r1 = bot.render({ id: 'x', kind: 'change', phase: 'run', status: 'decision needed' }, { from: 'agent', text: 'DECISION NEEDED\n1. A\n2. B' });
   assert.match(r1.text, /Decision needed/); assert.ok(!r1.go);
+  const ping = bot.render({ id: 'x' }, { from: 'factory', ping: true, text: '[factory] STUCK: this task has been working for 35 min. Why: no activity.' });
+  assert.match(ping.text, /Stuck[\s\S]*working for 35 min[\s\S]*no activity/);
+  assert.match(bot.render({ id: 'x', status: 'decision needed', waitingOn: 'your answer to: purple or teal?' }, { from: 'agent', text: 'DECISION NEEDED\nx' }).text, /Waiting on: your answer to: purple or teal\?/);
   assert.match(bot.render({ id: 'x', pr: { url: 'https://g/1', number: 1 } }, { from: 'review', text: 'Fine.\nVERDICT: PASS' }).text, /Review passed[\s\S]*<https:\/\/g\/1\|PR #1>/);
   assert.match(bot.render({ id: 'x' }, { from: 'qa', text: 'Broken.\nQA VERDICT: FAIL' }).text, /QA found failures/);
   assert.equal(bot.mrkdwn('a <b> & [x](https://y)'), 'a &lt;b&gt; &amp; <https://y|x>');

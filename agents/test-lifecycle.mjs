@@ -1,6 +1,6 @@
 // node agents/test-lifecycle.mjs
 import assert from 'node:assert/strict';
-import { verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
+import { PARKED, isParked, waitingOnFor, parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 
 let n = 0;
 const test = async (name, f) => { await f(); n++; console.log('ok', name); };
@@ -114,10 +114,10 @@ await test('programs hand over to the coordinator logic', async () => {
 });
 
 await test('coordinator: decision, done, talk, brief, running, revision', () => {
-  assert.deepEqual(afterCoordinator({ phase: 'run', reply: 'x', decision: true }), { status: 'decision needed' });
+  assert.deepEqual(afterCoordinator({ phase: 'run', reply: 'x', decision: true }), { status: 'decision needed', waitingOn: afterCoordinator({ phase: 'run', reply: 'x', decision: true }).waitingOn });
   assert.deepEqual(afterCoordinator({ phase: 'run', reply: 'PROGRAM DONE\nall', decision: false }), { status: 'done', closeEpic: true });
-  assert.deepEqual(afterCoordinator({ phase: 'talk', reply: '```plan\n{}\n```' }), { status: 'waiting for you' });
-  assert.deepEqual(afterCoordinator({ phase: 'brief', reply: 'plan' }), { status: 'waiting for you' });
+  assert.deepEqual(afterCoordinator({ phase: 'talk', reply: '```plan\n{}\n```' }), { status: 'waiting for you', waitingOn: afterCoordinator({ phase: 'talk', reply: '' }).waitingOn });
+  assert.deepEqual(afterCoordinator({ phase: 'brief', reply: 'plan' }), { status: 'waiting for you', waitingOn: afterCoordinator({ phase: 'brief', reply: '' }).waitingOn });
   assert.deepEqual(afterCoordinator({ phase: 'run', reply: 'just an answer' }), { status: 'running', revise: false });
   assert.deepEqual(afterCoordinator({ phase: 'run', reply: 'new\n```plan\n{}\n```' }), { status: 'running', revise: true });
 });
@@ -159,7 +159,7 @@ await test('QA: no verdict is a person\'s call, with a reason', () => {
 });
 await test('QA: stop and pause win', () => {
   assert.equal(afterQa({ task: task({ status: 'stopped' }), verdict: 'FAIL', maxRounds: 6 }).action, 'stopped');
-  assert.deepEqual(afterQa({ task: task({ status: 'pausing' }), verdict: 'PASS', maxRounds: 6 }), { action: 'paused', status: 'paused' });
+  assert.deepEqual(afterQa({ task: task({ status: 'pausing' }), verdict: 'PASS', maxRounds: 6 }), { action: 'paused', status: 'paused', waitingOn: waitingOnFor('paused') });
 });
 
 // ---- review ----
@@ -172,7 +172,7 @@ await test('panel verdict: every reviewer must pass', () => {
   assert.equal(panelVerdict([], 2), null);
 });
 await test('review PASS: ready; merges by itself only with autoMerge and no QA dispute', () => {
-  assert.deepEqual(afterReview({ task: task(), verdict: 'PASS', headSha: 'h', autoMerge: 'dev', maxRounds: 6 }), { action: 'pass', status: 'ready for you', mergeWanted: true, disputed: false });
+  assert.deepEqual(afterReview({ task: task(), verdict: 'PASS', headSha: 'h', autoMerge: 'dev', maxRounds: 6 }), { action: 'pass', status: 'ready for you', waitingOn: 'your merge of the reviewed PR', mergeWanted: true, disputed: false });
   assert.equal(afterReview({ task: task(), verdict: 'PASS', headSha: 'h', autoMerge: undefined, maxRounds: 6 }).mergeWanted, false);
   const o = afterReview({ task: task({ qaVerdict: 'FAIL', qaTestedSha: 'h' }), verdict: 'PASS', headSha: 'h', autoMerge: 'dev', maxRounds: 6 });
   assert.equal(o.mergeWanted, false); assert.equal(o.disputed, true);
@@ -227,6 +227,51 @@ await test('stubbed turn: a reply ending in a plain-text question lands on decis
   const turn = async (reply, model) => { const a = await checkUnasked(reply, { ask: async () => model }); return status(task(), { reply, unasked: a.asks }, deps({ hasChecks: () => false })); };
   assert.equal(await turn(SAYRA, '{"asks":true,"question":"purple or teal?","options":["purple","teal"]}'), 'decision needed');
   assert.equal(await turn(REPORT, '{"asks":false}'), 'reviewing');
+});
+
+// ---- every parking path says what the person is waited on for ----
+await test('every path that parks a task sets a non-empty one-line waitingOn', async () => {
+  const outs = [];
+  const add = (o) => outs.push(o);
+  const reviewed = (o = {}) => task({ reviewedSha: 'bbb2222', ...o });
+  // agent turns
+  add(await run(task(), { from: 'pause' }));
+  add(await run(task({ kind: 'report' }), { mode: 'plan' }));
+  add(await run(task({ kind: 'report' }), { reply: 'DECISION NEEDED\nx' }));
+  add(await run(task(), { mode: 'plan' }));
+  add(await run(task(), { reply: 'DECISION NEEDED\nx' }));
+  add(await run(task(), { unasked: true }));
+  add(await run(task(), {}, deps({ findPr: async () => null })));
+  add(await run(reviewed({ verdict: 'PASS' })));
+  add(await run(reviewed({ verdict: 'CHANGES' })));
+  // coordinator
+  for (const phase of ['talk', 'brief', 'run']) { add(afterCoordinator({ phase, reply: '' })); add(afterCoordinator({ phase, reply: '', decision: true })); }
+  // qa, review, checks
+  for (const verdict of ['PASS', 'FAIL', null]) for (const factoryRounds of [0, 3]) {
+    add(afterQa({ task: task({ factoryRounds }), verdict, maxRounds: 3 }));
+    add(afterReview({ task: task({ factoryRounds }), verdict: verdict === 'FAIL' ? 'CHANGES' : verdict, headSha: 'h', maxRounds: 3 }));
+  }
+  add(afterQa({ task: task({ status: 'pausing' }), verdict: 'PASS', maxRounds: 3 }));
+  add(afterReview({ task: task({ status: 'pausing' }), verdict: 'PASS', headSha: 'h', maxRounds: 3 }));
+  add(afterFactoryReport({ task: task({ phase: 'run', factoryRounds: 3 }), text: '❌ failed', maxRounds: 3 }));
+  const parking = outs.filter((o) => isParked(o.status));
+  assert.ok(parking.length >= 20, `only ${parking.length} parking outcomes covered`);
+  for (const o of parking) {
+    assert.equal(typeof o.waitingOn, 'string', `no waitingOn on ${JSON.stringify(o)}`);
+    assert.ok(o.waitingOn.trim() && !o.waitingOn.includes('\n'), `bad waitingOn on ${JSON.stringify(o)}`);
+  }
+  // and the save-time guard fills in a default for any parked status, so a missed path still cannot be silent
+  for (const s of PARKED) assert.ok(waitingOnFor(s) && parkReason({ status: s }));
+  assert.equal(parkReason({ status: 'working', waitingOn: 'stale' }), undefined);
+  assert.equal(parkReason({ status: 'paused', waitingOn: 'mine' }), 'mine');
+});
+await test('the paths that park are exactly those in lifecycle.mjs: every status literal in it that is parked is covered above', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./lifecycle.mjs', import.meta.url), 'utf8');
+  // each return that names a parked status literal must also carry waitingOn on the same line or via isParked
+  for (const line of src.split('\n')) {
+    if (/\bstatus: '(waiting for you|decision needed|ready for you|paused)'/.test(line) && !line.includes('waitingOn') && !/waitingOnFor|isParked/.test(line)) assert.fail(`parking without waitingOn: ${line.trim()}`);
+  }
 });
 
 console.log(`${n} groups passed`);

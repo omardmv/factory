@@ -94,6 +94,7 @@ async function overview(tasks, healthy) {
     <div class="hint">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● the factory needs a look</span>'} · disk ${facts.disk_used_pct ?? '?'}% · data snapshot ${(facts.snapshots ?? []).map((x) => { const t = (x.note.match(/taken (\S+)/) ?? [])[1]; return t ? ago(t) + ' old' : '?'; }).join(', ')} · <a href="/health">health →</a> <a class="back" href="/?list=1">· all tasks →</a></div>`;
 
   const needs = needYou.map((t) => card(`<b>${esc(t.title)}</b><div class="hint">${esc(t.project)} · ${t.phase === 'brief' ? 'brief ready' : 'stopped, needs you'} · ${ago(t.updatedAt)}</div>
+    ${t.waitingOn ? `<div class="hint"><b>Waiting on:</b> ${esc(t.waitingOn)}</div>` : ''}
     <div class="snip">${esc((t.lastAgent ?? '').slice(0, 260))}</div>${t.phase === 'brief' ? `<div class="row">${quick(t.id)}</div>` : ''}`, `/?task=${t.id}`, 'open chat →')).join('') || '<div class="hint pad">Nothing waits for you.</div>';
 
   const work = working.map((t) => card(`<span class="dot live"></span> <b>${esc(t.title)}</b><div class="hint">${esc(t.project)}${t.pr ? ` · PR #${t.pr.number}` : ''}${t.lastActivity ? ` · ${esc(t.lastActivity.tool)}: ${esc(t.lastActivity.detail)} · ${ago(t.lastActivity.at)} ago` : ''}</div>`, `/?task=${t.id}`, 'open chat →')).join('') || '<div class="hint pad">No agent is working right now. <a href="/?task=new">Start one →</a></div>';
@@ -119,7 +120,7 @@ export const chatCss = `
 .msgs{flex:1;overflow:auto;padding:18px 22px;display:flex;flex-direction:column;gap:12px}
 .m{max-width:760px;padding:10px 14px;border-radius:12px;font-size:14.5px;line-height:1.55;background:#fff;border:1px solid #e6e4dc}
 .m.you{align-self:flex-end;background:#e6effa;border-color:#b5d4f4} .m.factory{background:#f1efe8;font-size:13.5px} .m.review{background:#eeedfe;border-color:#cecbf6} .m.coordinator{background:#e1f5ee;border-color:#9fe1cb} .dlog{font-size:12px;border-collapse:collapse;margin-top:6px} .dlog td{border-top:1px solid #e5e3da;padding:4px 6px;vertical-align:top}
-.m .who{font-size:11px;color:#888780;margin-bottom:3px} .m pre{white-space:pre-wrap;background:#f7f6f2;padding:8px;border-radius:6px;font-size:12.5px}
+.m.ping{border-color:#a32d2d}.m .who{font-size:11px;color:#888780;margin-bottom:3px} .m pre{white-space:pre-wrap;background:#f7f6f2;padding:8px;border-radius:6px;font-size:12.5px}
 .m code{background:#f1efe8;padding:1px 4px;border-radius:4px;font-size:13px}
 .compose{border-top:1px solid #e6e4dc;padding:12px 22px;background:#fff;display:flex;gap:8px}
 .compose textarea{flex:1;font:inherit;padding:9px 11px;border:1px solid #d3d1c7;border-radius:10px;min-height:44px;resize:vertical}
@@ -159,12 +160,13 @@ export async function chatView({ taskId, healthy, list = false }) {
       (task.epicIssue?.url ? `<a href="${esc(task.epicIssue.url)}" target="_blank">epic issue #${esc(task.epicIssue.number)}</a>` : '') + (task.pr ? `<a href="${esc(task.pr.url)}" target="_blank">PR #${pr} · ${esc(task.pr.state)}</a>` : task.epicIssue?.url ? '' : '<span class="hint">no PR yet</span>'),
       pv && pr ? `<a href="${pv.host(pr)}/app/" target="_blank">preview</a><a href="${pv.host(pr)}/_factory/login" target="_blank">sign in</a><a href="${pv.host(pr)}/_factory/" target="_blank">videos</a>` : '',
       e2e ? `<span>${e2e.failed ? '❌' : '✅'} e2e ${e2e.passed} passed${e2e.failed ? `, ${e2e.failed} failed` : ''}</span>` : '',
+      task.waitingOn ? `<span class="hint"><b>waiting on:</b> ${esc(task.waitingOn)}</span>` : '',
       `<span class="hint">${esc(task.status)}${task.costUsd ? ` · $${task.costUsd.toFixed(2)}` : ''}</span>`,
       task.running && task.status !== 'pausing' ? `<form method="post" action="/t/${task.id}/pause" style="display:inline"><button>Pause</button></form>` : '',
       task.running ? `<form method="post" action="/t/${task.id}/stop" style="display:inline"><button>Stop</button></form>` : '',
     ].join(' ');
     const dl = (task.decisions ?? []).length ? `<details class="m factory"><summary class="who">decision log · ${task.decisions.length} rows</summary><table class="dlog">${task.decisions.map((d) => `<tr><td>${esc(d.phase ?? '')}</td><td>${esc(d.decision ?? '')}<div class="hint">${esc(d.why ?? '')}</div></td><td><code>${esc(d.evidence ?? '')}</code></td><td>${esc(d.result ?? '')}</td></tr>`).join('')}</table></details>` : '';
-    const msgs = gallery(task.id) + dl + task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : m.from === 'coordinator' ? 'coordinator' : m.from === 'review' ? 'reviewer' : m.from === 'qa' ? 'QA tester' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
+    const msgs = gallery(task.id) + dl + task.messages.map((m) => `<div class="m ${m.from}${m.ping ? ' ping' : ''}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : m.from === 'coordinator' ? 'coordinator' : m.from === 'review' ? 'reviewer' : m.from === 'qa' ? 'QA tester' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
       + (task.running ? `<div class="hint"><span class="dot live"></span> the agent is working${task.activity?.length ? `<div class="activity">${task.activity.slice(-5).map((x) => `${ago(x.at)} · ${esc(x.tool)} · ${esc(x.detail)}`).join('<br>')}</div>` : ''}</div>` : '');
     const placeholder = task.phase === 'brief' && !task.running ? 'Reply to the brief: "go", or your answers' : 'Message the agent…';
     main = `<div class="head"><a href="/?list=1" class="hint back" style="font-size:12px">← tasks</a><h2>${esc(task.title)}</h2><div class="meta">${esc(task.project)} · ${links}</div></div>
