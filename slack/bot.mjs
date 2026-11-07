@@ -24,7 +24,8 @@ const FACTS = process.env.FACTS_FILE ?? '/srv/factory/state/status.json';
 const DASHBOARD = process.env.DASHBOARD ?? 'https://factory.contentcoach.org';
 const PUSH_EVERY_MS = Number(process.env.PUSH_EVERY_MS ?? 15000);
 // project -> channel-name prefixes (the first is used for channels the bot makes)
-const PROJECTS = { contentcoach: ['cc', 'contentcoach'], factory: ['factory'] };
+const PROJECTS = { contentcoach: ['cc', 'contentcoach'], factory: ['factory'], sayra: ['sayra'] };
+const NAMES = Object.keys(PROJECTS).join('|');
 const DEFAULT_PROJECT = 'contentcoach';
 const secret = (n) => readFileSync(`${SECRETS}/${n}`, 'utf8').trim();
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
@@ -140,8 +141,8 @@ async function archiveIfFinished(t) {
 
 // ---- incoming
 const HELP = `*What I understand*
-• create a channel (\`cc-…\` for ContentCoach, \`factory-…\` for the factory) and write your idea: that's the task
-• or DM me: a plain message starts a task in a new channel (\`factory:\` prefix for the factory repo)
+• create a channel (\`cc-…\` ContentCoach, \`sayra-…\` Sayra, \`factory-…\` the factory) and write your idea: that's the task
+• or DM me: a plain message starts a task in a new channel (\`sayra:\` or \`factory:\` prefix for another project)
 • \`queue:\` + one task per line · \`bug:\` + what's wrong · \`program:\` + a big goal (add \`factory\`, e.g. \`bug factory:\`)
 • in a task's channel, everything you write goes to the agent; Go starts a brief or a plan
 • \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`help\` anywhere`;
@@ -186,7 +187,7 @@ export async function onMessage(ev) {
 }
 
 async function onDm(text) {
-  const q = text.match(/^queue(?:\s+(contentcoach|factory))?\s*(?::|(?=\n)|$)/i);
+  const q = text.match(new RegExp(`^queue(?:\\s+(${NAMES}))?\\s*(?::|(?=\\n)|$)`, 'i'));
   if (q) {
     const project = (q[1] ?? DEFAULT_PROJECT).toLowerCase();
     const items = text.slice(q[0].length).split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
@@ -198,7 +199,7 @@ async function onDm(text) {
     for (const t of b.tasks) await channelFor(t);
     return dm(`📦 *Queue started: ${b.tasks.length} tasks* (${project}), each in its own channel. One summary comes here when all are done.`);
   }
-  const k = text.match(/^(bug|program)(?:\s+(contentcoach|factory))?\s*:\s*/i);
+  const k = text.match(new RegExp(`^(bug|program)(?:\\s+(${NAMES}))?\\s*:\\s*`, 'i'));
   if (k) {
     const project = (k[2] ?? DEFAULT_PROJECT).toLowerCase(), rest = text.slice(k[0].length).trim();
     if (!rest) return dm(HELP);
@@ -209,7 +210,7 @@ async function onDm(text) {
     const ch = await channelFor(t);
     return dm(`${k[1].toLowerCase() === 'bug' ? '🔎 Triage' : '🧭 Program'} started (${project}) in <#${ch}>.`);
   }
-  const m = text.match(/^(contentcoach|factory)\s*:\s*/i);
+  const m = text.match(new RegExp(`^(${NAMES})\\s*:\\s*`, 'i'));
   return startTask(m ? m[1].toLowerCase() : DEFAULT_PROJECT, m ? text.slice(m[0].length) : text);
 }
 

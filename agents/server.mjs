@@ -97,7 +97,9 @@ async function githubToken(repo) {
   const unsigned = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({ iat: now - 60, exp: now + 540, iss: app.id })}`;
   const jwt = `${unsigned}.${createSign('RSA-SHA256').update(unsigned).sign(secret(app.key), 'base64url')}`;
   const inst = await gh(jwt, `/repos/${repo}/installation`);
-  return (await gh(jwt, `/app/installations/${inst.id}/access_tokens`, 'POST')).token;
+  // every token is limited to the task's one repository, and to the project's
+  // own permission list when it has one (an app shared with someone else's repo)
+  return (await gh(jwt, `/app/installations/${inst.id}/access_tokens`, 'POST', { repositories: [repo.split('/')[1]], ...(app.permissions ? { permissions: app.permissions } : {}) })).token;
 }
 async function gh(token, url, method = 'GET', payload) {
   const r = await fetch(`https://api.github.com${url}`, { method, headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'factory-agents', ...(payload ? { 'content-type': 'application/json' } : {}) }, body: payload ? JSON.stringify(payload) : undefined });

@@ -143,6 +143,7 @@ await step('projects from channel names', () => {
   assert.equal(bot.projectOfChannel('factory-x'), 'factory'); assert.equal(bot.projectOfChannel('cc_x'), 'contentcoach');
   assert.equal(bot.projectOfChannel('contentcoach-y'), 'contentcoach'); assert.equal(bot.projectOfChannel('ideas'), 'contentcoach');
   assert.equal(bot.projectOfChannel('factoryish'), 'contentcoach');
+  assert.equal(bot.projectOfChannel('sayra-voice-bug'), 'sayra');
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);
