@@ -1,8 +1,8 @@
 [Unit]
 Description=factory-agents: Claude Code tasks in locked-down containers (Brief -> Run -> Review)
-After=docker.service factory-sandbox-firewall.service
+After=docker.service factory-agents-firewall.service
 Requires=docker.service
-Wants=factory-sandbox-firewall.service
+Wants=factory-agents-firewall.service
 
 [Service]
 # root: it launches containers (docker is root-equivalent anyway) and hands

@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rea
 const HOME = process.env.AGENTS_DIR ?? '/srv/factory/agents';
 const SECRETS = process.env.AGENTS_SECRETS ?? '/opt/factory/agents';
 const IMAGE = process.env.AGENT_IMAGE ?? 'factory-agent:latest';
-const NETWORK = process.env.AGENT_NETWORK ?? 'oi-sandboxes';
+const NETWORK = process.env.AGENT_NETWORK ?? 'factory-agents';
 const RUNTIME = process.env.AGENT_RUNTIME ?? '';           // e.g. runsc
 const PORT = Number(process.env.PORT ?? 19300);
 const BIND = (process.env.BIND_ADDRESSES ?? '127.0.0.1').split(',').map((s) => s.trim()).filter(Boolean);

@@ -20,7 +20,6 @@ const PROJECTS = [
 ];
 const LINKS = {
   coolify: 'https://coolify.contentcoach.org',
-  agents: 'https://software.contentcoach.org',
   factoryRepo: 'https://github.com/omardmv/factory',
 };
 
@@ -136,10 +135,10 @@ async function dashboard() {
   <div class="big">${live.length} preview${live.length === 1 ? '' : 's'} running</div>
   <div class="muted">${esc(headline)}${unhealthy.length ? `: ${esc(unhealthy.join(', '))}` : ''}</div>
   <h2>Pull requests</h2>${rows}
-  <h2>Agents</h2><div class="card row"><div class="grow">${facts.agent_sandboxes_running ?? 0} agent sandbox${facts.agent_sandboxes_running === 1 ? '' : 'es'} running on this server</div>
-    <a href="${LINKS.agents}">Open-Inspect</a> <a href="https://claude.ai/code">Claude cloud sessions</a></div>
+  <h2>Agents</h2><div class="card row"><div class="grow">${facts.agent_containers_running ?? 0} agent container${facts.agent_containers_running === 1 ? '' : 's'} running on this server</div>
+    <a href="https://claude.ai/code">Claude cloud sessions</a></div>
   <h2>Factory health</h2><div class="grid">${tiles}</div>
-  <h2>Places</h2><div class="card links"><a href="${LINKS.coolify}">Coolify</a><a href="${LINKS.agents}">Open-Inspect</a><a href="${LINKS.factoryRepo}">factory repo</a><a href="https://github.com/contentcoach/contentcoach/pulls">ContentCoach PRs</a></div>
+  <h2>Places</h2><div class="card links"><a href="${LINKS.coolify}">Coolify</a><a href="${LINKS.factoryRepo}">factory repo</a><a href="https://github.com/contentcoach/contentcoach/pulls">ContentCoach PRs</a></div>
   <p class="muted" style="margin-top:28px">This page redeploys itself: push to the factory repo and the server picks it up within 5 minutes.</p>`);
 }
 
