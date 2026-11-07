@@ -77,4 +77,12 @@ const kept = mergePlan(cur, parsePlan(block([T('zones'), T('zone-s2', ['zones'])
 assert.ok(kept.items.some((i) => i.key === 'map1-core' && i.taskId === 'id-map1-core'));
 ok('a started task dropped from the new plan is kept (it is already running)');
 
+const tricky = 'Plan below.\n```plan\n' + JSON.stringify({ tasks: [T('talk-mode', [], 'talk'), { key: 'docs', title: 'docs', task: 'Explain that the coordinator must NOT emit a ```plan block yet, and show ``` fences in docs', depends_on: ['talk-mode'] }] }) + '\n```\nThat is all.';
+const tp = parsePlan(tricky);
+assert.ok(!tp.error, tp.error); assert.equal(tp.tasks.length, 2); assert.equal(tp.tasks[1].wave, 2);
+assert.match(parsePlan('```plan\n{"tasks": []').error, /not closed/);
+const two = parsePlan('old:\n```plan\n' + JSON.stringify({ tasks: [T('old')] }) + '\n```\nnew:\n```plan\n' + JSON.stringify({ tasks: [T('new')] }) + '\n```');
+assert.equal(two.tasks[0].key, 'new');
+ok('fences inside task text are ignored; an unclosed block is refused; the last block wins');
+
 console.log(`all ${n} passed`);

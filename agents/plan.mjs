@@ -13,9 +13,14 @@ export const MAX_PLAN_TASKS = 40;
 const KEY = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 export function parsePlan(text) {
-  const m = /```plan\s*([\s\S]*?)```/.exec(text ?? '');
-  if (!m) return { error: 'no ```plan block' };
-  let j; try { j = JSON.parse(m[1]); } catch (e) { return { error: `the plan block is not JSON: ${e.message}` }; }
+  // fences only count on a line of their own: a task's text may mention "```plan"
+  // or "```" (JSON strings cannot hold a raw line break, so they never look like one)
+  const opens = [...String(text ?? '').matchAll(/(?:^|\n)```plan[ \t]*\n/g)];
+  if (!opens.length) return { error: 'no ```plan block' };
+  const from = opens.at(-1).index + opens.at(-1)[0].length, rest = text.slice(from);
+  const close = /\n```[ \t]*(?:\n|$)/.exec(rest), body = close ? rest.slice(0, close.index) : null;
+  if (body === null) return { error: 'the ```plan block is not closed' };
+  let j; try { j = JSON.parse(body); } catch (e) { return { error: `the plan block is not JSON: ${e.message}` }; }
   const tasks = Array.isArray(j?.tasks) ? j.tasks : null;
   if (!tasks?.length) return { error: 'the plan has no tasks' };
   if (tasks.length > MAX_PLAN_TASKS) return { error: `the plan has ${tasks.length} tasks; at most ${MAX_PLAN_TASKS}` };
