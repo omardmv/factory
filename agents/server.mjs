@@ -27,6 +27,7 @@ import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
 import { evidenceSection } from './evidence.mjs';
 import { createMcp } from './mcp.mjs';
+import { launchArgs } from './launch.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync } from 'node:fs';
@@ -232,14 +233,15 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
   for (const d of [workspace, claudeDir]) { mkdirSync(`${dir(id)}/${d}`, { recursive: true }); chownSync(`${dir(id)}/${d}`, 1001, 1001); }
   const t = load(id);
   const name = `fa-${id}-${Date.now().toString(36)}`;
+  const launch = launchArgs({ project: t.project, projects: PROJECTS, defaultImage: IMAGE, brainDir: BRAIN, exists: existsSync });
   const args = ['run', '--rm', '--name', name, '--network', NETWORK,
     '--cpus', '4', '--memory', '8g', '--pids-limit', '2048', '--shm-size', '1g',
     '--security-opt', 'no-new-privileges:true', '--cap-drop', 'NET_RAW', '--cap-drop', 'MKNOD', '--cap-drop', 'SYS_CHROOT', '--cap-drop', 'AUDIT_WRITE', '--cap-drop', 'SETFCAP',
     '-v', `${dir(id)}/${workspace}:/workspace`, '-v', `${dir(id)}/${claudeDir}:/home/agent/.claude`,
-    ...[...BRAIN_MOUNTS(), ...mounts].flatMap((m) => ['-v', m]),
+    ...[...BRAIN_MOUNTS(), ...launch.mounts, ...mounts].flatMap((m) => ['-v', m]),
     '-e', 'TASK_ID', '-e', 'REPO', '-e', 'BASE', '-e', 'GH_TOKEN', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'FACTORY_PLUGINS', '-e', 'GIT_NAME', '-e', 'GIT_EMAIL', ...Object.keys(more).flatMap((k) => ['-e', k])];
   if (RUNTIME) args.push('--runtime', RUNTIME);
-  args.push(IMAGE, 'claude', '-p', prompt, '--output-format', 'stream-json', '--verbose', '--max-turns', '300',
+  args.push(launch.image, 'claude', '-p', prompt, '--output-format', 'stream-json', '--verbose', '--max-turns', '300',
     '--permission-mode', mode, '--disallowedTools', ...disallowed, '--append-system-prompt', system, ...extra);
   if (model) args.push('--model', model);
   if (resume) args.push('--resume', resume);

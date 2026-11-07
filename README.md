@@ -87,9 +87,13 @@ NOT APPLICABLE`. The report goes on the PR and to Telegram; videos at
 preview). FAIL goes back to the agent as a failed round, told to turn each
 failure into an e2e test; if the agent keeps its code and disputes the
 finding, the head goes on to the review panel, which gets the QA report and
-judges. Each head is tested once. The image is not rebuilt by self-update:
+judges. Each head is tested once. The base image is not rebuilt by self-update:
 after a change in `agents/image`, run
 `docker build -t factory-agent:latest /opt/factory/src/agents/image` on the box.
+A project's own image (`brain/projects/<name>/agent.Dockerfile`, `FROM factory-agent:latest`, tag
+`factory-agent-<name>:latest`) is built by self-update when its folder changes; name it as `"image"` in
+`projects.json`. `brain/projects/<name>/knowledge/` is mounted read-only at `/factory/brain/project` in that
+project's containers only. Unset: the default image, no mount (`agents/launch.mjs`).
 - **report** (benny-style triage): classify, find duplicates, reproduce twice
   with the repo's own tools, file or update the issue and label it
   `ready-for-agent` / `ready-for-human` / `needs-info`. A `ready-for-agent`

@@ -13,6 +13,7 @@ read-only into every agent container.
 | `prompts/qa.md` | the QA tester's rules | system prompt (QA) |
 | `knowledge/` | facts: the box, isolation, lessons, the safety gates | `/factory/brain/knowledge` |
 | `skills/` | factory-wide Claude Code skills, one folder each | `/home/agent/.claude/skills` |
+| `projects/<name>/knowledge/` | factory-side facts about one project (`agent.Dockerfile` beside it: that project's image) | `/factory/brain/project`, only in that project's containers |
 | `claude/plugins.json` | which of Anthropic's official Claude Code plugins every agent loads (built into the image from `claude-plugins-official`) | `--plugin-dir` per plugin |
 
 `skills/` at the repo root is different: skills for the founder's laptop

@@ -342,6 +342,16 @@ self_update() {
   if ! cmp -s "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service; then
     install -m 644 "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service && systemctl daemon-reload && log "factory-agents unit installed"
   fi
+  # per-project agent images (brain/projects/<name>/agent.Dockerfile -> factory-agent-<name>:latest):
+  # built when the Dockerfile changed, or the image is missing; a failed build is logged and keeps the old image
+  local df pname
+  for df in $(ls "$FACTORY_DIR"/brain/projects/*/agent.Dockerfile 2>/dev/null); do
+    pname="$(basename "$(dirname "$df")")"
+    if printf '%s\n' "$changed" | grep -q "^brain/projects/$pname/" || ! docker image inspect "factory-agent-$pname:latest" >/dev/null 2>&1; then
+      log "agent image factory-agent-$pname: building"
+      docker build -q -f "$df" -t "factory-agent-$pname:latest" "$(dirname "$df")" >/dev/null && log "agent image factory-agent-$pname: built" || log "agent image factory-agent-$pname: BUILD FAILED (old image kept)"
+    fi
+  done
   # restart = drain: the server finishes the running turns (up to 30 min) before it exits, so do not wait here
   # (--no-block); systemd starts the new one when the old one is gone. Containers are never killed by a deploy.
   if printf '%s\n' "$changed" | grep -q "^agents/"; then systemctl restart --no-block factory-agents && log "factory-agents restart queued (drains running turns first)"; fi
