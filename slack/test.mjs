@@ -94,6 +94,22 @@ await step('Go sends "go" to the task and removes the button', async () => {
   await bot.onAction({ type: 'block_actions', user: { id: 'U_X' }, actions: [{ action_id: 'go', value: sayraTask.id }] });
   assert.equal(sayraTask.messages.length, before, 'only the owner');
 });
+await step('an epic in talk phase gets Plan it (not Go); pressing it sends "plan"; Go stays for brief', async () => {
+  const e = mk('sayra', 'epic: redo onboarding', { kind: 'program', phase: 'talk', status: 'waiting for you' }); e.messages.push({ from: 'agent', text: 'Options: A or B. Trade-offs...' });
+  const i = calls.length; await bot.pushUpdates();
+  const ch = bot.state.taskChannel[e.id]; const m = posted(i, ch); assert.equal(m.length, 1);
+  assert.match(m[0].p.text, /Epic discussion: talk it through, then Plan it/);
+  assert.deepEqual(m[0].p.blocks.at(-1).elements.map((b) => b.action_id), ['plan']); assert.equal(m[0].p.blocks.at(-1).elements[0].text.text, 'Plan it');
+  assert.ok(!bot.render(e, { from: 'agent', text: 'x' }).go);
+  await bot.onAction({ type: 'block_actions', user: { id: 'U_ME' }, actions: [{ action_id: 'plan', value: e.id }], channel: { id: ch }, message: { ts: '9.1', text: 't', blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 't' } }, { type: 'actions' }] } });
+  assert.equal(e.messages.at(-1).text, 'plan');
+  const u = calls.at(-1); assert.equal(u.method, 'chat.update'); assert.ok(!u.p.blocks.some((b) => b.type === 'actions')); assert.match(JSON.stringify(u.p.blocks), /Plan it/);
+  const before = e.messages.length;
+  await bot.onAction({ type: 'block_actions', user: { id: 'U_X' }, actions: [{ action_id: 'plan', value: e.id }] });
+  assert.equal(e.messages.length, before, 'only the owner');
+  const b = bot.render({ id: 'y', kind: 'program', phase: 'brief' }, { from: 'agent', text: 'plan' }); assert.ok(b.go); assert.ok(!b.plan); assert.match(b.text, /Epic plan: Go/);
+  delete tasks[e.id];
+});
 await step('anything the owner writes in the channel goes to the task', async () => {
   await bot.onMessage({ type: 'message', channel: 'C_NEW', channel_type: 'channel', user: 'U_ME', text: 'also check Safari', ts: '3.0' });
   assert.equal(sayraTask.messages.at(-1).text, 'also check Safari'); assert.equal(calls.at(-1).method, 'reactions.add');
