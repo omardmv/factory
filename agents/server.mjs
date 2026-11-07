@@ -20,7 +20,8 @@ import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
-import { publishMedia, mediaFiles } from './media.mjs';
+import { publishMedia, upsertComment, mediaFiles } from './media.mjs';
+import { REPORT_MARK, buildReport, mappingFrom, reportSummary } from './report.mjs';
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
 import { evidenceSection } from './evidence.mjs';
@@ -315,7 +316,6 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
   const next = out.status;
   done.status = next; save(done);
-  if (done.pr?.state === 'open') publishTaskMedia(id).catch((e) => log('media.failed', { task: id, error: e.message }));
   log('run.end', { task: id, kind: done.kind, mode, from, pr: done.pr?.number ?? null, status: next });
   if (next === 'testing') enqueueQa(id);
   if (next === 'reviewing') enqueueReview(id);
@@ -405,7 +405,7 @@ Sign in: navigate to ${t.previewHost}/_factory/login; it signs you in as the tes
   else if (o.action === 'fix') {
     x.factoryRounds = o.factoryRounds; save(x);
     enqueue(id, `[qa] An independent QA tester (no code, only the task and your preview) tested PR #${pr.number} at ${head.slice(0, 7)} and found failures:\n\n${report}\n\nReproduce each failure on the preview or locally, fix the cause, and turn each failed check into an e2e test that fails without your fix; push. If you are sure the tester misread the task, push nothing for that point and say why in the PR under "Decisions": the review panel will read both sides.`, 'bypassPermissions', 'qa');
-  } else { save(x); say(id, 'factory', o.say); }
+  } else { save(x); say(id, 'factory', o.say); if (verdict === 'FAIL') publishReport(id, 'stopped').catch((e) => log('report.failed', { task: id, error: e.message })); }
   log('qa.end', { task: id, round: n, verdict, videos: link });
   pump();
 }
@@ -456,11 +456,12 @@ Other reviewers look at this PR from other angles at the same time; stay on your
   if (o.action === 'pass') {
     x.mergeWanted = o.mergeWanted; x.mergeTries = 0; save(x);
     if (o.disputed) say(id, 'factory', '[factory] the review panel passed a head the QA tester failed (the agent disputes the finding): not merged automatically. Read both and decide.');
+    publishReport(id, 'ready').catch((e) => log('report.failed', { task: id, error: e.message }));
     if (x.mergeWanted) autoMerge(id).catch((e) => log('merge.failed', { task: id, error: e.message }));
   } else if (o.action === 'fix') {
     x.factoryRounds = o.factoryRounds; save(x);
     enqueue(id, `[review] The review panel read your PR at ${pr.head.sha.slice(0, 7)} and asks for changes:\n\n${combined}`, 'bypassPermissions', 'review');
-  } else { save(x); say(id, 'factory', o.say); }
+  } else { save(x); say(id, 'factory', o.say); if (verdict === 'CHANGES') publishReport(id, 'stopped').catch((e) => log('report.failed', { task: id, error: e.message })); }
   log('review.end', { task: id, round: n, verdict, panel: results.map((r) => `${r.model}:${r.verdict}`) });
   pump();
 }
@@ -507,14 +508,23 @@ async function autoMerge(id) {
 }
 const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
 
-// ---------- what the agent saw, on the PR (agents/media.mjs) ----------
-async function publishTaskMedia(id) {
+// ---------- the final evidence report, on the PR (agents/report.mjs) ----------
+// One comment, edited in place: when the PR is ready (review PASS) or the round limit stops the loop.
+async function publishReport(id, outcome) {
   const t = load(id);
   if (!t.pr || t.pr.state !== 'open') return;
-  const r = await publishMedia({ gh, token: await githubToken(t.repo), repo: t.repo, pr: t.pr.number, taskId: t.id, workspace: `${dir(id)}/workspace`, done: t.mediaPublished ?? {}, dashboard: DASHBOARD });
-  if (!r) return;
-  update(id, (x) => { x.mediaPublished = r.done; x.mediaComment = r.comment; });
-  log('media.published', { task: id, pr: t.pr.number, files: r.files, comment: r.comment });
+  const token = await githubToken(t.repo);
+  const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
+  const msgs = messages(id);
+  const m = await publishMedia({ gh, token, repo: t.repo, pr: t.pr.number, taskId: t.id, workspace: `${dir(id)}/workspace`, done: t.mediaPublished ?? {} });
+  const last = (from) => msgs.findLast((x) => x.from === from)?.text;
+  const checks = t.lastChecks ?? (t.greenSha ? { state: 'green', sha: t.greenSha } : null);
+  const body = buildReport({ taskId: t.id, repo: t.repo, pr: t.pr.number, head: pr.head.sha, outcome, title: t.title, mapping: mappingFrom(msgs), items: m.items, checks,
+    findings: outcome === 'stopped' ? { review: last('review'), qa: last('qa') } : {}, dashboard: DASHBOARD });
+  const c = await upsertComment({ gh, token, repo: t.repo, pr: t.pr.number, mark: REPORT_MARK, body });
+  update(id, (x) => { x.mediaPublished = m.done; x.reportComment = c.html_url; });
+  say(id, 'factory', reportSummary({ outcome, pr: t.pr.number, prUrl: c.html_url ?? pr.html_url, mapping: mappingFrom(msgs), items: m.items }));
+  log('report.published', { task: id, pr: t.pr.number, outcome, files: m.files, comment: c.html_url });
 }
 
 // ---------- epics (programs) ----------
@@ -695,7 +705,8 @@ function post(id, from, text) {
   if (from === 'factory') {
     const o = afterFactoryReport({ task: t, text, maxRounds: MAX_FACTORY_ROUNDS });
     if (o.action === 'ignore') return t;
-    if (o.action === 'limit') { say(id, 'factory', o.say); t.status = o.status; t.waitingOn = o.waitingOn; save(t); return t; }
+    t.lastChecks = { state: o.green ? 'green' : 'red', sha: /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1] ?? t.lastChecks?.sha };
+    if (o.action === 'limit') { say(id, 'factory', o.say); t.status = o.status; t.waitingOn = o.waitingOn; save(t); if (t.pr) publishReport(id, 'stopped').catch((e) => log('report.failed', { task: id, error: e.message })); return t; }
     if (o.green) { t.greenSha = o.greenSha; t.previewHost = o.previewHost; }
     else t.factoryRounds = o.factoryRounds;
     save(t);
