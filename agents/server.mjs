@@ -510,7 +510,7 @@ function startReady(t) {
     const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title });
     i.taskId = kid.id;
   }
-  update(t.id, (x) => { x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
+  update(t.id, (x) => { copyIssueFields(t.plan, x.plan ?? []); x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
   say(t.id, 'factory', `[factory] started ${g.ready.length}: ${g.ready.map((i) => `${i.title} (wave ${i.wave})`).join('; ')}. Everything each one depends on has merged.`);
   log('epic.start', { task: t.id, started: g.ready.map((i) => i.key) });
   return progress(t.plan, itemState);
@@ -546,10 +546,12 @@ async function syncEpic(id, done = false) {
     const t = load(id);
     if (!t.epicIssue?.number || !Array.isArray(t.plan)) return;
     const states = Object.fromEntries(t.plan.map((i) => [i.key, itemState(i)]));
+    if (!done && t.epicClosed && t.plan.every((i) => states[i.key] === 'merged')) done = true; // chat after PROGRAM DONE with no new work: stay closed
+    const sent = new Set((t.epicDropped ?? []).map((p) => p.key)); // what this pass will close
     const r = await syncEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, states, goal: messages(id)[0]?.text ?? t.title, tasksUrl: `${DASHBOARD}/?task=${id}`, done });
-    // saved either way: sub-issues opened before a failure must not be opened twice
-    const synced = new Set((load(id).epicDropped ?? []).map((p) => p.key).filter((k) => !(t.epicDropped ?? []).some((p) => p.key === k)));
-    update(id, (x) => { copyIssueFields(x.plan ?? [], t.plan); for (const k of ['epicSyncHash', 'epicClosed']) x[k] = t[k]; x.epicDropped = (x.epicDropped ?? []).filter((p) => !synced.has(p.key)); });
+    // saved either way: sub-issues opened before a failure must not be opened twice.
+    // Only the dropped keys sent to GitHub are cleared, and only on success; a revision saved meanwhile keeps its own.
+    update(id, (x) => { copyIssueFields(x.plan ?? [], t.plan); for (const k of ['epicSyncHash', 'epicClosed']) x[k] = t[k]; if (!r.error) x.epicDropped = (x.epicDropped ?? []).filter((p) => !sent.has(p.key)); });
     if (r.error) log('epic.sync.failed', { task: id, error: r.error }); else if (r.changed) log('epic.synced', { task: id });
   } catch (e) { log('epic.sync.failed', { task: id, error: e.message }); }
   finally { syncingEpic.delete(id); }
