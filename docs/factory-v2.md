@@ -174,7 +174,8 @@ plans and tracks, never codes. Founder 2026-11-08.
   when a task merges, and `[factory] wave N done: <tasks with PR links>. M/T
   merged; next: ...` when every task of a wave has merged. Each is said once
   (remembered on the epic as `mergedAnnounced` / `wavesAnnounced`, a wave by its
-  task keys), also across restarts.
+  task keys), also across restarts. A wave that gains a task through a
+  revised plan is announced again once that new task merges (it is new work).
 - **Parallel without jams:** up to 5 agents at once by default (the box fits
   6-8 at 4 CPU / 8 GB each; the Claude plan's usage is the real limit). When
   a parallel PR no longer merges cleanly into staging, the factory sends it
