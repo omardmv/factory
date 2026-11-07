@@ -109,6 +109,14 @@ per project, built by self-update when its Dockerfile changes. Onboarding
 stays `factory init`: a new project fills these in and nothing in the
 factory changes.
 
+## 5c. The quality bar
+
+`brain/knowledge/quality.md` (founder 2026-11-07): good API design,
+architecture and refactoring; static analysis (lint, types, compile) on
+every push; e2e tests only, no unit tests; empirical verification (e2e on
+the preview, QA) and formal verification where a bug is costly; the
+project's rules, skills and AGENTS.md; then human review on staging.
+
 ## 6. Safety gates (never self-modified)
 
 Any change to these is `DECISION NEEDED` and waits for the founder, even

@@ -15,12 +15,12 @@ shape midway switches playbook; log the switch.
      reproduction yet means no fix yet: keep narrowing until you have one,
      or stop with what you tried.
   3. Find the root cause, not the nearest place to patch. Fix it there.
-  4. Prove it: the reproduction now passes, and a test that fails without
+  4. Prove it: the reproduction now passes, and an e2e test that fails without
      the fix guards it. Check the neighbours of the change still work.
 - **feature**: new behaviour.
   1. Definition of done as checks anyone can run (what a user sees/does).
   2. Smallest slice that is useful end to end first, then the rest.
-  3. Every new behaviour gets a test that would fail without it.
+  3. Every new behaviour gets an e2e test that would fail without it.
 - **refactor**: structure only, zero behaviour change.
   1. Capture the behaviour before (tests, outputs, screenshots).
   2. Change in small steps, each verified against that baseline.
@@ -43,7 +43,9 @@ shape midway switches playbook; log the switch.
      real artifact, keep or revert.
   If it truly needs several PRs, say so: it should become a program.
 
-Rules for every playbook: verify by looking at the real artifact, never a
+Rules for every playbook: meet the quality bar
+(/factory/brain/knowledge/quality.md: design, static analysis, e2e tests
+only, verification). Verify by looking at the real artifact, never a
 self-report. A result is VERIFIED, NOT VERIFIED or INCONCLUSIVE;
 inconclusive is not a pass. Never relax the definition of done to finish.
 
