@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { pickComments, replyToLastReview, evidenceSection } from './evidence.mjs';
 
+import { mappingSection } from './evidence.mjs';
 let n = 0;
 const test = (name, f) => { f(); n++; console.log('ok', name); };
 const c = (i, o = {}) => ({ created_at: new Date(Date.UTC(2026, 10, 7, 0, i)).toISOString(), user: { login: 'omar-factory[bot]', type: 'Bot' }, body: `comment ${i}`, ...o });
@@ -57,3 +58,8 @@ test('section: empty with nothing, labelled as unverified evidence otherwise', (
   assert.match(s, /not facts to trust/); assert.match(s, /comment 1/); assert.match(s, /REPLY[^\n]*\nfixed it/);
 });
 console.log(`${n} passed`);
+test('panel gets the parsed mapping and the files that exist, even without a reply', () => {
+  const t = evidenceSection([], [], { mapping: [{ expected: 'Login', kind: 'video', ref: 'videos/a.webm' }, { expected: 'X', kind: 'none', ref: '' }], files: [{ sub: 'videos', rel: 'a.webm' }] });
+  assert.match(t, /Login \| video videos\/a\.webm/); assert.match(t, /X \| not shown/); assert.match(t, /videos\/a\.webm\n/);
+  assert.equal(mappingSection(null, []), '');
+});

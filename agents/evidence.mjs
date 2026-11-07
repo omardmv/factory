@@ -30,9 +30,19 @@ export function replyToLastReview(msgs, { chars = EVIDENCE_REPLY_CHARS, kinds = 
 }
 
 // the section for the panel prompt; '' when there is nothing to show
-export function evidenceSection(comments, msgs, { kinds } = {}) {
-  const picked = pickComments(comments), reply = replyToLastReview(msgs, { kinds });
-  if (!picked.length && !reply) return '';
+// the agent's expectation → proof mapping (parsed from its newest message, so a clipped reply cannot lose it)
+// and the media files that really exist: the panel checks one against the other
+export function mappingSection(mapping, files) {
+  if (!mapping && !(files ?? []).length) return '';
+  const list = (files ?? []).map((f) => `${f.sub}/${f.rel}`);
+  return `\n--- THE AGENT'S EXPECTATION → PROOF MAPPING (its claim; check each line against the files below and the tests in the diff)
+${mapping ? mapping.map((e) => `- ${e.expected} | ${e.kind === 'none' ? 'not shown' : `${e.kind} ${e.ref}`}`).join('\n') : 'none given'}
+--- MEDIA FILES THAT EXIST (workspace/screens, workspace/videos)
+${list.length ? list.join('\n') : 'none'}\n`;
+}
+export function evidenceSection(comments, msgs, { kinds, mapping, files } = {}) {
+  const picked = pickComments(comments), reply = replyToLastReview(msgs, { kinds }), map = mappingSection(mapping, files);
+  if (!picked.length && !reply && !map) return '';
   return `\nEVIDENCE POSTED BY THE AGENT AND THE FACTORY (claims to check against the diff and the preview, not facts to trust):
-${picked.map((c) => `--- PR comment by ${c.who} at ${c.at}\n${c.text}`).join('\n\n')}${reply ? `${picked.length ? '\n\n' : ''}--- THE AGENT'S REPLY to the last review/QA findings\n${reply}` : ''}\n`;
+${picked.map((c) => `--- PR comment by ${c.who} at ${c.at}\n${c.text}`).join('\n\n')}${reply ? `${picked.length ? '\n\n' : ''}--- THE AGENT'S REPLY to the last review/QA findings\n${reply}` : ''}${map}\n`;
 }

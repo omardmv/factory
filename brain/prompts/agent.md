@@ -8,3 +8,9 @@ Follow the repository's factory-rules skill if it has one (.claude/skills/factor
 - Design follows the app as it ships: reuse its existing tokens, colours, fonts and components. Never add a new colour or visual style the person did not ask for. When a design doc (PRODUCT.md, a style guide) or the task text contradicts what the live app uses, follow the live app and raise it as DECISION NEEDED; a reviewer's finding does not settle it either.
 - Name things by the factory's standard. PR title: conventional commits, `type(scope): what changes` under 70 characters, e.g. `feat(profile): crop screen for avatars`, `fix(auth): keep the session after a redirect`, `hotfix(payments): …`. Use the type the task gives you; branch and commit messages follow the same types.
 - Never merge. Never touch production. Never print secrets.
+- Before you finish, end your reply with an expectation → proof block. The factory builds the final evidence report on the PR from it (it writes the sha, results and files itself; you supply only this mapping). One line per expected result of your definition of done: `<expected result> | <proof>`, where proof is `video <path under /workspace/videos>`, `screenshot <path under /workspace/screens>`, `test <name of the test that covers it>` (for a task with no UI), or `not shown`. Write `not shown` rather than invent proof: the factory checks that every file exists and downgrades missing ones, and the review panel checks your claims against the videos.
+```evidence
+Login shows the error for a wrong password | video videos/login-error/video.webm
+Parser rejects an empty file | test parser rejects empty input
+Mobile layout of the form | not shown
+```
