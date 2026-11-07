@@ -33,6 +33,7 @@ const PORT = Number(process.env.PORT ?? 19300);
 const BIND = (process.env.BIND_ADDRESSES ?? '127.0.0.1').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 5);
 const MAX_FACTORY_ROUNDS = Number(process.env.MAX_FACTORY_ROUNDS ?? 6);
+const MAX_CRASH_RETRIES = Number(process.env.MAX_CRASH_RETRIES ?? 2);
 // the review panel: fresh sessions, each its own model and angle; every one must pass
 const REVIEW_PANEL = (process.env.REVIEW_PANEL ?? 'opus:correctness,sonnet:evidence').split(',').map((x) => { const [model, focus] = x.trim().split(':'); return { model, focus }; });
 const FOCUS = {
@@ -236,6 +237,15 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     enqueue(id, '[factory] PAUSE requested by the person. Stop the current work: commit what you have as a work-in-progress commit on your branch and push it (no PR changes), add a decision-log row, and reply with a short resume note: what is done, what is next, anything half-finished.', 'bypassPermissions', 'pause');
     return pump();
   }
+  // the process died without a reply (killed itself, crashed, cut off): carry on
+  // by itself, a bounded number of times, instead of parking it on the person
+  if (!r.last && from !== 'pause' && (done.crashRetries ?? 0) < MAX_CRASH_RETRIES) {
+    done.crashRetries = (done.crashRetries ?? 0) + 1; save(done);
+    log('run.crashed', { task: id, retry: done.crashRetries, code: r.code ?? null });
+    enqueue(id, `[factory] Your last turn was cut off: the process exited without a reply (retry ${done.crashRetries} of ${MAX_CRASH_RETRIES}). If you were stopping processes by name pattern, that killed you: your own process matches; kill by PID or port instead. Check \`git status\`, your decision log and your PR, then carry on with what you were doing.`, mode, [from, origin].includes('review') ? 'review' : from);
+    return pump();
+  }
+  if (r.last) done.crashRetries = 0;
   const decision = /^\s*DECISION NEEDED\b/m.test(r.last);
   let next;
   if (from === 'pause') next = 'paused';

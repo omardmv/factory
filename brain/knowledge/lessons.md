@@ -14,3 +14,8 @@ One line each: what happened, the rule it left. Newest last.
   `x`: the snapshot database is one nothing ever connects to.
 - Chromium under gVisor needs generous timeouts (a 30 s `networkidle` wait
   timed out).
+- Never stop processes by name pattern (`pkill -f vite`, `ps | grep playwright |
+  xargs kill`): your own Claude process has the task text on its command line,
+  so the pattern matches it and you kill yourself mid-turn (exit 137). Start
+  servers in the background with `& echo $! > /tmp/x.pid` and kill that PID,
+  or kill by port (`fuser -k 5173/tcp`).
