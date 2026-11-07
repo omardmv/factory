@@ -16,6 +16,7 @@
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS } from './plan.mjs';
+import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync } from 'node:fs';
@@ -24,6 +25,7 @@ const HOME = process.env.AGENTS_DIR ?? '/srv/factory/agents';
 const SECRETS = process.env.AGENTS_SECRETS ?? '/opt/factory/agents';
 const IMAGE = process.env.AGENT_IMAGE ?? 'factory-agent:latest';
 const NETWORK = process.env.AGENT_NETWORK ?? 'factory-agents';
+const DASHBOARD = process.env.DASHBOARD_URL ?? 'https://factory.contentcoach.org';
 const RUNTIME = process.env.AGENT_RUNTIME ?? '';           // e.g. runsc
 const CLASSIFY_MODEL = process.env.CLASSIFY_MODEL ?? 'haiku';
 const PORT = Number(process.env.PORT ?? 19300);
@@ -182,13 +184,13 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
     '--security-opt', 'no-new-privileges:true', '--cap-drop', 'NET_RAW', '--cap-drop', 'MKNOD', '--cap-drop', 'SYS_CHROOT', '--cap-drop', 'AUDIT_WRITE', '--cap-drop', 'SETFCAP',
     '-v', `${dir(id)}/${workspace}:/workspace`, '-v', `${dir(id)}/${claudeDir}:/home/agent/.claude`,
     ...[...BRAIN_MOUNTS(), ...mounts].flatMap((m) => ['-v', m]),
-    '-e', 'TASK_ID', '-e', 'REPO', '-e', 'BASE', '-e', 'GH_TOKEN', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'FACTORY_PLUGINS', ...Object.keys(more).flatMap((k) => ['-e', k])];
+    '-e', 'TASK_ID', '-e', 'REPO', '-e', 'BASE', '-e', 'GH_TOKEN', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'FACTORY_PLUGINS', '-e', 'GIT_NAME', '-e', 'GIT_EMAIL', ...Object.keys(more).flatMap((k) => ['-e', k])];
   if (RUNTIME) args.push('--runtime', RUNTIME);
   args.push(IMAGE, 'claude', '-p', prompt, '--output-format', 'stream-json', '--verbose', '--max-turns', '300',
     '--permission-mode', mode, '--disallowedTools', ...disallowed, '--append-system-prompt', system, ...extra);
   if (model) args.push('--model', model);
   if (resume) args.push('--resume', resume);
-  const env = { ...process.env, ...more, TASK_ID: id, REPO: repo ? t.repo : '', BASE: t.base, GH_TOKEN: ghToken, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token'), FACTORY_PLUGINS: BRAIN_PLUGINS() };
+  const env = { ...process.env, ...more, TASK_ID: id, REPO: repo ? t.repo : '', BASE: t.base, GH_TOKEN: ghToken, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token'), FACTORY_PLUGINS: BRAIN_PLUGINS(), GIT_NAME: PROJECTS[t.project]?.githubApp?.bot?.name ?? '', GIT_EMAIL: PROJECTS[t.project]?.githubApp?.bot?.email ?? '' };
   const child = spawn('docker', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   running.set(id, child); containers.set(id, name);
   log('run.start', { task: id, mode, claudeDir, container: name });
@@ -251,6 +253,7 @@ async function agentRun({ id, prompt, mode, from }) {
     else next = 'waiting for checks';
   }
   done.status = next; save(done);
+  if (done.pr?.state === 'open') publishTaskMedia(id).catch((e) => log('media.failed', { task: id, error: e.message }));
   log('run.end', { task: id, kind: done.kind, mode, from, pr: done.pr?.number ?? null, status: next });
   if (next === 'testing') enqueueQa(id);
   if (next === 'reviewing') enqueueReview(id);
@@ -445,6 +448,16 @@ async function autoMerge(id) {
   log('merge.done', { task: id, pr: pr.number, into: p.autoMerge });
 }
 const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
+
+// ---------- what the agent saw, on the PR (agents/media.mjs) ----------
+async function publishTaskMedia(id) {
+  const t = load(id);
+  if (!t.pr || t.pr.state !== 'open') return;
+  const r = await publishMedia({ gh, token: await githubToken(t.repo), repo: t.repo, pr: t.pr.number, taskId: t.id, workspace: `${dir(id)}/workspace`, done: t.mediaPublished ?? {}, dashboard: DASHBOARD });
+  if (!r) return;
+  update(id, (x) => { x.mediaPublished = r.done; x.mediaComment = r.comment; });
+  log('media.published', { task: id, pr: t.pr.number, files: r.files, comment: r.comment });
+}
 
 // ---------- epics (programs) ----------
 // A coordinator plans every task of a big goal with what it depends on (one PR

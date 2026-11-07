@@ -271,7 +271,8 @@ coolify_watch() {
     sleep 10
     body="$(curl -fsS -m 10 -H "Authorization: Bearer $(cat /opt/factory/coolify-token)" \
       "http://127.0.0.1:8000/api/v1/deployments/$dep" 2>/dev/null)" || continue
-    st="$(printf '%s' "$body" | grep -o '"status" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    # the deployment's own status (the body also nests the app's, e.g. running:unknown)
+    st="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
     case "$st" in
       finished) log "coolify: $app deployed"; return 0 ;;
       failed|cancelled*|error*)
