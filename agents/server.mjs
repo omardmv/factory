@@ -147,8 +147,11 @@ const hasQa = (t) => hasChecks(t) && PROJECTS[t.project]?.qa === true && t.kind 
 // ---------- the queue: persisted, so a restart (every deploy) loses nothing ----------
 const DRAIN_FILE = `${HOME}/drain.json`;
 const DRAIN_TIMEOUT_MS = Number(process.env.DRAIN_TIMEOUT_S ?? 1800) * 1000;
+// jobs from start to the end of their handling (running only covers the container, not what follows: the PR lookup,
+// the next status, queueing the review). A drain waits for these, not just for containers.
+const inflight = new Map(); // job seq -> task id
 const drain = createDrain({
-  running: () => [...running.keys()],
+  running: () => [...new Set([...running.keys(), ...inflight.values()])],
   now: Date.now,
   describe: (id) => ({ id, kind: (() => { try { return load(id).job?.kind; } catch { return undefined; } })() }),
   // docker kill, not the client's death: the turn must be cut off for sure before node exits
@@ -181,13 +184,14 @@ function pump() {
     update(job.id, (t) => { t.job = job; jobStarted(t, job); });
     // forget the job once it ended, unless the next job of this task already took its place
     const forget = (t) => { if (t.job?.seq === job.seq) delete t.job; };
+    inflight.set(job.seq, job.id);
     (job.kind === 'review' ? review(job) : job.kind === 'qa' ? qa(job) : agentRun(job)).then(() => update(job.id, forget)).catch((e) => {
       running.delete(job.id); containers.delete(job.id);
       log('run.crashed', { task: job.id, kind: job.kind, error: e.message });
       say(job.id, 'factory', `[factory] the ${JOB_NAME[job.kind] ?? job.kind} could not run: ${e.message}`);
       update(job.id, (t) => { forget(t); t.status = 'waiting for you'; t.waitingOn = `your call: the ${JOB_NAME[job.kind] ?? job.kind} could not run (${String(e.message).replace(/\s+/g, ' ').slice(0, 120)})`; });
       pump();
-    });
+    }).finally(() => inflight.delete(job.seq));
   }
 }
 // session pickup: a job that was running when the factory stopped runs again,

@@ -45,6 +45,15 @@ await test('startup: no drain.json means nothing to do', () => {
   assert.deepEqual(startupPlan(null, {}), { requeue: [], notices: [] });
 });
 
+await test('a job whose container ended but is still being handled keeps the drain waiting', () => {
+  const s = { containers: [], inflight: ['a'], t: 0, exited: 0 };
+  const d = createDrain({ running: () => [...new Set([...s.containers, ...s.inflight])], now: () => s.t, killAll() {}, writeRecord() {}, exit: () => { s.exited++; } });
+  d.start(); s.t = 5000; d.tick();
+  assert.equal(s.exited, 0);
+  s.inflight = []; d.tick();
+  assert.equal(s.exited, 1);
+});
+
 // a real process: SIGTERM arrives while a "turn" (a child process) runs; the process exits only after it finished
 await test('real SIGTERM during a running turn: the turn finishes, then the process exits 0', async () => {
   const { spawn } = await import('node:child_process');
