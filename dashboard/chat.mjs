@@ -1,12 +1,51 @@
 // The dashboard's main view: conversations with factory agents, grouped by
 // project, with each task's PR / preview / e2e pinned on top. Talks to
 // factory-agents server-side; the browser never sees its token.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, lstatSync, realpathSync, existsSync } from 'node:fs';
 
 const AGENTS = process.env.AGENTS_API ?? 'http://172.24.0.1:19300';
 const ARTIFACTS = process.env.ARTIFACTS_DIR ?? '/srv/factory/artifacts';
 // projects whose PRs get a preview: { <project>: { prefix, host: (pr) => url } } (none right now)
 const PREVIEW = {};
+// what the agent saw: screenshots (browser tool) and videos (its e2e runs),
+// from the task's workspace; newest first
+const TASKS_DIR = process.env.TASKS_DIR ?? '/srv/factory/agents/tasks';
+export const MEDIA = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', webm: 'video/webm', mp4: 'video/mp4' };
+export function mediaOf(id) {
+  const out = [];
+  for (const sub of ['screens', 'videos']) {
+    const root = `${TASKS_DIR}/${id}/workspace/${sub}`;
+    if (!existsSync(root)) continue;
+    const walk = (d, rel) => { for (const f of readdirSync(d, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${f.name}` : f.name;
+      if (f.isDirectory()) { if (r.split('/').length < 4) walk(`${d}/${f.name}`, r); continue; }
+      const ext = f.name.split('.').pop().toLowerCase();
+      if (f.isSymbolicLink()) continue;
+      if (MEDIA[ext]) out.push({ sub, path: r, video: MEDIA[ext].startsWith('video'), at: statSync(`${d}/${f.name}`).mtimeMs });
+    } };
+    walk(root, '');
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, 60);
+}
+export function mediaFile(id, sub, rel) {
+  if (!/^[0-9]{6}-[0-9a-f]{6}$/.test(id) || !['screens', 'videos'].includes(sub)) return null;
+  if (!/^[\w.@-]+(\/[\w.@-]+){0,3}$/.test(rel) || rel.split('/').some((p) => p === '..' || p.startsWith('.'))) return null;
+  const type = MEDIA[rel.split('.').pop().toLowerCase()]; if (!type) return null;
+  const file = `${TASKS_DIR}/${id}/workspace/${sub}/${rel}`;
+  if (!existsSync(file) || lstatSync(file).isSymbolicLink()) return null;
+  // no link anywhere on the way may lead out of the task's own folder
+  const root = realpathSync(`${TASKS_DIR}/${id}/workspace/${sub}`);
+  return realpathSync(file).startsWith(`${root}/`) ? { file, type } : null;
+}
+const gallery = (id) => {
+  const m = mediaOf(id); if (!m.length) return '';
+  const url = (x) => `/t/${id}/media/${x.sub}/${x.path.split('/').map(encodeURIComponent).join('/')}`;
+  const vids = m.filter((x) => x.video), pics = m.filter((x) => !x.video);
+  return `<details class="m factory" open><summary class="who">what the agent saw · ${pics.length} screenshot${pics.length === 1 ? '' : 's'}, ${vids.length} video${vids.length === 1 ? '' : 's'}</summary><div class="shots">`
+    + vids.map((x) => `<figure><video src="${url(x)}" controls preload="metadata"></video><figcaption>${esc(x.path)}</figcaption></figure>`).join('')
+    + pics.map((x) => `<figure><a href="${url(x)}" target="_blank"><img src="${url(x)}" loading="lazy"></a><figcaption>${esc(x.path)}</figcaption></figure>`).join('')
+    + '</div></details>';
+};
 const token = () => readFileSync(`${process.env.SECRETS_DIR ?? '/run/factory'}/agents-token`, 'utf8').trim();
 
 export async function agents(path, init = {}) {
@@ -84,6 +123,7 @@ export const chatCss = `
 .m code{background:#f1efe8;padding:1px 4px;border-radius:4px;font-size:13px}
 .compose{border-top:1px solid #e6e4dc;padding:12px 22px;background:#fff;display:flex;gap:8px}
 .compose textarea{flex:1;font:inherit;padding:9px 11px;border:1px solid #d3d1c7;border-radius:10px;min-height:44px;resize:vertical}
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-top:8px} .shots figure{margin:0} .shots img,.shots video{width:100%;border:1px solid #e6e4dc;border-radius:6px;background:#fff} .shots figcaption{font-size:11px;color:#888780;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:none} .dot.live{background:#378add;animation:p 1.4s infinite}
 .dot.you{background:#ef9f27} .dot.wait{background:#b4b2a9} .dot.off{background:#d3d1c7} .dot.done{width:auto;height:auto;background:none;color:#0f6e56;font-size:12px}
 @keyframes p{50%{opacity:.35}}
@@ -124,7 +164,7 @@ export async function chatView({ taskId, healthy, list = false }) {
       task.running ? `<form method="post" action="/t/${task.id}/stop" style="display:inline"><button>Stop</button></form>` : '',
     ].join(' ');
     const dl = (task.decisions ?? []).length ? `<details class="m factory"><summary class="who">decision log · ${task.decisions.length} rows</summary><table class="dlog">${task.decisions.map((d) => `<tr><td>${esc(d.phase ?? '')}</td><td>${esc(d.decision ?? '')}<div class="hint">${esc(d.why ?? '')}</div></td><td><code>${esc(d.evidence ?? '')}</code></td><td>${esc(d.result ?? '')}</td></tr>`).join('')}</table></details>` : '';
-    const msgs = dl + task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : m.from === 'coordinator' ? 'coordinator' : m.from === 'review' ? 'reviewer' : m.from === 'qa' ? 'QA tester' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
+    const msgs = gallery(task.id) + dl + task.messages.map((m) => `<div class="m ${m.from}"><div class="who">${m.from === 'you' ? 'you' : m.from === 'agent' ? 'agent' : m.from === 'coordinator' ? 'coordinator' : m.from === 'review' ? 'reviewer' : m.from === 'qa' ? 'QA tester' : 'factory'} · ${ago(m.at)}</div>${md(m.text)}</div>`).join('')
       + (task.running ? `<div class="hint"><span class="dot live"></span> the agent is working${task.activity?.length ? `<div class="activity">${task.activity.slice(-5).map((x) => `${ago(x.at)} · ${esc(x.tool)} · ${esc(x.detail)}`).join('<br>')}</div>` : ''}</div>` : '');
     const placeholder = task.phase === 'brief' && !task.running ? 'Reply to the brief: "go", or your answers' : 'Message the agent…';
     main = `<div class="head"><a href="/?list=1" class="hint back" style="font-size:12px">← tasks</a><h2>${esc(task.title)}</h2><div class="meta">${esc(task.project)} · ${links}</div></div>

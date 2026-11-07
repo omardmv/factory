@@ -4,8 +4,8 @@
 // every minute (factory-box status), the e2e reports, and Coolify's API.
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { chatView, chatCss, agents } from './chat.mjs';
+import { readFileSync, existsSync, readdirSync, createReadStream } from 'node:fs';
+import { chatView, chatCss, agents, mediaFile } from './chat.mjs';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const SECRETS = process.env.SECRETS_DIR ?? '/run/factory';
@@ -179,6 +179,13 @@ createServer(async (req, res) => {
       const t = f.kind === 'program' ? await agents('/programs', { method: 'POST', body: JSON.stringify({ project: f.project, goal: f.text }) })
         : await agents('/tasks', { method: 'POST', body: JSON.stringify({ project: f.project, text: f.text, auto: f.auto === 'on', kind: f.kind === 'report' ? 'report' : undefined }) });
       return send(303, '', { location: `/?task=${t.id}` });
+    }
+    const mm = url.pathname.match(/^\/t\/([0-9]{6}-[0-9a-f]{6})\/media\/(screens|videos)\/(.+)$/);
+    if (mm && req.method === 'GET') {
+      const f = mediaFile(mm[1], mm[2], decodeURIComponent(mm[3]));
+      if (!f) return send(404, 'not found');
+      res.writeHead(200, { 'content-type': f.type, 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff' });
+      return createReadStream(f.file).pipe(res);
     }
     const tm = url.pathname.match(/^\/t\/([0-9]{6}-[0-9a-f]{6})\/(reply|stop|pause|state)$/);
     if (tm) {
