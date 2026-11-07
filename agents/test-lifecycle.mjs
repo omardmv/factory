@@ -20,6 +20,7 @@ const cases = [
   ['restart mid-review-fix keeps the origin: back to the panel', base({ from: 'pickup', origin: 'review', task: change({ reviewedSha: 'aaa1111', verdict: 'CHANGES' }) }), 'reviewing'],
   ['no new commit, not a review answer: waiting for you', base({ task: change({ reviewedSha: 'aaa1111', verdict: 'CHANGES' }) }), 'waiting for you'],
   ['no new commit after PASS: ready for you', base({ task: change({ reviewedSha: 'aaa1111', verdict: 'PASS' }) }), 'ready for you'],
+  ['person answers a caught question from a review round (origin kept), no commit: back to the panel', base({ from: 'person', origin: 'review', task: change({ reviewedSha: 'aaa1111', verdict: 'CHANGES' }) }), 'reviewing'],
   // unasked questions
   ['plain-text question: decision needed, no panel', base({ unasked: true }), 'decision needed'],
   ['plain-text question beats an answer-to-review panel return', base({ unasked: true, from: 'review', task: change({ reviewedSha: 'aaa1111', verdict: 'CHANGES' }) }), 'decision needed'],

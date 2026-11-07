@@ -137,7 +137,7 @@ const containers = new Map(); // task id -> container name
 const QUEUE_FILE = `${HOME}/queue.json`;
 const queue = readJson(QUEUE_FILE, []); // { id, kind: 'agent' | 'qa' | 'review', prompt?, mode?, from? }
 const saveQueue = () => writeFileSync(QUEUE_FILE, JSON.stringify(queue));
-function enqueue(id, prompt, mode, from) { queue.push({ id, kind: 'agent', prompt, mode, from }); saveQueue(); pump(); }
+function enqueue(id, prompt, mode, from, origin) { queue.push({ id, kind: 'agent', prompt, mode, from, ...(origin ? { origin } : {}) }); saveQueue(); pump(); }
 function enqueueReview(id) { if (!queue.some((j) => j.id === id && j.kind === 'review')) queue.push({ id, kind: 'review' }); saveQueue(); pump(); }
 function enqueueQa(id) { if (!queue.some((j) => j.id === id && j.kind === 'qa')) queue.push({ id, kind: 'qa' }); saveQueue(); pump(); }
 const JOB_NAME = { agent: 'agent', qa: 'QA tester', review: 'reviewer' };
@@ -168,7 +168,7 @@ function pickup() {
     if (['stopped', 'paused'].includes(t.status)) { update(t.id, (x) => { delete x.job; }); continue; }
     const j = t.job;
     if (j.kind === 'review' || j.kind === 'qa') queue.push(j);
-    else if (t.sessionId && j.from !== 'pause') queue.push({ ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup', origin: j.from });
+    else if (t.sessionId && j.from !== 'pause') queue.push({ ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup', origin: j.origin ?? j.from });
     else queue.push(j);
     log('pickup', { task: t.id, kind: j.kind, from: j.from });
   }
@@ -260,6 +260,8 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   }
   if (r.last) done.crashRetries = 0;
   const decision = hasDecisionBlock(r.last);
+  // the person's answer to a decision carries the turn's origin, so a review-fix round still returns to the panel
+  if (decision || asked.asks) done.askedFrom = [from, origin].includes('review') ? 'review' : (origin ?? from);
   if (asked.asks) {
     say(id, 'agent', decisionMessage(asked), { unasked: true });
     done.waitingOn = waitingOnLine(asked);
@@ -676,7 +678,7 @@ function post(id, from, text) {
     return t;
   }
   if (t.phase === 'brief') { t.phase = 'run'; save(t); enqueue(id, runPrompt(t, messages(id)[0].text, `The person answered your brief: ${text}`), 'bypassPermissions', 'person'); }
-  else enqueue(id, text, 'bypassPermissions', 'person');
+  else { const o = t.askedFrom; if (o) { delete t.askedFrom; save(t); } enqueue(id, text, 'bypassPermissions', 'person', o); }
   return t;
 }
 
