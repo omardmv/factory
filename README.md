@@ -51,7 +51,7 @@ factory runner <name>      # a self-hosted runner for the repo
 `agents/server.mjs` (systemd `factory-agents`) runs each task as Claude Code
 in its own locked-down container. The ways of working come from Lauren Tan's
 pstack: never block on the human, a playbook per kind of work and a decision
-log (`agents/playbooks.md`), independent review, an audit trail you read in
+log (`brain/prompts/playbooks.md`), independent review, an audit trail you read in
 the morning.
 
 - **change** (branch `agent/<task>`): brief (skipped for issues, queues and
@@ -91,6 +91,13 @@ after a change in `agents/image`, run
   changes; you approve the plan once ("go"); each phase runs as a batch; when
   you have merged a phase, the coordinator plans the next from what landed,
   until `PROGRAM DONE`.
+
+**The brain** (`brain/`, see its README): the role prompts, playbooks,
+knowledge and factory-wide skills every agent gets, on every project.
+Read on every run, so a merged change applies without a restart; knowledge
+and skills are mounted read-only into each container. New skills land only
+with the founder's approval; the safety gates (`brain/knowledge/gates.md`)
+never change without the founder.
 
 Tasks come from Telegram or the dashboard, from issues labelled
 `ready-for-agent` (change) or `needs-triage` (report; issues already labelled
