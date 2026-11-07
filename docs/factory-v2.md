@@ -86,9 +86,32 @@ staging. Production stays a manual merge by the founder, always.
   FAILs, and asks: what should an agent have known?
 - Output: a PR against `brain/` (missing knowledge, a misleading skill, a
   skipped playbook step), or nothing.
-- Measured, not claimed: per task, failed rounds, cost, wall time, QA pass
-  on first try. A brain change whose numbers get worse over the next tasks
-  is reverted.
+- Measured, not claimed: every task records failed rounds, cost, wall
+  time and whether QA passed on the first try (`task.json`, collected into
+  one metrics file the dashboard and the retro read).
+- **Replay benchmark** (idea from Warp's "The factory stack"): a small
+  suite of past tasks, each frozen as (task text as given, repo, base
+  sha, how its result is judged). A proposed change to `brain/`, a prompt,
+  a model or the panel runs the suite twice, current vs proposed, in the
+  same containers against the same previews; the PR gets a table per task
+  (failed rounds, QA first-try, cost, time) and the totals.
+- A brain PR merges only when the benchmark is no worse; a change that
+  loses goes back to its author with the table. A change to the benchmark
+  itself (tasks, scoring) is a safety gate.
+- The suite grows from real work: a task that needed the founder, hit the
+  round limit or was reverted on staging is a candidate, added by PR.
+- Runs cost money: the suite stays small (start with 5 tasks), runs only
+  for brain, prompt, model or panel PRs, and counts against the factory's
+  daily cap.
+
+## 5a. Access: a factory MCP
+
+The agents API (`agents/server.mjs`, loopback + token) gets an MCP front,
+so any Claude Code session (the founder's laptop, a cloud session) can use
+the factory as a tool: submit a task to a project, list tasks and their
+state, read a task's messages, PR and preview, reply, pause or stop.
+Same token, same audit trail; it adds no new powers (no merge, no gate
+changes). Slack, the dashboard and the MCP all sit on that one API.
 
 ## 5b. One factory, many projects
 
@@ -126,6 +149,7 @@ inside the factory repo:
 - auto-merge targets and branch protection; production is never merged
   by the factory
 - the round limit and spend caps
+- the replay benchmark: its tasks and how results are scored
 - agent isolation (container limits, network, firewall, runtime)
 - secrets, tokens, GitHub App permissions
 - this section itself
@@ -141,5 +165,6 @@ hold these (list kept in `brain/knowledge/gates.md`) is never auto-merged.
 3. Slack adapter alongside Telegram.
 4. PR-first + researcher stage.
 5. Loops per project.
-6. Retro + metrics.
-7. Per-project agent images and knowledge (5b).
+6. Retro + metrics, then the replay benchmark (5).
+7. Factory MCP on the agents API (5a).
+8. Per-project agent images and knowledge (5b).

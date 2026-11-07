@@ -10,6 +10,7 @@ Never loosen one to finish a task.
 - auto-merge targets and branch protection (`agents/projects.json`
   `autoMerge`); production is never merged by the factory
 - the round limit and spend caps
+- the replay benchmark: its tasks and how results are scored
 - agent isolation: container limits, network, firewall, runtime
   (`agents/server.mjs` `container()`, `agents/image/`, `box/`)
 - secrets, tokens, GitHub App permissions
