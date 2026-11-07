@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS, isPlanCommand, talkAction, talkReply } from './plan.mjs';
+import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS, isPlanCommand, talkAction, talkReply, needsResearch } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
@@ -192,5 +192,88 @@ ok('tasks without files are unaffected; a dependency on a third task does not ex
   assert.deepEqual(typed.tasks.map((t) => t.type ?? null), ['refactor', null, null]);
 }
 ok('a plan task keeps a known type (any case) and drops an unknown one');
+
+{
+  const R = (key, extra = {}, deps = []) => ({ key, title: key, task: `do ${key}`, depends_on: deps, ...extra });
+  const keysOf = (tasks) => tasks.map((t) => t.key);
+  // marked by the coordinator
+  let r = parsePlan(block([R('a', { research: true })]));
+  assert.ok(!r.error, r.error);
+  assert.deepEqual(keysOf(r.tasks), ['a-research', 'a']);
+  const [res, impl] = r.tasks;
+  assert.equal(res.type, 'research'); assert.equal(res.researchFor, 'a');
+  assert.match(res.task, /docs\/research\/a\.md/);
+  assert.deepEqual(impl.deps, ['a-research']); assert.equal(impl.researchKey, 'a-research'); assert.equal(impl.researchDoc, 'docs/research/a.md');
+  assert.deepEqual([res.wave, impl.wave], [1, 2]);
+  assert.ok(!('research' in impl));
+  ok('research: true adds a research task and the implementation depends on it');
+  // the dependency is kept and the research starts with the same dependencies
+  r = parsePlan(block([R('base'), R('b', { research: true }, ['base'])]));
+  assert.deepEqual(r.tasks.find((t) => t.key === 'b-research').deps, ['base']);
+  assert.deepEqual(r.tasks.find((t) => t.key === 'b').deps, ['base', 'b-research']);
+  ok('research starts when the task would have; the task also waits for the research');
+  // the rule, with no mark
+  for (const text of ['add a new dependency on zod', 'change the data model of orders', 'a database migration', 'new public API for export', 'the approach is unclear here']) {
+    assert.ok(needsResearch({ key: 'x', title: 'x', task: text }), text);
+    assert.deepEqual(keysOf(parsePlan(block([R('x', { task: text })])).tasks), ['x-research', 'x'], text);
+  }
+  assert.ok(!needsResearch({ key: 'x', title: 'x', task: 'fix the button colour on the profile page' }));
+  assert.deepEqual(keysOf(parsePlan(block([R('x', { task: 'fix the button colour' })])).tasks), ['x']);
+  ok('the rule decides research for a dependency, data model, public interface or unclear approach, and not for a plain change');
+  // skipped
+  assert.deepEqual(keysOf(parsePlan(block([R('x', { task: 'new data model for orders. No research.' })])).tasks), ['x']);
+  assert.deepEqual(keysOf(parsePlan(block([R('x', { task: 'new data model, no-research please', research: true })])).tasks), ['x']);
+  assert.deepEqual(keysOf(parsePlan(block([R('x', { task: 'new data model', research: false })])).tasks), ['x']);
+  ok('"no research" in the task, or research: false, skips research even when marked or matched by the rule');
+  // a research task is not researched again; a taken key is refused
+  assert.deepEqual(keysOf(parsePlan(block([R('x', { type: 'research', research: true, task: 'new data model' })])).tasks), ['x']);
+  assert.match(parsePlan(block([R('a', { research: true }), R('a-research')])).error, /"a-research" is taken/);
+  ok('a research task is never researched; a key clash is refused');
+  // blocked until the research PR is merged
+  const plan = parsePlan(block([R('a', { research: true })])).tasks;
+  const st = (m) => progress(plan, (i) => m[i.key] ?? 'pending');
+  assert.deepEqual(st({}).ready.map((i) => i.key), ['a-research']);
+  assert.deepEqual(st({ 'a-research': 'running' }).ready, []);
+  assert.deepEqual(st({ 'a-research': 'stuck' }).blocked.map((b) => b.item.key), ['a']);
+  assert.deepEqual(st({ 'a-research': 'merged' }).ready.map((i) => i.key), ['a']);
+  ok('the implementation is blocked until the research PR is merged, then it starts');
+  // a revised plan keeps a running research task
+  const kept = mergePlan(plan.map((t) => (t.key === 'a-research' ? { ...t, taskId: 'T1' } : t)), parsePlan(block([R('a', { research: true })])).tasks);
+  assert.equal(kept.items.find((t) => t.key === 'a-research').taskId, 'T1');
+  ok('a revised plan keeps the started research task');
+  // the coordinator sends the research task back with the whole plan: accepted, not refused
+  r = parsePlan(block([R('a-research', { type: 'research', task: 'r' }), R('a', { research: true }, ['a-research'])]));
+  assert.ok(!r.error, r.error); assert.deepEqual(keysOf(r.tasks), ['a-research', 'a']); assert.equal(r.tasks[0].researchFor, 'a');
+  ok('a research task sent back in a revision is reused, not refused');
+  // a revision that lists the research task but leaves the mark out keeps the link
+  r = parsePlan(block([R('a-research', { type: 'research', task: 'r' }), R('a', { task: 'do login' })]));
+  assert.deepEqual(r.tasks.find((t) => t.key === 'a').deps, ['a-research']);
+  const keep = mergePlan(plan.map((t) => ({ ...t, taskId: t.key === 'a-research' ? 'T1' : undefined })), [{ key: 'a-research', type: 'research', title: 'r', task: 'r', deps: [], wave: 1 }, { key: 'a', title: 'a', task: 'do login', deps: [], wave: 1 }]);
+  assert.deepEqual(keep.items.find((t) => t.key === 'a').deps, ['a-research']);
+  assert.equal(keep.items.find((t) => t.key === 'a').researchKey, 'a-research');
+  assert.deepEqual(parsePlan(block([R('a-research', { type: 'research', task: 'r' }), R('a', { task: 'no research here' })])).tasks.find((t) => t.key === 'a').deps, []);
+  ok('a revision that lists the research task without the mark keeps the research link, unless "no research"');
+  // the revision leaves the research task out ("do not list it yourself"): a started one is kept and the link with it
+  const run1 = plan.map((t) => (t.key === 'a-research' ? { ...t, taskId: 'R1' } : t));
+  const k2 = mergePlan(run1, parsePlan(block([R('a', { task: 'new text' })])).tasks);
+  assert.deepEqual(k2.items.find((t) => t.key === 'a').deps, ['a-research']);
+  assert.ok(k2.items.some((t) => t.key === 'a-research' && t.taskId === 'R1'));
+  assert.deepEqual(progress(k2.items, (i) => (i.key === 'a-research' ? 'running' : 'pending')).ready, []);
+  const k3 = mergePlan(run1, parsePlan(block([R('a', { task: 'no research now' })])).tasks);
+  assert.deepEqual(k3.items.find((t) => t.key === 'a').deps, []);
+  ok('a revision that omits a started research task keeps the link (unless "no research")');
+  const k4 = mergePlan(run1, parsePlan(block([R('a', { research: false })])).tasks);
+  assert.deepEqual(k4.items.find((t) => t.key === 'a').deps, []);
+  const k5 = mergePlan(run1, parsePlan(block([R('a-research', { type: 'research', task: 'r' }), R('a', { research: false })])).tasks);
+  assert.deepEqual(k5.items.find((t) => t.key === 'a').deps, []);
+  ok('research: false in a revision removes the link, with or without the research task listed');
+  // a started task never gains research from a revision
+  const cur = [{ key: 'a', title: 'a', task: 'do a', deps: [], wave: 1, taskId: 'T1' }];
+  const rev = mergePlan(cur, parsePlan(block([R('a', { task: 'now with a new schema' })])).tasks);
+  assert.deepEqual(rev.items.map((t) => t.key), ['a']); assert.deepEqual(rev.items[0].deps, []); assert.ok(!rev.items[0].researchKey);
+  const rev2 = mergePlan(cur, parsePlan(block([R('a', { task: 'x' }), R('b', { research: true })])).tasks);
+  assert.deepEqual(rev2.items.map((t) => t.key), ['a', 'b-research', 'b']);
+  ok('a revision adds no research to a started task, but still to a new one');
+}
 
 console.log(`all ${n} passed`);

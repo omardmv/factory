@@ -18,7 +18,7 @@ import { mergeDecision } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
-import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
+import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia, upsertComment, mediaFiles } from './media.mjs';
@@ -68,6 +68,7 @@ const brain = (f) => readFileSync(`${BRAIN}/${f}`, 'utf8').trim();
 const BRAIN_NOTE = `Factory knowledge (read-only): /factory/brain/knowledge, start with index.md and read what bears on your task. Factory-wide skills are installed as skills. The repository's own rules and skills win over the factory's when they disagree.`;
 const RULES = () => `${brain('prompts/agent.md')}\n${BRAIN_NOTE}\n\n${brain('prompts/playbooks.md')}`;
 const REVIEW_RULES = () => `${brain('prompts/review.md')}\n${BRAIN_NOTE}`;
+const RESEARCH_RULES = () => `${brain('prompts/research.md')}\n${BRAIN_NOTE}`;
 const QA_RULES = () => `${brain('prompts/qa.md')}\n${BRAIN_NOTE}`;
 const BRAIN_PLUGINS = () => { try { return JSON.parse(brain('claude/plugins.json')).plugins.filter((x) => /^[\w-]+$/.test(x)).join(','); } catch { return ''; } };
 const BRAIN_MOUNTS = () => [`${BRAIN}/knowledge:/factory/brain/knowledge:ro`, `${BRAIN}/skills:/home/agent/.claude/skills:ro`];
@@ -278,7 +279,7 @@ const UNASKED_TIMEOUT_MS = 60000;
 const MAX_NO_PR_NUDGES = Number(process.env.MAX_NO_PR_NUDGES ?? 2);
 async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
-  const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
+  const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: t.type === 'research' ? RESEARCH_RULES() : RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
   if (r.last) say(id, t.kind === 'program' ? 'coordinator' : 'agent', r.last);
   else say(id, 'factory', `[factory] the agent stopped without a reply. ${r.stderr.trim().slice(-400)}`);
   // a plain-text question to the person (no DECISION NEEDED block): one cheap check per turn, fails open.
@@ -574,7 +575,7 @@ function itemState(i) {
   if (k.pr?.state === 'merged' || k.status === 'merged') return 'merged';
   if (k.pr?.state === 'closed' || k.status === 'stopped') return 'failed';
   if (running.has(k.id) || queue.some((j) => j.id === k.id)) return 'running';
-  if (['decision needed', 'waiting for you', 'paused'].includes(k.status) || (k.status === 'ready for you' && !k.mergeWanted)) return 'stuck';
+  if (STUCK_STATUSES.includes(k.status) || (k.status === 'ready for you' && !k.mergeWanted)) return 'stuck';
   return 'running';
 }
 function startReady(t) {
@@ -584,7 +585,9 @@ function startReady(t) {
   const byKey = Object.fromEntries(t.plan.map((i) => [i.key, i]));
   for (const i of g.ready) {
     const built = i.deps.map((d) => { const k = byKey[d].taskId ? load(byKey[d].taskId) : null; return `- ${byKey[d].title}${k?.pr ? ` (PR #${k.pr.number}, merged)` : ''}`; }).join('\n');
-    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title, ...(i.type ? { type: i.type } : {}) });
+    const rk = i.researchKey && byKey[i.researchKey]?.taskId ? load(byKey[i.researchKey].taskId) : null;
+    const handoff = i.researchKey ? `${researchHandoff({ doc: i.researchDoc, pr: rk?.pr, repo: t.repo })}\n\n` : '';
+    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}${handoff}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title, ...(i.type ? { type: i.type } : {}) });
     i.taskId = kid.id;
   }
   update(t.id, (x) => { copyIssueFields(t.plan, x.plan ?? []); x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
@@ -645,7 +648,7 @@ function afterCoordinator(t, mode, from, last, decision) {
   if (!openingEpic.has(t.id)) { startReady(t); syncEpic(t.id); }
   pump();
 }
-const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
+const SETTLED = ['ready for you', 'research review', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
 // say once: a task merged (one line), a wave fully merged (what was built, what starts next).
 // What was said is kept on the epic (mergedAnnounced, wavesAnnounced), so a restart repeats nothing.
 function announceProgress(t) {
@@ -699,11 +702,16 @@ function createTask(project, text, auto, { attachments, ...extra } = {}) {
   const t = { id, project, repo: p.repo, base: p.base, kind: 'change', title: text.split('\n')[0].slice(0, 90), phase: auto ? 'run' : 'brief', auto, status: 'queued', factoryRounds: 0, createdAt: new Date().toISOString(), ...extra };
   save(t); say(id, 'you', text);
   if (t.kind === 'report') enqueue(id, reportPrompt(t, text), 'bypassPermissions', 'start');
+  else if (auto && t.type === 'research') enqueue(id, researchPrompt(t, text), 'bypassPermissions', 'start');
   else if (auto) enqueue(id, runPrompt(t, text, 'Pre-approved: no brief, start now. First pick your playbook and write your definition of done as checks anyone can run; it goes in the PR description under "Done".'), 'bypassPermissions', 'start');
   else enqueue(id, `TASK ${id} in ${p.repo} (base ${p.base}).\n\n${text}\n\n${prTitleLine(t)}\n\nThis is the BRIEF. Read the code you need (and the repository's own rules: AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills, if present). Reply with ONE message: your playbook, the questions you genuinely need answered (or "no questions"), your plan in a few lines, and the definition of done as checks anyone can run. Do not change any file.`, 'plan', 'start');
   return t;
 }
 const runPrompt = (t, task, reply) => `${reply}\n\nNow RUN task ${t.id}: ${task}\n${prTitleLine(t)}\nYou are on branch agent/${t.id} in /workspace/repo (base ${t.base}). Work until your definition of done is met. Commit, push the branch, and open a PR into ${t.base} with \`gh pr create\` (title: the task in one line; body: Done / Decisions / Attention). ${hasChecks(t) ? 'Every push builds a preview and runs e2e; the results arrive here as [factory] messages. ' : ''}When it is done, an independent reviewer reads the PR; its findings arrive as [review] messages. Do not ask questions.`;
+// a research task: the researcher writes docs/research/<slug>.md and opens a docs-only PR for discussion
+const researchSlug = (text) => /Write (docs\/research\/[\w.-]+\.md)/.exec(text)?.[1] ?? `docs/research/${researchSlugOf(text)}.md`;
+const researchSlugOf = (text) => (text.match(/Part of epic \S+, task "([\w-]+)"/)?.[1] ?? 'topic').replace(/-research$/, '');
+const researchPrompt = (t, text) => `RESEARCH task ${t.id}: ${text}\n\nWrite ${researchSlug(text)} following your rules. ${prTitleLine(t)}\nYou are on branch agent/${t.id} in /workspace/repo (base ${t.base}). Commit only that file, push, and open a PR into ${t.base} with \`gh pr create\` (body: what the document answers, the recommendation, the open questions; no code in this PR).`;
 const reportPrompt = (t, text) => `TRIAGE task ${t.id} for ${t.repo} (default branch ${t.base}). Use the "bug" playbook's first steps, but do not change code, push, or open a PR in this task.
 THE REPORT${t.issue ? `: GitHub issue #${t.issue.number} (${t.issue.url})` : ', from the person (Telegram)'}:
 ${text}
@@ -839,7 +847,7 @@ async function digest(hours) {
     hours,
     ready: await Promise.all(by(['ready for you']).map(async (t) => ({ ...brief(t), attention: await attention(t) }))),
     decisions: by(['decision needed']).map(brief),
-    waiting: by(['waiting for you', 'waiting for merges']).map(brief),
+    waiting: by(['waiting for you', 'waiting for merges', 'research review']).map(brief),
     moving: recent.filter((t) => running.has(t.id) || ['queued', 'working', 'briefing', 'planning', 'testing', 'reviewing', 'waiting for checks'].includes(t.status) || /^running|^verifying/.test(t.status)).map(brief),
     finished: by(['done']).map(brief),
     merged: recent.filter((t) => t.pr?.state === 'merged').map(brief),

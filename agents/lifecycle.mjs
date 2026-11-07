@@ -10,7 +10,9 @@ export const isDecision = (text) => /^\s*DECISION NEEDED\b/m.test(text ?? '');
 // Statuses where the task rests on the person. Every one of them carries a
 // one-line `waitingOn`: what the person is waited on for. Silent parking is the
 // bug, so server.mjs refuses to save a parked task without one (parkReason).
-export const PARKED = ['waiting for you', 'decision needed', 'ready for you', 'paused', 'waiting for merges'];
+export const PARKED = ['waiting for you', 'decision needed', 'ready for you', 'paused', 'waiting for merges', 'research review'];
+// statuses where a planned task rests on the person: its dependents are blocked, not waiting
+export const STUCK_STATUSES = ['decision needed', 'waiting for you', 'paused', 'research review'];
 export const isParked = (status) => PARKED.includes(status);
 // the reason a parked status gets when its caller gave none (never empty)
 export const waitingOnFor = (status, task = {}) => ({
@@ -18,6 +20,7 @@ export const waitingOnFor = (status, task = {}) => ({
   'decision needed': 'your answer to the decision the agent asked for',
   'ready for you': task.mergeWanted ? 'the automatic merge (retrying); nothing needed from you yet' : 'your merge of the reviewed PR',
   'paused': 'your reply to resume the task',
+  'research review': 'your comments on the research PR, then your merge of it (the implementation task starts after that)',
   'waiting for merges': 'your merges of the PRs that block the next tasks',
 }[status] ?? null);
 // the reason to save with a task: the given one, else the default; none when not parked
@@ -58,6 +61,8 @@ export async function afterAgentRun({ task, from, origin, mode, reply, unasked =
   // a run turn with no PR and no question is never a place to wait for the person: carry on (bounded)
   else if (!pr && reply && (task.noPrNudges ?? 0) < maxNoPrNudges) return { type: 'nudge', nudge: (task.noPrNudges ?? 0) + 1, from: reviewOrigin(from, origin) ? 'review' : from, resetCrash };
   else if (!head) { status = 'waiting for you'; waitingOn = pr ? `your call: PR #${pr.number} is ${pr.state ?? 'not open'}, so there is nothing to review` : `your call: the agent ended ${maxNoPrNudges + 1} turns in a row without opening a PR or asking anything`; }
+  // a research task is a docs-only PR for discussion: no checks, QA or panel; it waits for the person's comments and merge
+  else if (task.type === 'research') { status = 'research review'; waitingOn = waitingOnFor(status); }
   // an answer to review findings goes back to the panel even with no new commit:
   // the finding may have asked for evidence (a run, a PR comment), not code.
   // Bounded: every CHANGES verdict counts toward the round limit.
@@ -134,9 +139,13 @@ export function afterReview({ task, verdict, headSha, autoMerge, maxRounds }) {
 // toward the round limit; green never does.
 //  ignore | limit | run { green, greenSha, previewHost, factoryRounds }
 export function afterFactoryReport({ task, text, maxRounds }) {
-  if (task.phase !== 'run' || ['stopped', 'paused', 'pausing', 'merged'].includes(task.status) || task.kind !== 'change') return { action: 'ignore' };
+  if (task.phase !== 'run' || ['stopped', 'paused', 'pausing', 'merged'].includes(task.status) || task.kind !== 'change' || task.type === 'research') return { action: 'ignore' }; // a research PR has no code to check
   const greenSha = text.includes('✅') ? /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1] : undefined;
   if (!greenSha && task.factoryRounds >= maxRounds) return { action: 'limit', status: 'waiting for you', waitingOn: 'your call: the checks keep failing at the round limit', say: `[factory] round limit (${maxRounds} failed rounds) reached: stopped. A person decides what next.` };
   if (greenSha) return { action: 'run', green: true, greenSha, previewHost: /preview ready at (https:\/\/[^\s/]+)/.exec(text)?.[1] ?? task.previewHost };
   return { action: 'run', green: false, factoryRounds: task.factoryRounds + 1 };
 }
+
+// The text an implementation task that was researched first is given: the document and
+// where the person's comments on the research PR are (the agent reads them with gh).
+export const researchHandoff = ({ doc, pr, repo }) => `RESEARCH FIRST: this task was researched before it started. Read ${doc} (merged into the base branch${pr ? `, from research PR #${pr.number}` : ''}) and build from it: its recommendation, unless the person's comments changed it.${pr ? ` The person's comments on the research PR: \`gh pr view ${pr.number} --repo ${repo} --comments\` and \`gh api repos/${repo}/pulls/${pr.number}/comments\` (inline). Read all of them.` : ''} Where you depart from the document or a comment, say why under "Decisions" in your PR.`;

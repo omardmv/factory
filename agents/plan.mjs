@@ -14,12 +14,47 @@ const KEY = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 // What the coordinator is told when it writes or revises a plan.
 export const PLAN_TYPES = ['feature', 'fix', 'hotfix', 'refactor', 'perf', 'design', 'test', 'docs', 'ci', 'chore', 'research'];
-export const PLAN_RULES = `The plan lists EVERY task of the epic. Each task is one PR an agent can finish and prove on its own (its own tests, its own review): say what to change, where, and how done is checked, in a few sentences, self-contained (the agent sees only the epic's goal and its own task). Give each task a short key (lowercase letters, digits, dashes) and "depends_on": the keys of the tasks that must be MERGED before it can start, and only real dependencies (code it builds on, a flag it needs, a file it would conflict on): everything else runs in parallel, so do not chain tasks just to order them. Tasks that edit the same files (agents/server.mjs, agents/plan.mjs, the Slack bot, ...) must depend on each other (directly or through a chain) or be merged into one task: two parallel tasks on the same file conflict. Give each task a "files" list of the files it edits; a plan where two tasks share a file and neither depends on the other is refused. At most ${MAX_PLAN_TASKS} tasks; split the epic if it needs more.
+export const PLAN_RULES = `The plan lists EVERY task of the epic. Each task is one PR an agent can finish and prove on its own (its own tests, its own review): say what to change, where, and how done is checked, in a few sentences, self-contained (the agent sees only the epic's goal and its own task). Give each task a short key (lowercase letters, digits, dashes) and "depends_on": the keys of the tasks that must be MERGED before it can start, and only real dependencies (code it builds on, a flag it needs, a file it would conflict on): everything else runs in parallel, so do not chain tasks just to order them. Add "research": true to a task that touches a new dependency, a data model or a public interface, or whose approach is unclear: a researcher agent first writes docs/research/<key>.md and opens it as a PR for the person to discuss, and the task starts only after that PR is merged (the factory adds that research task and the dependency; do not list it yourself). "research": false, or the words "no research" in the task, skips it. Tasks that edit the same files (agents/server.mjs, agents/plan.mjs, the Slack bot, ...) must depend on each other (directly or through a chain) or be merged into one task: two parallel tasks on the same file conflict. Give each task a "files" list of the files it edits; a plan where two tasks share a file and neither depends on the other is refused. At most ${MAX_PLAN_TASKS} tasks; split the epic if it needs more.
 End your reply with the whole plan as a fenced block exactly like:
 \`\`\`plan
-{"tasks": [{"key": "flag", "type": "feature", "title": "3 to 6 words naming the main thing", "task": "what to do, where, how done is checked", "depends_on": [], "files": ["agents/plan.mjs"]}, {"key": "next-thing", "type": "refactor", "title": "...", "task": "...", "depends_on": ["flag"], "files": ["agents/plan.mjs", "agents/server.mjs"]}]}
+{"tasks": [{"key": "flag", "type": "feature", "title": "3 to 6 words naming the main thing", "task": "what to do, where, how done is checked", "depends_on": [], "research": false, "files": ["agents/plan.mjs"]}, {"key": "next-thing", "type": "refactor", "title": "...", "task": "...", "depends_on": ["flag"], "files": ["agents/plan.mjs", "agents/server.mjs"]}]}
 \`\`\`
 The type is one of: feature, fix, hotfix, refactor, perf, design, test, docs, ci, chore, research.`;
+
+// Research step. A task is researched first when the coordinator marks it
+// ("research": true) or, with no mark, when its text matches the rule: it touches a
+// new dependency, a data model or a public interface, or the approach is unclear.
+// A "no research" phrase in the task text, or "research": false, skips it.
+// The researcher task (key `<key>-research`) writes docs/research/<key>.md and opens it as
+// a docs-only PR for discussion; the implementation depends on it, so it starts only
+// when that PR is merged, and is given the document and the person's comments.
+export const NO_RESEARCH = /\bno[\s-]+research\b/i;
+const RESEARCH_RULE = /\b(?:new|add(?:s|ed|ing)?|introduc\w*)\s+(?:a\s+|an\s+|the\s+)?(?:npm\s+|python\s+|third[- ]party\s+)?(?:dependenc|librar|package|service|database)\w*|\bdata[\s-]model\b|\bschema\b|\bmigrat\w+|\bpublic\s+(?:api|interface)\b|\b(?:api|url)\s+shape\b|\bapproach\s+is\s+unclear\b|\bunclear\s+(?:approach|how)\b|\bnot\s+sure\s+how\b/i;
+export const researchDoc = (key) => `docs/research/${key}.md`;
+// `listed`: the task's `<key>-research` is in the plan too (a revision that sends it back keeps the link)
+export function needsResearch(t, listed = false) {
+  if (t.type === 'research') return false; // a research task is never researched
+  const text = `${t.title ?? ''}\n${t.task ?? ''}`;
+  if (NO_RESEARCH.test(text) || t.research === false) return false;
+  return listed || t.research === true || RESEARCH_RULE.test(text);
+}
+// Adds the research task before each task that needs one and makes the task depend on it. Pure.
+export function addResearch(tasks) {
+  const byKey = new Map(tasks.map((t) => [t.key, t])), keys = new Set(byKey.keys()), out = [];
+  for (const t of tasks) {
+    const { research: _r, ...bare } = t, rest = _r === false ? { ...bare, research: false } : bare; // an explicit false is kept: a revision must see it
+    const rk = `${t.key}-research`.slice(0, 40), listed = byKey.get(rk);
+    if (!needsResearch(t, listed?.type === 'research')) { out.push(rest); continue; }
+    const link = { ...rest, deps: [...new Set([...t.deps, rk])], researchKey: rk, researchDoc: researchDoc(t.key) };
+    if (listed?.type === 'research') { out.push(link); continue; } // the coordinator sent the research task back (a revision): reuse it
+    if (keys.has(rk)) return { error: `task "${t.key}" needs research but the key "${rk}" is taken` };
+    keys.add(rk);
+    out.push({ key: rk, type: 'research', title: `Research: ${t.title}`.slice(0, 90), task: `Research for the task "${t.key}" (${t.title}). Write ${researchDoc(t.key)}: what the task asks, the options with trade-offs and sources, your recommendation, the risks, and how done is checked. Open it as a docs-only PR (no code) for the person to discuss.\n\nThe task to research:\n${t.task}`, deps: [...t.deps], researchFor: t.key });
+    out.push(link);
+  }
+  // an explicit research task keeps its link to the task it serves
+  return { tasks: out.map((t) => (t.type === 'research' && !t.researchFor && t.key.endsWith('-research') && keys.has(t.key.slice(0, -9)) ? { ...t, researchFor: t.key.slice(0, -9) } : t)) };
+}
 
 export function parsePlan(text) {
   // fences only count on a line of their own: a task's text may mention "```plan"
@@ -44,8 +79,11 @@ export function parsePlan(text) {
     const deps = Array.isArray(t?.depends_on) ? t.depends_on.map(String) : [];
     const files = Array.isArray(t?.files) ? [...new Set(t.files.map((f) => String(f).trim().replace(/^\.\//, '')).filter(Boolean))] : [];
     const type = PLAN_TYPES.includes(String(t?.type ?? '').toLowerCase()) ? String(t.type).toLowerCase() : null;
-    out.push({ key, title: String(t?.title ?? task.split('\n')[0]).trim().slice(0, 90), task, deps: [...new Set(deps)], ...(files.length ? { files } : {}), ...(type ? { type } : {}) });
+    out.push({ key, title: String(t?.title ?? task.split('\n')[0]).trim().slice(0, 90), task, deps: [...new Set(deps)], ...(files.length ? { files } : {}), ...(type ? { type } : {}), ...(typeof t?.research === 'boolean' ? { research: t.research } : {}) });
   }
+  const withR = addResearch(out);
+  if (withR.error) return withR;
+  out.splice(0, out.length, ...withR.tasks); seen.clear(); out.forEach((t) => seen.add(t.key));
   for (const t of out) for (const d of t.deps) {
     if (d === t.key) return { error: `task "${t.key}" depends on itself` };
     if (!seen.has(d)) return { error: `task "${t.key}" depends on "${d}", which is not in the plan` };
@@ -92,7 +130,12 @@ export function mergePlan(current, next) {
   const old = new Map(current.map((i) => [i.key, i]));
   // a kept key keeps its GitHub sub-issue (issue/issueId/linked) so a revision never opens a second one
   const gh = (k) => { const o = old.get(k); return o?.issue ? { issue: o.issue, issueId: o.issueId, ...(o.linked === undefined ? {} : { linked: o.linked }) } : {}; };
-  const merged = next.map((t) => ({ ...t, ...gh(t.key), ...(started.has(t.key) ? { taskId: started.get(t.key).taskId } : {}) }));
+  // a started task keeps its research link even when the revision leaves the mark out
+  next = next.map((t) => { const o = old.get(t.key); return o?.researchKey && !t.researchKey && (started.has(o.researchKey) || next.some((x) => x.key === o.researchKey)) && t.research !== false && !NO_RESEARCH.test(`${t.title}\n${t.task}`) ? { ...t, deps: [...new Set([...t.deps, o.researchKey])], researchKey: o.researchKey, researchDoc: o.researchDoc } : t; });
+  let merged = next.map((t) => ({ ...t, ...gh(t.key), ...(started.has(t.key) ? { taskId: started.get(t.key).taskId } : {}) }));
+  // research is never added to a task that has started (a revision may now match the rule): drop the new research task and the link
+  const skip = new Set(merged.filter((t) => t.type === 'research' && !t.taskId && started.has(t.researchFor) && !old.get(t.researchFor)?.researchKey).map((t) => t.key));
+  if (skip.size) merged = merged.filter((t) => !skip.has(t.key)).map((t) => (t.researchKey && skip.has(t.researchKey) ? (({ researchKey, researchDoc, ...r }) => ({ ...r, deps: t.deps.filter((d) => d !== researchKey) }))(t) : t));
   for (const [k, i] of started) if (!next.some((t) => t.key === k)) merged.push(i); // dropped from the plan but already running
   const w = waves(merged);
   if (w.error) return { error: w.error };

@@ -46,6 +46,15 @@ staging. Production stays a manual merge by the founder, always.
 - Then the existing path: checks -> QA -> review panel -> merge to staging.
   The PR leaves draft when the panel passes.
 
+### As built: the research step
+
+- A task is researched first when the coordinator marks it `"research": true` in the plan, or, with no mark, when its text matches the rule in `agents/plan.mjs` (a new dependency, a data model, a public interface, or an unclear approach). The words "no research" in the task, or `"research": false`, skip it.
+- `parsePlan` adds a task `<key>-research` (type `research`) and makes the task depend on it, so the implementation starts only when the research PR is **merged**.
+- The researcher (prompt: `brain/prompts/research.md`) writes `docs/research/<key>.md` and opens it as a docs-only PR: no code, no checks, QA or review panel.
+- The task then rests in the status `research review`, with the reason "your comments on the research PR, then your merge of it". The person comments on the PR (replies to the researcher in the task chat update the document), then merges it.
+- The implementation task is given the document path and the research PR number, with the commands to read the person's comments (`researchHandoff` in `agents/lifecycle.mjs`), and says under "Decisions" where it departs from the document.
+- Tests: `agents/test-plan.mjs` (rule, mark, "no research", blocked until merged) and `agents/test-lifecycle.mjs` (the new state).
+
 ## 3. The brain
 
 `brain/` in the factory repo:
