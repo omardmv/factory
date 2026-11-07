@@ -54,6 +54,7 @@ const BRAIN_NOTE = `Factory knowledge (read-only): /factory/brain/knowledge, sta
 const RULES = () => `${brain('prompts/agent.md')}\n${BRAIN_NOTE}\n\n${brain('prompts/playbooks.md')}`;
 const REVIEW_RULES = () => `${brain('prompts/review.md')}\n${BRAIN_NOTE}`;
 const QA_RULES = () => `${brain('prompts/qa.md')}\n${BRAIN_NOTE}`;
+const BRAIN_PLUGINS = () => { try { return JSON.parse(brain('claude/plugins.json')).plugins.filter((x) => /^[\w-]+$/.test(x)).join(','); } catch { return ''; } };
 const BRAIN_MOUNTS = () => [`${BRAIN}/knowledge:/factory/brain/knowledge:ro`, `${BRAIN}/skills:/home/agent/.claude/skills:ro`];
 
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
@@ -180,13 +181,13 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
     '--security-opt', 'no-new-privileges:true', '--cap-drop', 'NET_RAW', '--cap-drop', 'MKNOD', '--cap-drop', 'SYS_CHROOT', '--cap-drop', 'AUDIT_WRITE', '--cap-drop', 'SETFCAP',
     '-v', `${dir(id)}/${workspace}:/workspace`, '-v', `${dir(id)}/${claudeDir}:/home/agent/.claude`,
     ...[...BRAIN_MOUNTS(), ...mounts].flatMap((m) => ['-v', m]),
-    '-e', 'TASK_ID', '-e', 'REPO', '-e', 'BASE', '-e', 'GH_TOKEN', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', ...Object.keys(more).flatMap((k) => ['-e', k])];
+    '-e', 'TASK_ID', '-e', 'REPO', '-e', 'BASE', '-e', 'GH_TOKEN', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', '-e', 'FACTORY_PLUGINS', ...Object.keys(more).flatMap((k) => ['-e', k])];
   if (RUNTIME) args.push('--runtime', RUNTIME);
   args.push(IMAGE, 'claude', '-p', prompt, '--output-format', 'stream-json', '--verbose', '--max-turns', '300',
     '--permission-mode', mode, '--disallowedTools', ...disallowed, '--append-system-prompt', system, ...extra);
   if (model) args.push('--model', model);
   if (resume) args.push('--resume', resume);
-  const env = { ...process.env, ...more, TASK_ID: id, REPO: repo ? t.repo : '', BASE: t.base, GH_TOKEN: ghToken, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') };
+  const env = { ...process.env, ...more, TASK_ID: id, REPO: repo ? t.repo : '', BASE: t.base, GH_TOKEN: ghToken, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token'), FACTORY_PLUGINS: BRAIN_PLUGINS() };
   const child = spawn('docker', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
   running.set(id, child); containers.set(id, name);
   log('run.start', { task: id, mode, claudeDir, container: name });

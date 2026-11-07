@@ -14,7 +14,8 @@ Never loosen one to finish a task.
 - agent isolation: container limits, network, firewall, runtime
   (`agents/server.mjs` `container()`, `agents/image/`, `box/`)
 - secrets, tokens, GitHub App permissions
-- how new skills are admitted (`brain/README.md`)
+- how new skills are admitted (`brain/README.md`), and which Claude Code
+  plugins agents load (`brain/claude/plugins.json`, `agents/image/plugins/`)
 - this file
 
 Not yet enforced in code: today the gate is this rule plus the review

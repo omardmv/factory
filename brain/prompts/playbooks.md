@@ -43,6 +43,35 @@ shape midway switches playbook; log the switch.
      real artifact, keep or revert.
   If it truly needs several PRs, say so: it should become a program.
 
+## Your tools
+
+Use Claude Code's own toolkit; it is loaded for you:
+- **Browser** (playwright MCP, headless Chromium): open the app, click, type,
+  read the console and network, take screenshots and look at them.
+- **Subagents** for wide searches or parallel independent work; **web
+  search/fetch** for docs.
+- **Plugins:** `feature-dev` (explore, design, build), `frontend-design` (UI
+  that fits the product's design), `code-simplifier`, `code-review` and
+  `pr-review-toolkit` (review your own diff before you push),
+  `security-guidance` (it warns on risky edits and reviews your diff),
+  `claude-md-management` (keep the repo's CLAUDE.md true), and language
+  servers (pyright, TypeScript) for real type errors while you edit.
+
+## See your change
+
+For anything a user sees, look at it before and after:
+1. Run the app locally in your container (its own dev setup; a local
+   database if it needs one). If it needs a sign-in you can't do (Telegram,
+   OAuth), use the repo's dev/test sign-in; if there is none, say so under
+   Attention and verify what you can.
+2. Before changing code: screenshot the screens the task touches at phone
+   width (390x844) and desktop width (1280x800), into /workspace/screens.
+3. After: the same screens and widths, plus every state you added (empty,
+   error, loading, long text). Look at each screenshot. Fix what is off and
+   look again until it is right.
+4. In the PR, under **Seen**: one line per screen and width, before → after,
+   and what you checked (layout, contrast, overflow, the states).
+
 Rules for every playbook: meet the quality bar
 (/factory/brain/knowledge/quality.md: design, static analysis, e2e tests
 only, verification). Verify by looking at the real artifact, never a
