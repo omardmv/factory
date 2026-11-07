@@ -42,6 +42,8 @@ export const TOOLS = [
 ];
 
 const clamp = (n, d, max) => Math.max(1, Math.min(max, Number.isFinite(Number(n)) && n != null ? Number(n) : d));
+export const ID_RE = /^[\w-]+$/; // the same ids the HTTP API routes accept
+const needId = (v) => { const id = needStr(v, 'id'); if (!ID_RE.test(id)) throw new Error('invalid id'); return id; };
 const needStr = (v, name) => { if (typeof v !== 'string' || !v.trim()) throw new Error(`${name} is required`); return v.trim(); };
 
 export async function callTool(name, a = {}, deps) {
@@ -53,7 +55,7 @@ export async function callTool(name, a = {}, deps) {
       return ts.slice(0, clamp(a.limit, 30, 100)).map((t) => publicTask({ ...t, running: deps.isRunning?.(t.id) }));
     }
     case 'get_task': {
-      const id = needStr(a.id, 'id'); const t = deps.getTask(id);
+      const id = needId(a.id); const t = deps.getTask(id);
       if (!t) throw new Error('no such task');
       return { ...publicTask({ ...t, running: deps.isRunning?.(id) }), messages: deps.messages(id).slice(-clamp(a.messages, 20, 100)).map(publicMessage) };
     }
@@ -61,7 +63,7 @@ export async function callTool(name, a = {}, deps) {
     case 'start_task': return publicTask(deps.startTask(needStr(a.project, 'project'), needStr(a.text, 'text'), !!a.auto));
     case 'start_epic': return publicTask(deps.startEpic(needStr(a.project, 'project'), needStr(a.goal, 'goal')));
     case 'reply_to_task': {
-      const id = needStr(a.id, 'id'); if (!deps.getTask(id)) throw new Error('no such task');
+      const id = needId(a.id); if (!deps.getTask(id)) throw new Error('no such task');
       deps.reply(id, needStr(a.text, 'text')); return { ok: true, id };
     }
     default: throw new Error(`unknown tool ${name}`);
@@ -108,7 +110,8 @@ export function createMcp(deps, { limit = 120, windowMs = 60000, now = Date.now,
       let b = ''; for await (const c of req) { b += c; if (b.length > maxBody) throw new Error('too large'); }
       msg = JSON.parse(b);
     } catch { return send(400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); }
-    const batch = Array.isArray(msg);
+    if (Array.isArray(msg)) return send(400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'batches are not supported' } });
+    const batch = false;
     const outs = (await Promise.all((batch ? msg : [msg]).map(async (m) => {
       const r = await rpc(m, deps);
       if (m?.method === 'tools/call') deps.audit?.({ tool: m.params?.name, ok: !r?.result?.isError });

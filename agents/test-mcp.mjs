@@ -123,6 +123,25 @@ await test('allow-lists name no secret-looking field', () => {
   for (const k of [...TASK_FIELDS, ...PR_FIELDS, ...PROJECT_FIELDS, ...MESSAGE_FIELDS]) assert.ok(!/token|key|secret|env|claude|session|password|app/i.test(k), k);
   assert.ok(TOOLS.every((t) => !/merge|stop|pause/.test(t.name)));
 });
+await test('task ids must match [\\w-]+: path-shaped ids are refused, nothing is read or written', async () => {
+  const before = state.replies.length;
+  for (const id of ['../../x', 'a/b', '..', 'a b', '']) {
+    assert.equal((await tool('get_task', { id })).r.result.isError, true, id);
+    assert.equal((await tool('reply_to_task', { id, text: 'x' })).r.result.isError, true, id);
+  }
+  assert.equal(state.replies.length, before);
+});
+await test('batches are refused (one POST cannot start many tasks)', async () => {
+  const r = await call([{ jsonrpc: '2.0', id: 1, method: 'ping' }]);
+  assert.equal(r.status, 400);
+});
+await test('client handshake: initialize, initialized, tools/list, tools/call list_tasks', async () => {
+  const i = await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'c', version: '1' } });
+  assert.equal(i.result.protocolVersion, '2025-03-26');
+  assert.equal((await call({ jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
+  assert.ok((await rpc('tools/list')).result.tools.length === 6);
+  assert.equal((await tool('list_tasks', {})).json().length, 2);
+});
 await test('rate limit: 429 past the window limit, resets after', async () => {
   let t = 0;
   const m = createMcp(deps, { limit: 2, windowMs: 1000, now: () => t });
