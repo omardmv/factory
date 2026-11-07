@@ -5,7 +5,7 @@
   },
   "sayra": {
     "repo": "AzizbekLive/conversation-bot", "base": "staging", "autoMerge": "staging", "mergeMethod": "squash",
-    "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, owned by the contentcoach org, made public so AzizbekLive could install it on conversation-bot only; tokens cut down to these permissions",
+    "githubApp": { "id": "5649406", "key": "github-app-sayra.pem", "note": "sayra-coolify, owned by omardmv, installed on conversation-bot (also Coolify's source for Sayra staging); key copied from Coolify; tokens cut down to these permissions",
       "permissions": { "contents": "write", "pull_requests": "write", "issues": "write", "checks": "read", "statuses": "read", "metadata": "read" } }
   },
   "factory": {
