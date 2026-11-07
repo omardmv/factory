@@ -3,9 +3,9 @@
 - **Agent containers** (`fa-<task>-*`, image `factory-agent:latest`): one
   per run, non-root user `agent`, 4 CPUs, 8 GB, 2048 pids,
   `no-new-privileges`, NET_RAW/MKNOD/SYS_CHROOT/AUDIT_WRITE/SETFCAP
-  dropped, no Docker socket. Network: `AGENT_NETWORK` in
-  `agents/server.mjs`; a host firewall drops new connections from that
-  subnet to the host itself (replies pass), so agents reach GitHub, npm
+  dropped, no Docker socket. Network: `factory-agents` (`AGENT_NETWORK`
+  in `agents/server.mjs`); `factory-agents-firewall` (`box/agents/`) drops
+  new connections from that subnet to the host itself (replies pass), so agents reach GitHub, npm
   and the previews' public URLs but not the box's loopback services.
 - **Credentials**: the working agent gets a short-lived GitHub App token
   for its one repository. Reviewers and the QA tester get no GitHub token;
