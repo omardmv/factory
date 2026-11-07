@@ -77,6 +77,14 @@ const kept = mergePlan(cur, parsePlan(block([T('zones'), T('zone-s2', ['zones'])
 assert.ok(kept.items.some((i) => i.key === 'map1-core' && i.taskId === 'id-map1-core'));
 ok('a started task dropped from the new plan is kept (it is already running)');
 
+// a revision keeps the GitHub sub-issue of a kept key (and of a started task dropped from the plan)
+const withIssue = cur.map((i) => (i.key === 'flag' ? { ...i, issue: 41, issueId: 9041 } : i.key === 'map1-core' ? { ...i, issue: 42, issueId: 9042 } : i));
+const mi = mergePlan(withIssue, parsePlan(block([T('flag'), T('zones', ['flag'])])).tasks);
+assert.deepEqual([mi.items.find((i) => i.key === 'flag').issue, mi.items.find((i) => i.key === 'flag').issueId], [41, 9041]);
+assert.equal(mi.items.find((i) => i.key === 'map1-core').issue, 42);
+assert.equal(mi.items.find((i) => i.key === 'zones').issue, undefined);
+ok('a revised plan keeps sub-issue numbers and ids; new tasks have none yet');
+
 const tricky = 'Plan below.\n```plan\n' + JSON.stringify({ tasks: [T('talk-mode', [], 'talk'), { key: 'docs', title: 'docs', task: 'Explain that the coordinator must NOT emit a ```plan block yet, and show ``` fences in docs', depends_on: ['talk-mode'] }] }) + '\n```\nThat is all.';
 const tp = parsePlan(tricky);
 assert.ok(!tp.error, tp.error); assert.equal(tp.tasks.length, 2); assert.equal(tp.tasks[1].wave, 2);

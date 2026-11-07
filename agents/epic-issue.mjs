@@ -60,8 +60,9 @@ async function openMissing({ gh, token, repo, epic, plan, states = {} }) {
   return items;
 }
 
-export async function createEpicIssue({ gh, token, repo, title, goal, plan }) {
+export async function createEpicIssue({ gh, token, repo, title, goal, plan, onEpic }) {
   const made = await gh(token, `/repos/${repo}/issues`, 'POST', { title, body: renderEpicBody(goal, plan, {}) });
+  if (onEpic) await onEpic({ number: made.number, url: made.html_url }); // saved at once: a restart must not open a second epic
   let items;
   try { items = await openMissing({ gh, token, repo, epic: made.number, plan }); }
   catch (e) { e.partial = { epic: { number: made.number, url: made.html_url } }; throw e; } // retry with syncEpicIssue, not a second epic
@@ -90,3 +91,31 @@ export async function syncEpicIssue({ gh, token, repo, epic, goal, plan, states 
   await gh(token, `${R}/issues/${epic.number}`, 'PATCH', { body: renderEpicBody(goal ?? epic.goal, plan, states, { tasksUrl }) });
   return { items };
 }
+
+// On plan approval: open the epic issue and its sub-issues once. Never throws:
+// a GitHub failure comes back as `error` and the epic carries on without issues.
+// task = {epicIssue?, title, plan}; getToken() → token. Mutates task.plan items
+// (issue, issueId) and sets task.epicIssue = {number, url}. Returns {message, error?}.
+export async function openEpicIssue({ gh, getToken, repo, task, goal, onEpic }) {
+  if (task.epicIssue?.number) return { message: null }; // already open: never a second epic
+  try {
+    const token = await getToken();
+    const r = await createEpicIssue({ gh, token, repo, title: task.title, goal, plan: task.plan, onEpic: async (e) => { task.epicIssue = e; if (onEpic) await onEpic(e); } });
+    task.epicIssue = r.epic;
+    return { message: `[factory] epic issue ${r.epic.url} opened with ${task.plan.filter((i) => i.issue).length} sub-issues` };
+  } catch (e) {
+    if (e.partial?.epic) task.epicIssue = e.partial.epic; // the epic exists; sub-issues can be retried later
+    return { error: e.message, message: task.epicIssue ? `[factory] epic issue ${task.epicIssue.url} was opened but not all sub-issues could be created or linked (${e.message}); the epic carries on.` : `[factory] could not open the epic issue on GitHub (${e.message}); the epic carries on without it.` };
+  }
+}
+
+// the sentence added to a started task's first message when it has a sub-issue
+export const refsLine = (item, repo) => (item.issue ? `\n\nThis task's sub-issue is #${item.issue} in ${repo}: put "Refs #${item.issue}" in the PR body (the factory closes it when the PR merges).` : '');
+
+// copy only the GitHub fields onto the current plan, by key (a revision may have changed the rest)
+export function copyIssueFields(current, from) {
+  const by = new Map(from.filter((i) => i.issue).map((i) => [i.key, i]));
+  for (const i of current) { const f = by.get(i.key); if (f && !i.issue) { i.issue = f.issue; i.issueId = f.issueId; if (f.linked !== undefined) i.linked = f.linked; } }
+  return current;
+}
+

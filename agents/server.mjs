@@ -16,6 +16,7 @@
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
+import { openEpicIssue, refsLine, copyIssueFields } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -506,7 +507,7 @@ function startReady(t) {
   const byKey = Object.fromEntries(t.plan.map((i) => [i.key, i]));
   for (const i of g.ready) {
     const built = i.deps.map((d) => { const k = byKey[d].taskId ? load(byKey[d].taskId) : null; return `- ${byKey[d].title}${k?.pr ? ` (PR #${k.pr.number}, merged)` : ''}`; }).join('\n');
-    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}`, true, { parent: t.id, batch: t.id, title: i.title });
+    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title });
     i.taskId = kid.id;
   }
   update(t.id, (x) => { x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
@@ -514,13 +515,26 @@ function startReady(t) {
   log('epic.start', { task: t.id, started: g.ready.map((i) => i.key) });
   return progress(t.plan, itemState);
 }
+const openingEpic = new Set(); // programs whose epic issue is being opened: no task starts before it is done
 function approvePlan(t, text) {
   const r = parsePlan(text);
   if (r.error) { say(t.id, 'factory', `[factory] the plan can't start: ${r.error}. Asked the coordinator to fix it.`); enqueue(t.id, `[factory] Your plan block is invalid: ${r.error}. Send the corrected plan. ${PLAN_RULES}`, 'plan', 'person'); return; }
   t.plan = r.tasks; t.phase = 'run'; t.status = 'running'; t.stallNotice = null; save(t);
   const w = Math.max(...t.plan.map((i) => i.wave));
   say(t.id, 'factory', `[factory] plan approved: ${t.plan.length} tasks in ${w} wave${w === 1 ? '' : 's'}. Each starts as soon as what it depends on has merged.`);
-  startReady(t);
+  openingEpic.add(t.id);
+  openEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, goal: messages(t.id)[0]?.text ?? t.title, onEpic: (e) => update(t.id, (x) => { x.epicIssue = e; }) })
+    .then((res) => {
+      if (res.message) say(t.id, 'factory', res.message);
+      if (res.error) log('epic.issue.failed', { task: t.id, error: res.error });
+      update(t.id, (x) => { if (t.epicIssue) x.epicIssue = t.epicIssue; copyIssueFields(x.plan ?? [], t.plan); });
+    })
+    .catch((e) => log('epic.issue.failed', { task: t.id, error: e.message }))
+    .finally(() => {
+      openingEpic.delete(t.id);
+      try { if (!['stopped', 'paused', 'pausing', 'done'].includes(load(t.id).status)) { startReady(load(t.id)); pump(); } }
+      catch (e) { log('epic.start.failed', { task: t.id, error: e.message }); }
+    });
 }
 function afterCoordinator(t, mode, from, last, decision) {
   if (decision) { t.status = 'decision needed'; save(t); return pump(); }
@@ -533,7 +547,7 @@ function afterCoordinator(t, mode, from, last, decision) {
     else { t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
   }
   t.status = 'running'; save(t);
-  startReady(t);
+  if (!openingEpic.has(t.id)) startReady(t);
   pump();
 }
 const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
@@ -544,6 +558,7 @@ async function watchPrograms() {
       const k = load(i.taskId);
       if (k.pr?.state !== 'merged') { const pr = await findPr(k); if (pr && pr.state !== k.pr?.state) { k.pr = pr; if (pr.state === 'merged') k.status = 'merged'; save(k); } }
     }
+    if (openingEpic.has(t.id)) continue;
     const g = startReady(t);
     const status = g.done ? 'verifying' : g.stalled ? 'waiting for you' : `running · ${g.merged}/${g.total} merged`;
     if (t.status !== status) update(t.id, (x) => { x.status = status; });
