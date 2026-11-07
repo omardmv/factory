@@ -4,8 +4,8 @@
     "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, private, owned by the contentcoach org" }
   },
   "sayra": {
-    "repo": "contentcoach/conversation-bot", "base": "staging", "autoMerge": "staging", "mergeMethod": "squash",
-    "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, private, owned by the contentcoach org (Sayra moved into it); tokens cut down to these permissions",
+    "repo": "AzizbekLive/conversation-bot", "base": "staging", "autoMerge": "staging", "mergeMethod": "squash",
+    "githubApp": { "id": "5299771", "key": "github-app-contentcoach.pem", "note": "omarfactory, owned by the contentcoach org, made public so AzizbekLive could install it on conversation-bot only; tokens cut down to these permissions",
       "permissions": { "contents": "write", "pull_requests": "write", "issues": "write", "checks": "read", "statuses": "read", "metadata": "read" } }
   },
   "factory": {
