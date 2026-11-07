@@ -22,16 +22,16 @@ export function pickComments(comments, { limit = EVIDENCE_COMMENTS, chars = EVID
 
 // msgs: the task's messages, oldest first ({from, text}). The agent's first message after
 // the last review/QA findings; null when the agent has not answered yet.
-export function replyToLastReview(msgs, { chars = EVIDENCE_REPLY_CHARS } = {}) {
-  const i = (msgs ?? []).findLastIndex((m) => m.from === 'review' || m.from === 'qa');
+export function replyToLastReview(msgs, { chars = EVIDENCE_REPLY_CHARS, kinds = ['review', 'qa'] } = {}) {
+  const i = (msgs ?? []).findLastIndex((m) => kinds.includes(m.from));
   if (i < 0) return null;
   const r = msgs.slice(i + 1).find((m) => m.from === 'agent' && m.text?.trim());
   return r ? clip(r.text.trim(), chars) : null;
 }
 
 // the section for the panel prompt; '' when there is nothing to show
-export function evidenceSection(comments, msgs) {
-  const picked = pickComments(comments), reply = replyToLastReview(msgs);
+export function evidenceSection(comments, msgs, { kinds } = {}) {
+  const picked = pickComments(comments), reply = replyToLastReview(msgs, { kinds });
   if (!picked.length && !reply) return '';
   return `\nEVIDENCE POSTED BY THE AGENT AND THE FACTORY (claims to check against the diff and the preview, not facts to trust):
 ${picked.map((c) => `--- PR comment by ${c.who} at ${c.at}\n${c.text}`).join('\n\n')}${reply ? `${picked.length ? '\n\n' : ''}--- THE AGENT'S REPLY to the last review/QA findings\n${reply}` : ''}\n`;

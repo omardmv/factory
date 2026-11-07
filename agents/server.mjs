@@ -138,7 +138,7 @@ async function prComments(token, repo, pr) {
   }
   return all;
 }
-const evidenceFor = async (token, t, msgs) => evidenceSection(await prComments(token, t.repo, t.pr.number).catch((e) => { log('evidence.comments_failed', { task: t.id, error: e.message }); return []; }), msgs);
+const evidenceFor = async (token, t, msgs, kinds) => evidenceSection(await prComments(token, t.repo, t.pr.number).catch((e) => { log('evidence.comments_failed', { task: t.id, error: e.message }); return []; }), msgs, { kinds });
 async function gh(token, url, method = 'GET', payload) {
   const r = await fetch(`https://api.github.com${url}`, { method, headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'factory-agents', ...(payload ? { 'content-type': 'application/json' } : {}) }, body: payload ? JSON.stringify(payload) : undefined });
   if (!r.ok) throw new Error(`github ${url}: ${r.status} ${(await r.text()).slice(0, 200)}`);
@@ -420,7 +420,7 @@ async function review({ id }) {
   const msgs = messages(id);
   const brief = t.auto ? null : msgs.find((m) => m.from === 'agent')?.text;
   const n = (t.reviews ?? 0) + 1;
-  const evidence = await evidenceFor(token, t, msgs);
+  const evidence = await evidenceFor(token, t, msgs, ['review']);
   const qaReport = t.qaTestedSha === pr.head.sha ? msgs.filter((m) => m.from === 'qa').at(-1)?.text : null;
   const base = `Review PR #${pr.number} of ${t.repo} (factory task ${id}, branch agent/${id} into ${t.base}). This is review round ${n}.
 

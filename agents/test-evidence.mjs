@@ -45,6 +45,12 @@ test('reply: null when the agent has not answered the last review, or none exist
 test('reply: a QA finding counts too, and the reply is truncated', () => {
   assert.match(replyToLastReview([{ from: 'qa', text: 'q' }, { from: 'agent', text: 'y'.repeat(50) }], { chars: 10 }), /^y{10}\n\[…cut/);
 });
+test('review panel: review → agent reply → fresh QA report still finds the reply', () => {
+  const m = [{ from: 'review', text: 'f' }, { from: 'agent', text: 'my reply' }, { from: 'qa', text: 'qa report' }];
+  assert.equal(replyToLastReview(m, { kinds: ['review'] }), 'my reply');
+  assert.equal(replyToLastReview(m), null);
+  assert.match(evidenceSection([], m, { kinds: ['review'] }), /my reply/);
+});
 test('section: empty with nothing, labelled as unverified evidence otherwise', () => {
   assert.equal(evidenceSection([], []), '');
   const s = evidenceSection([c(1)], [{ from: 'review', text: 'f' }, { from: 'agent', text: 'fixed it' }]);
