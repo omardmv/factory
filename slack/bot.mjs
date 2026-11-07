@@ -207,14 +207,22 @@ export function projectOfChannel(name = '') {
   return null;
 }
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
-export const channelName = (t) => t.kind === 'program' ? `epic-${slug(t.title.replace(/^\s*epic\b\s*:?\s*/i, '')) || 'epic'}-${t.id.slice(-6)}`.slice(0, 80) : `${PROJECTS[t.project]?.[0] ?? t.project}-${slug(t.title) || 'task'}-${t.id.slice(-6)}`.slice(0, 80);
+// the naming standard: <type>-<the main thing>, and pr-<N>-<type>-<the main thing>
+// once the PR is open; an epic is epic-<the main thing>
+export function channelName(t) {
+  const words = slug(String(t.title ?? '').replace(/^\s*(?:epic|program)\b\s*:?\s*/i, '')) || 'task';
+  if (t.kind === 'program') return `epic-${words}`.slice(0, 80);
+  const base = `${t.type ?? (t.kind === 'report' ? 'bug' : 'task')}-${words}`;
+  return (t.pr?.number ? `pr-${t.pr.number}-${base}` : base).slice(0, 80);
+}
 function bind(taskId, channel) { state.taskChannel[taskId] = channel; state.channelTask[channel] = taskId; persist(); }
 async function channelFor(t) {
   if (state.taskChannel[t.id]) return state.taskChannel[t.id];
   let c;
   try { c = (await slack('conversations.create', { name: channelName(t) })).channel; }
-  catch (e) { if (e.slack !== 'name_taken') throw e; c = (await slack('conversations.create', { name: `${channelName(t).slice(0, 72)}-${randomBytes(3).toString('hex')}` })).channel; }
+  catch (e) { if (e.slack !== 'name_taken') throw e; c = (await slack('conversations.create', { name: `${channelName(t).slice(0, 72)}-${t.id.slice(-6)}` })).channel; }
   bind(t.id, c.id);
+  state.ownChannel ??= {}; state.ownChannel[t.id] = c.name ?? channelName(t); persist(); // ours to rename
   await slack('conversations.invite', { channel: c.id, users: state.owner }).catch((e) => log('invite.error', { error: e.message }));
   await slack('conversations.setTopic', { channel: c.id, topic: `${t.project} · ${t.id} · ${taskLink(t.id)}` }).catch(() => {});
   return c.id;
@@ -268,9 +276,17 @@ const help = () => `*What I understand* (projects: ${Object.keys(PROJECTS).map((
 
 // ---- what to start, once the project is known
 // kind: task | queue | bug | program; channel: the founder's own channel (task only)
-async function begin(kind, project, text, channel, note = '', files = []) {
+// the type and short title of a message, for the channel name and the PR title
+async function nameOf(text) {
+  if (!text) return {};
+  try { const g = await agents('/classify', { method: 'POST', body: JSON.stringify({ text }) }, 120000); return { ...(g.type ? { type: g.type } : {}), ...(g.title ? { title: g.title } : {}) }; }
+  catch (e) { log('classify.error', { error: e.message }); return {}; }
+}
+async function begin(kind, project, text, channel, note = '', files = [], named = null) {
   if (kind === 'queue') {
-    const items = text.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+    const lines = text.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+    const items = await Promise.all(lines.map(async (l) => ({ text: l, ...(await nameOf(l)) })));
+    for (const i of items) if (i.type === 'epic') delete i.type; // a queue item is one task
     const b = await agents('/batches', { method: 'POST', body: JSON.stringify({ project, items }) });
     state.batches[b.batch] = { ids: b.tasks.map((t) => t.id), project, reported: false };
     for (const t of b.tasks) state.sent[t.id] = 1;
@@ -278,17 +294,22 @@ async function begin(kind, project, text, channel, note = '', files = []) {
     for (const t of b.tasks) await channelFor(t);
     return dm(`📦 *Queue started: ${b.tasks.length} tasks* (${project}${note}), each in its own channel. One summary comes here when all are done.`);
   }
+  named ??= await nameOf(text);
+  if (kind === 'task' && named.type === 'epic') kind = 'program'; // "we want an epic where…" is an epic
+  if (kind === 'bug') named = { ...named, type: 'fix' };
+  if (kind === 'program') delete named.type;
   const attachments = await withImages(files, channel);
   const wait = attachments.length ? 120000 : 10000;
   if (kind === 'bug' || kind === 'program') {
     const t = kind === 'bug'
-      ? await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, kind: 'report', text, attachments }) }, wait)
-      : await agents('/programs', { method: 'POST', body: JSON.stringify({ project, goal: text, attachments }) }, wait);
-    state.sent[t.id] = 1; persist();
-    const ch = await channelFor(t);
+      ? await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, kind: 'report', text, attachments, ...named }) }, wait)
+      : await agents('/programs', { method: 'POST', body: JSON.stringify({ project, goal: text, attachments, ...named }) }, wait);
+    state.sent[t.id] = 1;
+    if (channel) bind(t.id, channel); else persist();
+    const ch = channel ?? await channelFor(t);
     return dm(`${kind === 'bug' ? '🔎 Triage' : '🧭 Epic'} started (${project}${note}) in <#${ch}>.`);
   }
-  const t = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, text, attachments }) }, wait);
+  const t = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, text, attachments, ...named }) }, wait);
   state.sent[t.id] = 1; // the person's own message is #0
   if (channel) bind(t.id, channel); else persist();
   const ch = channel ?? await channelFor(t);
@@ -303,10 +324,10 @@ async function resolve(kind, text, channel, files = []) {
   let guess = { project: null, why: '' };
   try { guess = await agents('/classify', { method: 'POST', body: JSON.stringify({ text: text || '(only an image was sent)' }) }, 120000); } catch (e) { log('classify.error', { error: e.message }); }
   if (guess.project && PROJECTS[guess.project]) {
-    return begin(kind, guess.project, text, channel, `, guessed from your message: ${esc(guess.why || titleCase(guess.project))}. Wrong project? \`/factory stop\` and resend starting with the project name`, files);
+    return begin(kind, guess.project, text, channel, `, guessed from your message: ${esc(guess.why || titleCase(guess.project))}. Wrong project? \`/factory stop\` and resend starting with the project name`, files, { ...(guess.type ? { type: guess.type } : {}), ...(guess.title ? { title: guess.title } : {}) });
   }
   const key = randomBytes(4).toString('hex');
-  state.pending[key] = { kind, text, channel: channel ?? null, files, at: new Date().toISOString() }; persist();
+  state.pending[key] = { kind, text, channel: channel ?? null, files, named: { ...(guess.type ? { type: guess.type } : {}), ...(guess.title ? { title: guess.title } : {}) }, at: new Date().toISOString() }; persist();
   const where = channel ?? state.dm;
   const why = guess.why ? ` (${esc(guess.why)})` : '';
   await slack('chat.postMessage', { channel: where, text: `Which project is this for?${why}`, blocks: [
@@ -398,7 +419,7 @@ export async function onAction(p) {
     if (!job || !PROJECTS[project]) return;
     delete state.pending[key]; persist();
     if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, text: `Project: ${project}`, blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: `✔️ ${titleCase(project)}: ${esc(short(job.text.split('\n')[0], 120))}` }] }] }).catch(() => {});
-    return begin(job.kind, project, job.text, job.channel ?? undefined, '', job.files ?? []);
+    return begin(job.kind, project, job.text, job.channel ?? undefined, '', job.files ?? [], job.named ?? null);
   }
   if (!['go', 'plan'].includes(a?.action_id) || !a.value) return;
   const planIt = a.action_id === 'plan';
@@ -417,12 +438,26 @@ function statusLine() {
 }
 
 // ---- outgoing: what's new in each task goes to its channel
+// once a task's PR is open, the channel the bot made for it says so: pr-<N>-<type>-<title>
+// (a channel the founder made and named stays as they named it)
+export async function renameForPr(t) {
+  const now = state.ownChannel?.[t.id], ch = state.taskChannel[t.id];
+  if (!now || !ch || !t.pr?.number || t.kind === 'program') return;
+  const want = channelName(t);
+  if (now === want || now.startsWith(want)) return;
+  let name = want;
+  try { await slack('conversations.rename', { channel: ch, name }); }
+  catch (e) { if (e.slack !== 'name_taken') throw e; name = `${want.slice(0, 72)}-${t.id.slice(-6)}`; await slack('conversations.rename', { channel: ch, name }); }
+  state.ownChannel[t.id] = name; persist();
+}
+
 export async function pushUpdates() {
   if (!state.owner) return;
   taskList = await agents('/tasks');
   for (const t of taskList) {
     if (state.archived[t.id] || state.skip[t.id]) continue;
     const full = { ...(await agents(`/tasks/${t.id}`)), running: t.running };
+    await renameForPr(full).catch((e) => log('rename.error', { task: t.id, error: e.message }));
     const from = state.sent[t.id] ?? 0;
     const fresh = full.messages.slice(from).filter((m) => m.from !== 'you');
     if (fresh.length) {
