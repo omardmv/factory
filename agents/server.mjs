@@ -165,7 +165,7 @@ function pickup() {
     if (['stopped', 'paused'].includes(t.status)) { update(t.id, (x) => { delete x.job; }); continue; }
     const j = t.job;
     if (j.kind === 'review' || j.kind === 'qa') queue.push(j);
-    else if (t.sessionId && j.from !== 'pause') queue.push({ ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup' });
+    else if (t.sessionId && j.from !== 'pause') queue.push({ ...j, prompt: '[factory] You were interrupted: the factory restarted. Check `git status`, your decision log and your PR, then carry on with the task from where you were.', from: 'pickup', origin: j.from });
     else queue.push(j);
     log('pickup', { task: t.id, kind: j.kind, from: j.from });
   }
@@ -222,7 +222,7 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
   return { last, stderr, sessionId };
 }
 
-async function agentRun({ id, prompt, mode, from }) {
+async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
   const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
   if (r.last) say(id, t.kind === 'program' ? 'coordinator' : 'agent', r.last);
@@ -247,6 +247,10 @@ async function agentRun({ id, prompt, mode, from }) {
     if (mode === 'plan') next = 'waiting for you';
     else if (decision) next = 'decision needed';
     else if (!head) next = 'waiting for you';
+    // an answer to review findings goes back to the panel even with no new commit:
+    // the finding may have asked for evidence (a run, a PR comment), not code.
+    // Bounded: every CHANGES verdict counts toward MAX_FACTORY_ROUNDS.
+    else if (head === done.reviewedSha && done.verdict !== 'PASS' && [from, origin].includes('review')) next = 'reviewing';
     else if (head === done.reviewedSha) next = done.verdict === 'PASS' ? 'ready for you' : 'waiting for you'; // nothing new since the review
     // green: the QA tester first (once per head; a head the agent kept after a
     // QA FAIL goes on to the panel, which sees the report and judges the dispute)
