@@ -7,6 +7,8 @@
 // an `issue` number already has its sub-issue and is never created twice.
 // states = {key: 'pending'|'running'|'merged'|'failed'|'stuck'|'dropped'}.
 
+import { createHash } from 'node:crypto';
+
 export const EPIC_MARK = '<!-- factory-epic -->';
 const ICON = { pending: '⏳ pending', running: '🔨 running', merged: '✅ merged', failed: '❌ failed', stuck: '⚠️ needs the founder', dropped: '🚫 dropped' };
 const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ');
@@ -119,3 +121,44 @@ export function copyIssueFields(current, from) {
   return current;
 }
 
+
+// Keeps the epic on GitHub in step with the plan, spending API calls only when
+// something changed. task = {epicIssue, plan, epicSyncHash?, epicDropped?, epicClosed?}.
+// states = {key: state} (the same words as above); done: PROGRAM DONE, close the epic.
+// Never throws: a failure comes back as `error`, the hash is left alone, and the
+// next pass tries again. Mutates task (issue fields, epicSyncHash, epicDropped, epicClosed);
+// the caller saves the task afterwards, whatever the outcome.
+export const epicHash = (task, states, done) => createHash('sha1').update(JSON.stringify([
+  (task.plan ?? []).map((i) => [i.key, i.title, i.task, i.deps, i.wave, states[i.key] ?? 'pending']),
+  (task.epicDropped ?? []).map((p) => p.key), !!done, !!task.epicClosed])).digest('hex');
+
+export async function syncEpicIfChanged({ gh, getToken, repo, task, states, goal, tasksUrl, done = false }) {
+  if (!task.epicIssue?.number || !task.plan?.length) return { changed: false };
+  const hash = epicHash(task, states, done);
+  if (task.epicSyncHash === hash) return { changed: false };
+  try {
+    const token = await getToken();
+    await syncEpicIssue({ gh, token, repo, epic: task.epicIssue, goal, plan: task.plan, states, tasksUrl, previous: task.epicDropped ?? [] });
+    if (done !== !!task.epicClosed) {
+      await gh(token, `/repos/${repo}/issues/${task.epicIssue.number}`, 'PATCH', done ? { state: 'closed', state_reason: 'completed' } : { state: 'open' });
+      task.epicClosed = done;
+    }
+    task.epicDropped = [];
+    task.epicSyncHash = epicHash(task, states, done);
+    return { changed: true };
+  } catch (e) {
+    return { changed: false, error: e.message };
+  }
+}
+
+// before a revision replaces the plan: the sub-issues of tasks it drops, to close as not planned
+export function droppedWithIssues(before, after) {
+  return before.filter((p) => p.issue && !after.some((i) => i.key === p.key));
+}
+
+// after a sync: write the sub-issue fields back by key, overwriting (a repaired link, a fetched issueId)
+export function saveIssueFields(current, from) {
+  const by = new Map(from.filter((i) => i.issue).map((i) => [i.key, i]));
+  for (const i of current) { const f = by.get(i.key); if (f && (!i.issue || i.issue === f.issue)) { i.issue = f.issue; i.issueId = f.issueId; if (f.linked === undefined) delete i.linked; else i.linked = f.linked; } }
+  return current;
+}

@@ -16,7 +16,7 @@
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
-import { openEpicIssue, refsLine, copyIssueFields } from './epic-issue.mjs';
+import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -510,7 +510,7 @@ function startReady(t) {
     const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title });
     i.taskId = kid.id;
   }
-  update(t.id, (x) => { x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
+  update(t.id, (x) => { copyIssueFields(t.plan, x.plan ?? []); x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
   say(t.id, 'factory', `[factory] started ${g.ready.length}: ${g.ready.map((i) => `${i.title} (wave ${i.wave})`).join('; ')}. Everything each one depends on has merged.`);
   log('epic.start', { task: t.id, started: g.ready.map((i) => i.key) });
   return progress(t.plan, itemState);
@@ -536,22 +536,44 @@ function approvePlan(t, text) {
       catch (e) { log('epic.start.failed', { task: t.id, error: e.message }); }
     });
 }
+// Keeps the GitHub epic in step with the plan; only talks to GitHub when the
+// states changed (hash on the task). Soft: a failure is logged, retried next pass.
+const syncingEpic = new Set();
+async function syncEpic(id, done = false) {
+  if (syncingEpic.has(id) || openingEpic.has(id)) return;
+  syncingEpic.add(id);
+  try {
+    const t = load(id);
+    if (!t.epicIssue?.number || !Array.isArray(t.plan)) return;
+    const states = Object.fromEntries(t.plan.map((i) => [i.key, itemState(i)]));
+    if (!done && t.epicClosed && t.plan.every((i) => states[i.key] === 'merged')) done = true; // chat after PROGRAM DONE with no new work: stay closed
+    const sent = new Set((t.epicDropped ?? []).map((p) => p.key)); // what this pass will close
+    const r = await syncEpicIssue({ gh, getToken: () => githubToken(t.repo), repo: t.repo, task: t, states, goal: messages(id)[0]?.text ?? t.title, tasksUrl: `${DASHBOARD}/?task=${id}`, done });
+    // saved either way: sub-issues opened before a failure must not be opened twice.
+    // Only the dropped keys sent to GitHub are cleared, and only on success; a revision saved meanwhile keeps its own.
+    update(id, (x) => { saveIssueFields(x.plan ?? [], t.plan); for (const k of ['epicSyncHash', 'epicClosed']) x[k] = t[k]; if (!r.error) x.epicDropped = (x.epicDropped ?? []).filter((p) => !sent.has(p.key)); });
+    if (r.error) log('epic.sync.failed', { task: id, error: r.error }); else if (r.changed) log('epic.synced', { task: id });
+  } catch (e) { log('epic.sync.failed', { task: id, error: e.message }); }
+  finally { syncingEpic.delete(id); }
+}
 function afterCoordinator(t, mode, from, last, decision) {
   if (decision) { t.status = 'decision needed'; save(t); return pump(); }
-  if (/^\s*PROGRAM DONE\b/m.test(last)) { t.status = 'done'; save(t); return pump(); }
+  if (/^\s*PROGRAM DONE\b/m.test(last)) { t.status = 'done'; save(t); syncEpic(t.id, true); return pump(); }
   if (t.phase === 'talk') { t.status = 'waiting for you'; save(t); return pump(); } // discussion: never a plan, the person says "plan"
   if (t.phase === 'brief') { t.status = 'waiting for you'; save(t); return pump(); } // the plan waits for "go"
   if (/```plan/.test(last)) { // a revision while it runs: what has started keeps going
     const r = parsePlan(last), m = r.error ? r : mergePlan(t.plan, r.tasks);
     if (m.error) say(t.id, 'factory', `[factory] the revised plan was not applied: ${m.error}. The current plan keeps going.`);
-    else { t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
+    else { t.epicDropped = [...(t.epicDropped ?? []), ...droppedWithIssues(t.plan, m.items)]; t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
   }
   t.status = 'running'; save(t);
-  if (!openingEpic.has(t.id)) startReady(t);
+  if (!openingEpic.has(t.id)) { startReady(t); syncEpic(t.id); }
   pump();
 }
 const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
 async function watchPrograms() {
+  // a finished epic whose issue is still open: the close is retried until it works
+  for (const t of allTasks().filter((x) => x.kind === 'program' && x.status === 'done' && x.epicIssue?.number && !x.epicClosed)) await syncEpic(t.id, true);
   for (const t of allTasks().filter((x) => x.kind === 'program' && x.phase === 'run' && Array.isArray(x.plan) && x.plan.length && !['done', 'stopped', 'decision needed'].includes(x.status))) {
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
     for (const i of t.plan.filter((i) => i.taskId)) { // PR states can change on GitHub (merged, closed by hand)
@@ -560,6 +582,7 @@ async function watchPrograms() {
     }
     if (openingEpic.has(t.id)) continue;
     const g = startReady(t);
+    await syncEpic(t.id);
     const status = g.done ? 'verifying' : g.stalled ? 'waiting for you' : `running · ${g.merged}/${g.total} merged`;
     if (t.status !== status) update(t.id, (x) => { x.status = status; });
     if (g.done && !t.finalCheck) {
