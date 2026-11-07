@@ -1,6 +1,6 @@
 // node agents/test-watchdog.mjs
 import assert from 'node:assert/strict';
-import { statusClock, watchdogDecision, LIMIT_MIN, GRACE_MIN } from './watchdog.mjs';
+import { jobStarted, statusClock, watchdogDecision, LIMIT_MIN, GRACE_MIN } from './watchdog.mjs';
 
 let n = 0;
 const test = async (name, f) => { await f(); n++; console.log('ok', name); };
@@ -104,6 +104,18 @@ await test('real movement (a new status other than the nudge turn) clears the ma
   assert.equal(t.watchNudgedAt, undefined);
   const u = { status: 'working', watchNudgedAt: at(30) }; statusClock(u, at(31)); // legacy task: adopted, marks kept
   assert.equal(u.watchNudgedAt, at(30));
+});
+
+await test('ping, then the person replies (a new turn in the same state), then a second stall is nudged again', () => {
+  let t = { status: 'working' }; statusClock(t, at(0));
+  t.watchNudgedAt = at(30); t.watchState = 'working'; t.watchEscalatedAt = at(36);
+  assert.equal(watchdogDecision(t, ctx(100)).action, 'none');
+  jobStarted(t, { kind: 'agent', from: 'person' });   // the reply starts a turn; status stays 'working'
+  t.statusSince = at(100);
+  assert.equal(watchdogDecision(t, ctx(100 + LIMIT_MIN.working)).action, 'nudge');
+  // the nudge's own job keeps the marks
+  const n = { status: 'reviewing', watchNudgedAt: at(30) }; jobStarted(n, { kind: 'review', from: 'nudge' });
+  assert.equal(n.watchNudgedAt, at(30));
 });
 
 console.log(`${n} groups passed`);

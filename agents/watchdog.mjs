@@ -70,3 +70,10 @@ export function statusClock(t, now) {
   if (!ownTurn) { delete t.watchNudgedAt; delete t.watchEscalatedAt; delete t.watchState; }
   return t;
 }
+
+// A job starts on the task. A job the watchdog's nudge started keeps the marks (one nudge, then the ping);
+// any other job (the person's reply, a review fix, a restart) is new movement: the next stall is a new one.
+export function jobStarted(t, job) {
+  if (job.from !== 'nudge') { delete t.watchNudgedAt; delete t.watchEscalatedAt; delete t.watchState; }
+  return t;
+}

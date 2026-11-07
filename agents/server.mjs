@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
-import { watchdogDecision, statusClock } from './watchdog.mjs';
+import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
@@ -148,8 +148,9 @@ const QUEUE_FILE = `${HOME}/queue.json`;
 const queue = readJson(QUEUE_FILE, []); // { id, kind: 'agent' | 'qa' | 'review', prompt?, mode?, from? }
 const saveQueue = () => writeFileSync(QUEUE_FILE, JSON.stringify(queue));
 function enqueue(id, prompt, mode, from, origin) { queue.push({ id, kind: 'agent', prompt, mode, from, ...(origin ? { origin } : {}) }); saveQueue(); pump(); }
-function enqueueReview(id) { if (!queue.some((j) => j.id === id && j.kind === 'review')) queue.push({ id, kind: 'review' }); saveQueue(); pump(); }
-function enqueueQa(id) { if (!queue.some((j) => j.id === id && j.kind === 'qa')) queue.push({ id, kind: 'qa' }); saveQueue(); pump(); }
+function enqueueReview(id, from) { if (!queue.some((j) => j.id === id && j.kind === 'review')) queue.push({ id, kind: 'review', ...(from ? { from } : {}) }); saveQueue(); pump(); }
+function enqueueQa(id) { return enqueueQaFrom(id); }
+function enqueueQaFrom(id, from) { if (!queue.some((j) => j.id === id && j.kind === 'qa')) queue.push({ id, kind: 'qa', ...(from ? { from } : {}) }); saveQueue(); pump(); }
 const JOB_NAME = { agent: 'agent', qa: 'QA tester', review: 'reviewer' };
 function dropQueued(id) { for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === id) queue.splice(i, 1); saveQueue(); }
 function pump() {
@@ -158,7 +159,7 @@ function pump() {
     if (i < 0) break;
     const [job] = queue.splice(i, 1); saveQueue();
     job.seq = randomBytes(4).toString('hex');
-    update(job.id, (t) => { t.job = job; });
+    update(job.id, (t) => { t.job = job; jobStarted(t, job); });
     // forget the job once it ended, unless the next job of this task already took its place
     const forget = (t) => { if (t.job?.seq === job.seq) delete t.job; };
     (job.kind === 'review' ? review(job) : job.kind === 'qa' ? qa(job) : agentRun(job)).then(() => update(job.id, forget)).catch((e) => {
@@ -851,8 +852,8 @@ function watchdog(now = Date.now()) {
     say(t.id, 'factory', d.text);
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue; // a live job is the nudge's target already; the grace period tells whether it moves
     if (d.state === 'queued') pump();
-    else if (d.state === 'reviewing') enqueueReview(t.id);
-    else if (d.state === 'testing') enqueueQa(t.id);
+    else if (d.state === 'reviewing') enqueueReview(t.id, 'nudge');
+    else if (d.state === 'testing') enqueueQaFrom(t.id, 'nudge');
     else enqueue(t.id, NUDGE_PROMPT, d.state === 'planning' || d.state === 'briefing' ? 'plan' : 'bypassPermissions', 'nudge', t.job?.origin ?? t.job?.from); // keeps a review fix a review fix
   }
 }
