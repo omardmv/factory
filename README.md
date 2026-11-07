@@ -118,8 +118,10 @@ Telegram at 08:00 Tashkent (`/digest` any time).
 passes, the factory merges the PR itself, but only into that one branch
 (Sayra: `staging`; the factory: `main`), only at the exact
 head the panel reviewed (GitHub's sha lock), and only through the branch's
-own protection (its required checks, if any). A refused merge retries for about
-20 minutes, then waits for you. A project's production branch is never
+own protection (its required checks, if any). A PR that no longer merges cleanly
+(another one landed first and conflicts) goes back to its agent to merge the
+base in and resolve, then is reviewed again (at most 3 rounds). Any other
+refused merge retries for about 20 minutes, then waits for you. A project's production branch is never
 merged by the factory: it keeps the staging sign-off. Self-update refuses a
 factory commit whose shell, JavaScript or projects.json does not parse.
 

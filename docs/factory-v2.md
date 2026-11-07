@@ -151,6 +151,36 @@ every push; e2e tests only, no unit tests; empirical verification (e2e on
 the preview, QA) and formal verification where a bug is costly; the
 project's rules, skills and AGENTS.md; then human review on staging.
 
+## 5d. Epics and waves
+
+A big goal becomes an **epic** (today's "program"): a coordinator agent that
+plans and tracks, never codes. Founder 2026-11-08.
+
+- **Talk first.** You and the coordinator discuss what to build and how to
+  improve it; it reads the code, proposes options and trade-offs. It writes
+  the plan only when you say so.
+- **The whole plan up front:** every task, each one PR an agent can finish
+  and prove alone, with what it **depends on**. Waves are just the result:
+  wave 1 = no dependencies, wave 2 = depends only on wave 1, and so on.
+- **A task starts as soon as everything it depends on has merged**, not when
+  the whole previous wave has. Unrelated work never waits. After each merge
+  the coordinator may revise the rest from what actually landed.
+- **On GitHub:** an epic issue (goal, waves, build order, tables) with one
+  sub-issue per task, in order; a sub-issue closes when its PR merges, so
+  the epic shows progress (13/15).
+- **In Slack:** a channel for the epic (plan, progress, decisions, each
+  wave's results); each task keeps its own channel.
+- **Parallel without jams:** up to 5 agents at once by default (the box fits
+  6-8 at 4 CPU / 8 GB each; the Claude plan's usage is the real limit). When
+  a parallel PR no longer merges cleanly into staging, the factory sends it
+  back to its agent: merge staging into the branch, resolve, re-run the
+  checks; then it is reviewed and merged again. At most 3 such rounds, then
+  it waits for the founder.
+
+Build order: (1) conflicts back to the agent + more agents at once; (2)
+task-level dependencies; (3) the epic issue and sub-issues; (4) discussion
+mode and the epic channel.
+
 ## 6. Safety gates (never self-modified)
 
 Any change to these is `DECISION NEEDED` and waits for the founder, even
