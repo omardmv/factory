@@ -120,8 +120,8 @@ export function announcements(items, g, said, linkOf) {
   for (const i of newly) lines.push(`[factory] merged: ${linkOf(i)}. ${g.merged}/${g.total} tasks merged.`);
   const reports = wavesReport(items, g.state), fresh = reports.filter((w) => w.complete && !waves.includes(waveId(w)));
   for (const w of fresh) {
-    const later = reports.find((r) => r.wave > w.wave);
-    const next = later ? later.items.filter((i) => ['pending', 'running'].includes(g.state[i.key])).map((i) => i.title).join('; ') || 'waiting on the earlier tasks' : 'nothing, that was the last wave';
+    const later = reports.some((r) => r.wave > w.wave);
+    const next = later ? items.filter((i) => i.wave > w.wave && (g.state[i.key] === 'running' || (g.state[i.key] === 'pending' && i.deps.every((d) => g.state[d] === 'merged')))).map((i) => i.title).join('; ') || 'nothing yet: the rest waits on unfinished tasks' : 'nothing, that was the last wave';
     lines.push(`[factory] wave ${w.wave} done: ${w.items.map(linkOf).join('; ')}. ${g.merged}/${g.total} merged; next: ${next}.`);
   }
   return { lines, said: { merged: [...merged, ...newly.map((i) => i.key)], waves: [...waves, ...fresh.map(waveId)] } };

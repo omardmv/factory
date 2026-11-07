@@ -126,4 +126,16 @@ const a5 = announcements(w3, progress(w3, (i) => st3[i.key]), s1, lk);
 assert.ok(a5.lines.some((l) => /wave 2 done: e/.test(l)), a5.lines.join('|'));
 ok('announcements: waves are remembered by their tasks, so renumbering does not hide one');
 
+// a wave that gains a task after it was announced is announced again when the new task merges (new work finished)
+const w1 = parsePlan(block([T('a'), T('b'), T('c', ['a', 'b'])])).tasks;
+const sA = announcements(w1, progress(w1, (i) => (i.key === 'c' ? 'pending' : 'merged')), undefined, lk).said;
+const w1r = mergePlan(w1.map((i) => ({ ...i, taskId: 'x' })), parsePlan(block([T('a'), T('b'), T('e'), T('c', ['a', 'b'])])).tasks).items;
+const stR = { a: 'merged', b: 'merged', e: 'running', c: 'pending' };
+assert.deepEqual(announcements(w1r, progress(w1r, (i) => stR[i.key]), sA, lk).lines, []);
+stR.e = 'merged';
+const aR = announcements(w1r, progress(w1r, (i) => stR[i.key]), sA, lk);
+assert.match(aR.lines.at(-1), /wave 1 done: a; b; e\. 3\/4 merged; next: c\./);
+assert.deepEqual(announcements(w1r, progress(w1r, (i) => stR[i.key]), aR.said, lk).lines.filter((l) => /wave/.test(l)), []);
+ok('announcements: a wave that gains a task is announced again once, when the new task merges; "next" only names what can start');
+
 console.log(`all ${n} passed`);
