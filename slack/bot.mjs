@@ -69,7 +69,7 @@ export function mrkdwn(md) {
 }
 const taskLink = (id) => `${DASHBOARD}/?task=${id}`;
 const isBriefLike = (t) => (t.kind === 'program' && t.phase === 'brief') || (t.kind === 'change' && t.phase === 'brief' && t.status === 'waiting for you');
-// one task message, ready to post: { text, go } (go: show a Go button)
+// one task message, ready to post: { text, go, plan } (go: show a Go button; plan: a Plan it button, epic in talk phase)
 export function render(t, m) {
   const links = [t.pr ? `<${t.pr.url}|PR #${t.pr.number}>` : '', `<${taskLink(t.id)}|full conversation>`].filter(Boolean).join(' · ');
   const head = (icon, label) => `${icon} *${esc(label)}*`;
@@ -92,18 +92,21 @@ export function render(t, m) {
   const body = clip(m.text, 3500);
   const triage = t.kind === 'report' && /^TRIAGE:\s*(\S+)\s+(\S+)\s*(\S*)/m.exec(m.text);
   const brief = !decision && isBriefLike(t);
+  const talk = !decision && t.kind === 'program' && t.phase === 'talk';
   const label = decision ? 'Decision needed: reply here with your choice'
+    : talk ? 'Epic discussion: talk it through, then Plan it'
     : t.kind === 'program' ? (t.phase === 'brief' ? 'Epic plan: Go, or reply to change it' : 'Epic coordinator')
     : triage ? `Triage: ${triage[1]} → ${triage[2]}`
     : brief ? 'Brief: Go, or reply with your answers' : 'Agent';
   const icon = decision ? '❓' : t.kind === 'program' ? '🧭' : t.kind === 'report' ? '🔎' : '🤖';
-  return { text: `${head(icon, label)}\n${mrkdwn(body.text)}${body.cut ? '\n…' : ''}\n${links}`, go: brief };
+  return { text: `${head(icon, label)}\n${mrkdwn(body.text)}${body.cut ? '\n…' : ''}\n${links}`, go: brief, plan: talk };
 }
-async function post(channel, text, { go, taskId } = {}) {
+async function post(channel, text, { go, plan, taskId } = {}) {
   const chunks = []; for (let i = 0; i < text.length; i += 3900) chunks.push(text.slice(i, i + 3900));
   for (const [i, c] of chunks.entries()) {
     const last = i === chunks.length - 1;
-    const blocks = go && last ? [{ type: 'section', text: { type: 'mrkdwn', text: c } }, { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Go' }, style: 'primary', action_id: 'go', value: taskId }] }] : undefined;
+    const btn = go ? ['Go', 'go'] : plan ? ['Plan it', 'plan'] : null;
+    const blocks = btn && last ? [{ type: 'section', text: { type: 'mrkdwn', text: c } }, { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: btn[0] }, style: 'primary', action_id: btn[1], value: taskId }] }] : undefined;
     await slack('chat.postMessage', { channel, text: c, blocks, unfurl_links: false, unfurl_media: false });
   }
 }
@@ -142,8 +145,8 @@ async function archiveIfFinished(t) {
 const HELP = `*What I understand*
 • create a channel and write your idea: that's the task (name it \`sayra-…\` or \`factory-…\` to pick the project, or I'll work it out and ask if unsure)
 • or DM me: a plain message starts a task in a new channel (I work out the project from your words and ask if unsure; \`sayra:\` / \`factory:\` at the start picks it)
-• \`queue:\` + one task per line · \`bug:\` + what's wrong · \`epic:\` + a big goal: the coordinator plans every task with what it depends on, you press Go, unrelated tasks run in parallel (add the project, e.g. \`epic sayra:\`)
-• in a task's channel, everything you write goes to the agent; Go starts a brief or a plan
+• \`queue:\` + one task per line · \`bug:\` + what's wrong · \`epic:\` + a big goal: the coordinator plans every task with what it depends on, you talk it through, press Plan it, then Go; unrelated tasks run in parallel (add the project, e.g. \`epic sayra:\`)
+• in a task's channel, everything you write goes to the agent; Go starts a brief or a plan; Plan it ends an epic discussion
 • \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`help\` anywhere`;
 
 // ---- what to start, once the project is known
@@ -275,11 +278,12 @@ export async function onAction(p) {
     if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, text: `Project: ${project}`, blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: `✔️ ${titleCase(project)}: ${esc(short(job.text.split('\n')[0], 120))}` }] }] }).catch(() => {});
     return begin(job.kind, project, job.text, job.channel ?? undefined);
   }
-  if (a?.action_id !== 'go' || !a.value) return;
-  await agents(`/tasks/${a.value}/messages`, { method: 'POST', body: JSON.stringify({ text: 'go' }) });
+  if (!['go', 'plan'].includes(a?.action_id) || !a.value) return;
+  const planIt = a.action_id === 'plan';
+  await agents(`/tasks/${a.value}/messages`, { method: 'POST', body: JSON.stringify({ text: a.action_id }) });
   // replace the button with who pressed it, so it can't be pressed twice
   const section = p.message?.blocks?.find((b) => b.type === 'section');
-  if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, text: p.message.text, blocks: [...(section ? [section] : []), { type: 'context', elements: [{ type: 'mrkdwn', text: '▶️ Go: the agent is on it.' }] }] }).catch(() => {});
+  if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, text: p.message.text, blocks: [...(section ? [section] : []), { type: 'context', elements: [{ type: 'mrkdwn', text: planIt ? '🗺️ Plan it: the coordinator is writing the plan.' : '▶️ Go: the agent is on it.' }] }] }).catch(() => {});
 }
 
 function statusLine() {
@@ -300,7 +304,7 @@ export async function pushUpdates() {
     const fresh = full.messages.slice(from).filter((m) => m.from !== 'you');
     if (fresh.length) {
       const ch = await channelFor(full);
-      for (const m of fresh) { const r = render(full, m); await post(ch, r.text, { go: r.go, taskId: t.id }); }
+      for (const m of fresh) { const r = render(full, m); await post(ch, r.text, { go: r.go, plan: r.plan, taskId: t.id }); }
     }
     state.sent[t.id] = full.messages.length; persist();
     await archiveIfFinished(full);
