@@ -31,11 +31,13 @@ const WHY = {
 const ms = (iso) => { const v = Date.parse(iso ?? ''); return Number.isFinite(v) ? v : 0; };
 
 // task: { status, statusSince, updatedAt, watchNudgedAt, watchEscalatedAt }
-// ctx: { now (ms), running (this task has a container), anyRunning (any task has), lastActivityAt (iso) }
+// ctx: { now (ms), inQueue (a job of this task waits), slotsFull (every parallel slot is busy), running (this task has a container), anyRunning (any task has), lastActivityAt (iso) }
 // -> { action: 'none' } | { action: 'nudge', state, idleMin, text } | { action: 'escalate', state, idleMin, text, ping }
-export function watchdogDecision(task, { now, running = false, anyRunning = false, lastActivityAt } = {}, { limits = LIMIT_MIN, graceMin = GRACE_MIN } = {}) {
+export function watchdogDecision(task, { now, running = false, anyRunning = false, inQueue = false, slotsFull = false, lastActivityAt } = {}, { limits = LIMIT_MIN, graceMin = GRACE_MIN } = {}) {
   const limit = limits[task.status];
   if (!limit || task.watchEscalatedAt) return { action: 'none' };
+  // a job waiting in the queue while every slot is busy is waiting its turn, in any state
+  if (inQueue && slotsFull && !running) return { action: 'none' };
   // queued while the slots are busy is waiting its turn, not stuck
   if (task.status === 'queued' && (running || anyRunning)) return { action: 'none' };
   const lastSign = Math.max(ms(task.statusSince ?? task.updatedAt), ms(lastActivityAt));

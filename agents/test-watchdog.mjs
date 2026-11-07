@@ -32,6 +32,14 @@ await test('queued: only stuck when nothing is running; busy slots are just wait
   assert.equal(watchdogDecision(task('queued'), ctx(60, { running: true })).action, 'none');
   assert.equal(watchdogDecision(task('queued'), ctx(5)).action, 'nudge');
 });
+await test('a queued job behind full slots is waiting its turn in any state, not stuck', () => {
+  for (const s of ['working', 'reviewing', 'testing', 'waiting for checks']) {
+    assert.equal(watchdogDecision(task(s), ctx(500, { inQueue: true, slotsFull: true })).action, 'none', s);
+    assert.equal(watchdogDecision(task(s, { watchNudgedAt: at(30) }), ctx(500, { inQueue: true, slotsFull: true })).action, 'none', s);
+  }
+  // free slots but still queued for 30 min: that is stuck
+  assert.equal(watchdogDecision(task('working'), ctx(40, { inQueue: true, slotsFull: false })).action, 'nudge');
+});
 await test('a sign of life (agent activity) restarts the clock', () => {
   assert.equal(watchdogDecision(task('working'), ctx(40, { running: true, lastActivityAt: at(35) })).action, 'none');
   assert.equal(watchdogDecision(task('working'), ctx(40, { running: true, lastActivityAt: at(5) })).action, 'nudge');

@@ -839,7 +839,7 @@ const NUDGE_PROMPT = '[factory] Nudge: the factory saw no progress on this task 
 function watchdog(now = Date.now()) {
   for (const t of allTasks()) {
     const act = `${dir(t.id)}/activity.log`;
-    const d = watchdogDecision(t, { now, running: running.has(t.id), anyRunning: running.size > 0, lastActivityAt: existsSync(act) ? statSync(act).mtime.toISOString() : undefined });
+    const d = watchdogDecision(t, { now, running: running.has(t.id), anyRunning: running.size > 0, inQueue: queue.some((j) => j.id === t.id), slotsFull: running.size >= MAX_PARALLEL, lastActivityAt: existsSync(act) ? statSync(act).mtime.toISOString() : undefined });
     if (d.action === 'none') continue;
     log(`watchdog.${d.action}`, { task: t.id, state: d.state, idleMin: d.idleMin });
     if (d.action === 'escalate') {
@@ -853,7 +853,7 @@ function watchdog(now = Date.now()) {
     if (d.state === 'queued') pump();
     else if (d.state === 'reviewing') enqueueReview(t.id);
     else if (d.state === 'testing') enqueueQa(t.id);
-    else enqueue(t.id, NUDGE_PROMPT, d.state === 'planning' || d.state === 'briefing' ? 'plan' : 'bypassPermissions', 'nudge');
+    else enqueue(t.id, NUDGE_PROMPT, d.state === 'planning' || d.state === 'briefing' ? 'plan' : 'bypassPermissions', 'nudge', t.job?.origin ?? t.job?.from); // keeps a review fix a review fix
   }
 }
 setInterval(() => { try { watchdog(); } catch (e) { log('watchdog.failed', { error: e.message }); } }, WATCHDOG_EVERY_S * 1000);
