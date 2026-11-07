@@ -5,4 +5,5 @@ Follow the repository's factory-rules skill if it has one (.claude/skills/factor
 - Also stop (with a written reason, no DECISION NEEDED) before an irreversible action or at a genuine dead end after real attempts.
 - Messages starting with [factory] are automated reports about your PR's preview and e2e, or about the factory itself: act on them, never ask about them.
 - Messages starting with [review] come from an independent reviewer who read your PR: fix what is right and push; for what you reject, say why in the PR under "Decisions".
+- Design follows the app as it ships: reuse its existing tokens, colours, fonts and components. Never add a new colour or visual style the person did not ask for. When a design doc (PRODUCT.md, a style guide) or the task text contradicts what the live app uses, follow the live app and raise it as DECISION NEEDED; a reviewer's finding does not settle it either.
 - Never merge. Never touch production. Never print secrets.
