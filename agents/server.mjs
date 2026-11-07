@@ -8,14 +8,14 @@
 //    you, CHANGES = back to the agent)
 //  - report: triage a bug report (classify, dedupe, reproduce twice, file or
 //    update the issue, label it); ready-for-agent issues then become changes
-//  - program: a coordinator plans phases of independent changes; you approve
-//    the plan once; each phase runs as a batch, the next is planned when you
-//    have merged the last
+//  - program (epic): a coordinator plans every task with what it depends on; you approve
+//    the plan once; each task starts as soon as what it depends on has merged
 // Tasks also arrive by themselves (issues labelled ready-for-agent or
 // needs-triage) and in batches. The queue and running jobs survive a restart.
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
+import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS } from './plan.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync } from 'node:fs';
@@ -446,63 +446,101 @@ async function autoMerge(id) {
 }
 const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
 
-// ---------- programs: a coordinator plans phases, agents do the pieces, you merge ----------
-const phaseBlock = (text) => { const m = /```phase\s*([\s\S]*?)```/.exec(text ?? ''); if (!m) return null; try { const j = JSON.parse(m[1]); return Array.isArray(j.tasks) && j.tasks.length ? j : null; } catch { return null; } };
+// ---------- epics (programs) ----------
+// A coordinator plans every task of a big goal with what it depends on (one PR
+// each, agents/plan.mjs); you approve the plan once ("go"). Each task starts as
+// soon as everything it depends on has merged, so unrelated work runs in
+// parallel and waves are only the result. The coordinator never writes code;
+// you can reply at any time to revise what has not started.
+const PLAN_RULES = `The plan lists EVERY task of the epic. Each task is one PR an agent can finish and prove on its own (its own tests, its own review): say what to change, where, and how done is checked, in a few sentences, self-contained (the agent sees only the epic's goal and its own task). Give each task a short key (lowercase letters, digits, dashes) and "depends_on": the keys of the tasks that must be MERGED before it can start, and only real dependencies (code it builds on, a flag it needs, a file it would conflict on): everything else runs in parallel, so do not chain tasks just to order them. At most ${MAX_PLAN_TASKS} tasks; split the epic if it needs more.
+End your reply with the whole plan as a fenced block exactly like:
+\`\`\`plan
+{"tasks": [{"key": "flag", "title": "one line", "task": "what to do, where, how done is checked", "depends_on": []}, {"key": "next-thing", "title": "...", "task": "...", "depends_on": ["flag"]}]}
+\`\`\``;
 function createProgram(project, goal) {
   const p = PROJECTS[project]; if (!p) throw new Error(`unknown project ${project}`);
   if (!goal) throw new Error('empty goal');
   const id = newId(); mkdirSync(dir(id), { recursive: true });
-  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'brief', status: 'queued', children: [], programPhase: 0, factoryRounds: 0, createdAt: new Date().toISOString() };
+  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'brief', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString() };
   save(t); say(id, 'you', goal);
-  enqueue(id, `PROGRAM ${id} in ${p.repo} (base ${p.base}). You are its coordinator: you plan and track; you never write code. Agents do each piece as its own task and PR (each gets its own preview, tests and an independent review), and a person merges.
+  enqueue(id, `EPIC ${id} in ${p.repo} (base ${p.base}). You are its coordinator: you plan and track; you never write code. Agents do each piece as its own task and PR (each with its own tests and an independent review); approved PRs merge into ${p.autoMerge ?? p.base}${p.autoMerge ? ' by themselves' : ' when the person merges them'}.
 
 GOAL:
 ${goal}
 
-Frame it with the "large" playbook: the definition of done for the whole program, scope, risks. Then the phases. A phase is a set of tasks that are independent of each other (they run in parallel and can merge in any order); a later phase may depend on earlier phases being merged. Each task is one PR an agent can finish and prove on its own: say what to change, where, and how done is checked, in a few sentences. At most 8 tasks per phase. Plan the first phase in detail; the later phases one line each.
-Reply to the person in plain words (framing, then the phases), then the first phase as a fenced block exactly like:
-\`\`\`phase
-{"phase": 1, "tasks": ["...", "..."]}
-\`\`\`
-Read the code you need. Do not change any file.`, 'plan', 'start');
+Read the code you need. Frame it with the "large" playbook: the definition of done for the whole epic, scope, risks. Then plan it.
+Reply to the person in plain words: the framing, then the waves the dependencies make (wave 1: what starts at once; wave 2: what each waits for; ...) as short lists, then the risks. ${PLAN_RULES}
+Do not change any file.`, 'plan', 'start');
   return t;
 }
-function launchPhase(t, block) {
-  const n = block.phase ?? t.programPhase + 1;
+// where one planned task stands (agents/plan.mjs progress())
+function itemState(i) {
+  if (!i.taskId || !existsSync(`${dir(i.taskId)}/task.json`)) return 'pending';
+  const k = load(i.taskId);
+  if (k.pr?.state === 'merged' || k.status === 'merged') return 'merged';
+  if (k.pr?.state === 'closed' || k.status === 'stopped') return 'failed';
+  if (running.has(k.id) || queue.some((j) => j.id === k.id)) return 'running';
+  if (['decision needed', 'waiting for you', 'paused'].includes(k.status) || (k.status === 'ready for you' && !k.mergeWanted)) return 'stuck';
+  return 'running';
+}
+function startReady(t) {
+  const g = progress(t.plan, itemState);
+  if (!g.ready.length) return g;
   const goal = messages(t.id)[0]?.text ?? t.title;
-  const kids = block.tasks.slice(0, 8).map((text) => createTask(t.project, `Part of program ${t.id}, phase ${n}. The program's goal, for context only (do just your part):\n${goal.slice(0, 2000)}\n\nYOUR TASK:\n${text}`, true, { parent: t.id, batch: t.id, title: String(text).split('\n')[0].slice(0, 90) }));
-  update(t.id, (x) => { x.phase = 'run'; x.programPhase = n; x.children = [...(x.children ?? []), ...kids.map((k) => k.id)]; x.phaseChildren = kids.map((k) => k.id); x.status = `running phase ${n}`; x.mergeNoticeFor = null; });
-  say(t.id, 'factory', `[factory] phase ${n} started: ${kids.length} task${kids.length === 1 ? '' : 's'}. Each runs to a reviewed PR; the next phase is planned when you have merged these.`);
-  log('program.phase', { task: t.id, phase: n, children: kids.map((k) => k.id) });
+  const byKey = Object.fromEntries(t.plan.map((i) => [i.key, i]));
+  for (const i of g.ready) {
+    const built = i.deps.map((d) => { const k = byKey[d].taskId ? load(byKey[d].taskId) : null; return `- ${byKey[d].title}${k?.pr ? ` (PR #${k.pr.number}, merged)` : ''}`; }).join('\n');
+    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}YOUR TASK:\n${i.task}`, true, { parent: t.id, batch: t.id, title: i.title });
+    i.taskId = kid.id;
+  }
+  update(t.id, (x) => { x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
+  say(t.id, 'factory', `[factory] started ${g.ready.length}: ${g.ready.map((i) => `${i.title} (wave ${i.wave})`).join('; ')}. Everything each one depends on has merged.`);
+  log('epic.start', { task: t.id, started: g.ready.map((i) => i.key) });
+  return progress(t.plan, itemState);
+}
+function approvePlan(t, text) {
+  const r = parsePlan(text);
+  if (r.error) { say(t.id, 'factory', `[factory] the plan can't start: ${r.error}. Asked the coordinator to fix it.`); enqueue(t.id, `[factory] Your plan block is invalid: ${r.error}. Send the corrected plan. ${PLAN_RULES}`, 'plan', 'person'); return; }
+  t.plan = r.tasks; t.phase = 'run'; t.status = 'running'; t.stallNotice = null; save(t);
+  const w = Math.max(...t.plan.map((i) => i.wave));
+  say(t.id, 'factory', `[factory] plan approved: ${t.plan.length} tasks in ${w} wave${w === 1 ? '' : 's'}. Each starts as soon as what it depends on has merged.`);
+  startReady(t);
 }
 function afterCoordinator(t, mode, from, last, decision) {
   if (decision) { t.status = 'decision needed'; save(t); return pump(); }
   if (/^\s*PROGRAM DONE\b/m.test(last)) { t.status = 'done'; save(t); return pump(); }
   if (t.phase === 'brief') { t.status = 'waiting for you'; save(t); return pump(); } // the plan waits for "go"
-  const block = phaseBlock(last);
-  if (block) launchPhase(t, block);
-  else { t.status = 'waiting for you'; save(t); say(t.id, 'factory', '[factory] the coordinator gave no phase block: reply to tell it what to do next.'); }
+  if (/```plan/.test(last)) { // a revision while it runs: what has started keeps going
+    const r = parsePlan(last), m = r.error ? r : mergePlan(t.plan, r.tasks);
+    if (m.error) say(t.id, 'factory', `[factory] the revised plan was not applied: ${m.error}. The current plan keeps going.`);
+    else { t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
+  }
+  t.status = 'running'; save(t);
+  startReady(t);
   pump();
 }
 const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
 async function watchPrograms() {
-  for (const t of allTasks().filter((x) => x.kind === 'program' && x.phase === 'run' && /^running phase|^waiting for merges/.test(x.status))) {
+  for (const t of allTasks().filter((x) => x.kind === 'program' && x.phase === 'run' && Array.isArray(x.plan) && x.plan.length && !['done', 'stopped', 'decision needed'].includes(x.status))) {
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
-    const kids = [];
-    for (const id of t.phaseChildren ?? []) {
-      const k = load(id);
-      if (k.pr && k.pr.state !== 'merged') { const pr = await findPr(k); if (pr) { k.pr = pr; save(k); } }
-      kids.push(k);
+    for (const i of t.plan.filter((i) => i.taskId)) { // PR states can change on GitHub (merged, closed by hand)
+      const k = load(i.taskId);
+      if (k.pr?.state !== 'merged') { const pr = await findPr(k); if (pr && pr.state !== k.pr?.state) { k.pr = pr; if (pr.state === 'merged') k.status = 'merged'; save(k); } }
     }
-    const finished = (k) => k.pr?.state === 'merged' || k.pr?.state === 'closed' || k.status === 'stopped';
-    if (kids.every(finished)) {
-      const lines = kids.map((k) => `- ${k.title}: ${k.pr ? `PR #${k.pr.number} ${k.pr.state}` : `no PR (${k.status})`}${k.verdict ? `, review ${k.verdict}` : ''}`).join('\n');
-      update(t.id, (x) => { x.status = 'planning'; });
-      enqueue(t.id, `[factory] Phase ${t.programPhase} is finished:\n${lines}\n\nCheck what actually landed on ${t.base} (fetch it). Then either plan the next phase (update the plan with what you learned) and end with the \`\`\`phase block, or, if the program's definition of done is met, verify it and reply with a line "PROGRAM DONE" and the evidence. Do not change any file.`, 'plan', 'next-phase');
-    } else if (kids.every((k) => finished(k) || (!running.has(k.id) && SETTLED.includes(k.status))) && t.mergeNoticeFor !== t.programPhase) {
-      update(t.id, (x) => { x.status = 'waiting for merges'; x.mergeNoticeFor = x.programPhase; });
-      const open = kids.filter((k) => !finished(k));
-      say(t.id, 'factory', `[factory] phase ${t.programPhase}: nothing is moving. Waiting for you on:\n${open.map((k) => `- ${k.title}: ${k.status}${k.pr ? ` · ${k.pr.url}` : ''}`).join('\n')}`);
+    const g = startReady(t);
+    const status = g.done ? 'verifying' : g.stalled ? 'waiting for you' : `running · ${g.merged}/${g.total} merged`;
+    if (t.status !== status) update(t.id, (x) => { x.status = status; });
+    if (g.done && !t.finalCheck) {
+      update(t.id, (x) => { x.finalCheck = true; });
+      enqueue(t.id, `[factory] Every task of the epic has merged (${g.total}). Check what actually landed on ${t.base} (fetch it) against the epic's definition of done. If it is met, verify it and reply with a line "PROGRAM DONE" and the evidence. If something is missing, add the missing tasks: send the whole plan again (keep every key) with the new tasks. Do not change any file.`, 'plan', 'next-phase');
+    } else if (g.stalled) {
+      const key = JSON.stringify(Object.entries(g.state).sort());
+      if (t.stallNotice !== key) {
+        update(t.id, (x) => { x.stallNotice = key; });
+        const line = (i) => { const k = i.taskId ? load(i.taskId) : null; return `- ${i.title}: ${g.state[i.key]}${k ? ` (${k.status}${k.pr ? ` · ${k.pr.url}` : ''})` : ''}`; };
+        const stuck = t.plan.filter((i) => ['failed', 'stuck'].includes(g.state[i.key]));
+        say(t.id, 'factory', `[factory] the epic is stuck: ${g.merged}/${g.total} merged, nothing can move.\n${stuck.map(line).join('\n')}\nBlocked behind them: ${g.blocked.map((b) => b.item.title).join(', ') || 'nothing'}.\nAnswer the stuck task in its own channel, or reply here to change the plan.`);
+      }
     }
   }
 }
@@ -547,10 +585,10 @@ function post(id, from, text) {
   }
   if (t.kind === 'program') {
     if (t.phase === 'brief' && /^\s*(go|ok|okay|yes|approved?|start|lgtm)\b/i.test(text)) {
-      const block = phaseBlock(messages(id).filter((m) => m.from === 'coordinator').at(-1)?.text);
-      if (block) { launchPhase(t, block); return load(id); }
+      const last = messages(id).filter((m) => m.from === 'coordinator').at(-1)?.text;
+      if (/```plan/.test(last ?? '')) { approvePlan(t, last); return load(id); }
     }
-    enqueue(id, `The person replied: ${text}\n\n${t.phase === 'brief' ? 'Revise the plan accordingly and end with the ```phase block for the first phase.' : 'Act on it: end with the ```phase block for the next phase, or "PROGRAM DONE".'}`, 'plan', t.phase === 'brief' ? 'person' : 'next-phase');
+    enqueue(id, `The person replied: ${text}\n\n${t.phase === 'brief' ? `Revise the plan accordingly. ${PLAN_RULES}` : `Act on it. To change the plan, send the whole plan again: keep the keys of tasks that have started (they keep going whatever you write); tasks not started yet are replaced. ${PLAN_RULES} If the person only asked something, just answer, no plan block.`}`, 'plan', t.phase === 'brief' ? 'person' : 'next-phase');
     return t;
   }
   if (t.phase === 'brief') { t.phase = 'run'; save(t); enqueue(id, runPrompt(t, messages(id)[0].text, `The person answered your brief: ${text}`), 'bypassPermissions', 'person'); }
@@ -640,7 +678,7 @@ async function digest(hours) {
     ready: await Promise.all(by(['ready for you']).map(async (t) => ({ ...brief(t), attention: await attention(t) }))),
     decisions: by(['decision needed']).map(brief),
     waiting: by(['waiting for you', 'waiting for merges']).map(brief),
-    moving: recent.filter((t) => running.has(t.id) || ['queued', 'working', 'briefing', 'planning', 'testing', 'reviewing', 'waiting for checks'].includes(t.status) || /^running phase/.test(t.status)).map(brief),
+    moving: recent.filter((t) => running.has(t.id) || ['queued', 'working', 'briefing', 'planning', 'testing', 'reviewing', 'waiting for checks'].includes(t.status) || /^running|^verifying/.test(t.status)).map(brief),
     finished: by(['done']).map(brief),
     merged: recent.filter((t) => t.pr?.state === 'merged').map(brief),
     stopped: by(['stopped', 'paused']).map(brief),
