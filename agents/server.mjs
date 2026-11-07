@@ -538,7 +538,8 @@ const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped
 function announceProgress(t) {
   const g = progress(t.plan, itemState);
   const link = (i) => { const k = i.taskId ? load(i.taskId) : null; return `${i.title}${k?.pr ? ` (${k.pr.url ?? `PR #${k.pr.number}`})` : ''}`; };
-  const r = announcements(t.plan, g, { merged: t.mergedAnnounced, waves: t.wavesAnnounced }, link);
+  const cur = load(t.id); // fresh from disk: what an overlapping poll just said counts too
+  const r = announcements(t.plan, g, { merged: cur.mergedAnnounced, waves: cur.wavesAnnounced }, link);
   if (!r.lines.length) return;
   // remember first, then say: a crash in between loses a message rather than repeating one
   update(t.id, (x) => { x.mergedAnnounced = r.said.merged; x.wavesAnnounced = r.said.waves; });
