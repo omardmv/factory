@@ -16,8 +16,9 @@
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
+import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
-import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
+import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia, upsertComment, mediaFiles } from './media.mjs';
@@ -200,7 +201,7 @@ function pump() {
     // forget the job once it ended, unless the next job of this task already took its place
     const forget = (t) => { if (t.job?.seq === job.seq) delete t.job; };
     inflight.set(job.seq, job.id);
-    (job.kind === 'review' ? review(job) : job.kind === 'qa' ? qa(job) : agentRun(job)).then(() => update(job.id, forget)).catch((e) => {
+    (job.kind === 'review' ? review(job) : job.kind === 'qa' ? qa(job) : agentRun(job)).then((res) => { if (res !== 'keep-job') update(job.id, forget); }).catch((e) => {
       running.delete(job.id); containers.delete(job.id);
       log('run.crashed', { task: job.id, kind: job.kind, error: e.message });
       say(job.id, 'factory', `[factory] the ${JOB_NAME[job.kind] ?? job.kind} could not run: ${e.message}`);
@@ -266,13 +267,16 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
     }
   });
   child.stderr.on('data', (c) => { stderr = (stderr + c).slice(-2000); });
-  await new Promise((r) => child.on('close', r));
+  const [code, signal] = await new Promise((r) => child.on('close', (c, s) => r([c, s])));
   running.delete(id); containers.delete(id);
   update(id, (x) => { x.costUsd = (x.costUsd ?? 0) + cost; });
-  return { last, stderr, sessionId };
+  // killed while the factory stops: the turn did not finish, whatever text it left
+  const cutOff = drain.draining && (code !== 0 || !!signal);
+  return { last, stderr, sessionId, code, signal, cutOff };
 }
 
 const UNASKED_TIMEOUT_MS = 60000;
+const MAX_NO_PR_NUDGES = Number(process.env.MAX_NO_PR_NUDGES ?? 2);
 async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
   const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: t.type === 'research' ? RESEARCH_RULES() : RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
@@ -290,7 +294,9 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   }
   const done = load(id);
   if (r.sessionId && !done.sessionId) done.sessionId = r.sessionId;
-  const out = await afterAgentRun({ task: done, from, origin, mode, reply: r.last, unasked: asked.asks, maxCrashRetries: MAX_CRASH_RETRIES }, { findPr, hasChecks, hasQa });
+  // cut off by a stop: the job stays on the task, so the next start picks it up again ("you were interrupted")
+  if (r.cutOff) { save(done); log('run.cutoff', { task: id, code: r.code, signal: r.signal }); return 'keep-job'; }
+  const out = await afterAgentRun({ task: done, from, origin, mode, reply: r.last, unasked: asked.asks, maxCrashRetries: MAX_CRASH_RETRIES, maxNoPrNudges: MAX_NO_PR_NUDGES }, { findPr, hasChecks, hasQa });
   if (out.type === 'stopped') { save(done); return pump(); }
   // pause: one more turn to leave a checkpoint, then rest
   if (out.type === 'checkpoint') {
@@ -305,7 +311,15 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     enqueue(id, crashRetryPrompt(out.retry, MAX_CRASH_RETRIES), mode, out.from);
     return pump();
   }
+  // a run turn ended with no PR and no question: carry on by itself (bounded) instead of parking it on the person
+  if (out.type === 'nudge') {
+    done.noPrNudges = out.nudge; save(done);
+    log('run.nudged', { task: id, nudge: out.nudge });
+    enqueue(id, noPrNudgePrompt(out.nudge, MAX_NO_PR_NUDGES), mode, out.from);
+    return pump();
+  }
   if (out.resetCrash) done.crashRetries = 0;
+  if (out.resetNoPr) done.noPrNudges = 0;
   // the person's answer to a decision carries the turn's origin, so a review-fix round still returns to the panel
   if (out.decision || asked.asks) done.askedFrom = [from, origin].includes('review') ? 'review' : (origin ?? from);
   if (asked.asks) {
@@ -743,9 +757,9 @@ function post(id, from, text) {
 // words against each project's "about" and names one project, or says unsure.
 // Callers ask the person whenever it is unsure or fails.
 // one-shot haiku call in a throwaway container (no repo, no tools): the model's text
-async function oneShot(prompt, timeoutMs = 90000) {
+async function oneShot(prompt, timeoutMs = 90000, model = CLASSIFY_MODEL) {
   const args = ['run', '--rm', '--network', NETWORK, '--memory', '1g', '--cpus', '1', '--security-opt', 'no-new-privileges:true', '-e', 'CLAUDE_CODE_OAUTH_TOKEN',
-    ...(RUNTIME ? ['--runtime', RUNTIME] : []), IMAGE, 'claude', '-p', prompt, '--model', CLASSIFY_MODEL, '--max-turns', '1', '--output-format', 'json', '--disallowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task'];
+    ...(RUNTIME ? ['--runtime', RUNTIME] : []), IMAGE, 'claude', '-p', prompt, '--model', model, '--max-turns', '1', '--output-format', 'json', '--disallowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task'];
   const out = await new Promise((resolve) => {
     const child = spawn('docker', args, { env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') }, stdio: ['ignore', 'pipe', 'pipe'] });
     let buf = ''; child.stdout.on('data', (c) => { buf += c; });
@@ -928,9 +942,31 @@ for (const a of BIND) createServer(handler).listen(PORT, a, () => log('listening
   }
 }
 pickup();
+// ---------- the stuck doctor (decisions in doctor.mjs): a task that gave up, or that the watchdog
+// escalated, gets one diagnosis from its history: cause, evidence, fix, who acts. Diagnosis only.
+const DOCTOR_MODEL = process.env.DOCTOR_MODEL ?? 'sonnet';
+let doctoring = null;
+async function doctorSweep() {
+  if (doctoring || drain.draining) return;
+  const t = allTasks().find((x) => needsDoctor(x));
+  if (!t) return;
+  const key = needsDoctor(t);
+  update(t.id, (x) => { x.doctorKey = key; }); // marked first: a failed diagnosis is not retried in a loop
+  doctoring = t.id;
+  try {
+    const rows = decisions(t.id).map((r) => Object.values(r).join('\t')).join('\n');
+    const out = await oneShot(doctorPrompt(t, messages(t.id), rows), 180000, DOCTOR_MODEL);
+    const d = parseDiagnosis(out);
+    say(t.id, 'factory', doctorMessage(d), { ping: true, doctor: true });
+    log('doctor.done', { task: t.id, category: d?.category ?? null, who: d?.who ?? null });
+  } catch (e) { log('doctor.failed', { task: t.id, error: e.message }); }
+  finally { doctoring = null; }
+}
+
 const poll = () => drain.draining ? Promise.resolve() : intake().catch((e) => log('intake.failed', { error: e.message }))
   .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
-  .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }));
+  .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }))
+  .then(() => { doctorSweep(); }); // in the background: a diagnosis takes a minute, the poll does not wait
 // ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
 const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);
 const NUDGE_PROMPT = '[factory] Nudge: the factory saw no progress on this task for a while. Check `git status`, your decision log, your PR and its checks, then carry on with what you were doing. If you are blocked, say exactly on what.';

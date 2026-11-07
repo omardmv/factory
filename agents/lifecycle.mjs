@@ -36,7 +36,7 @@ const reviewOrigin = (from, origin) => [from, origin].includes('review');
 //  { type: 'coordinator', decision, resetCrash } an epic's coordinator replied
 //  { type: 'status', status, pr, resetCrash }  the next status (pr: what was found, change tasks only)
 // deps: findPr(task) -> pr | null, hasChecks(task), hasQa(task)
-export async function afterAgentRun({ task, from, origin, mode, reply, unasked = false, maxCrashRetries = 2 }, deps) {
+export async function afterAgentRun({ task, from, origin, mode, reply, unasked = false, maxCrashRetries = 2, maxNoPrNudges = 2 }, deps) {
   if (task.status === 'stopped') return { type: 'stopped' };
   if (task.status === 'pausing' && from !== 'pause') return { type: 'checkpoint' };
   const crashes = task.crashRetries ?? 0;
@@ -58,7 +58,9 @@ export async function afterAgentRun({ task, from, origin, mode, reply, unasked =
   let status, waitingOn;
   if (mode === 'plan') { status = 'waiting for you'; waitingOn = 'your go-ahead on the plan (or your changes to it)'; }
   else if (decision) { status = 'decision needed'; waitingOn = 'your answer to the decision the agent is asking for'; }
-  else if (!head) { status = 'waiting for you'; waitingOn = 'your reply: the agent finished its turn but there is no open PR to review'; }
+  // a run turn with no PR and no question is never a place to wait for the person: carry on (bounded)
+  else if (!pr && reply && (task.noPrNudges ?? 0) < maxNoPrNudges) return { type: 'nudge', nudge: (task.noPrNudges ?? 0) + 1, from: reviewOrigin(from, origin) ? 'review' : from, resetCrash };
+  else if (!head) { status = 'waiting for you'; waitingOn = pr ? `your call: PR #${pr.number} is ${pr.state ?? 'not open'}, so there is nothing to review` : `your call: the agent ended ${maxNoPrNudges + 1} turns in a row without opening a PR or asking anything`; }
   // a research task is a docs-only PR for discussion: no checks, QA or panel; it waits for the person's comments and merge
   else if (task.type === 'research') { status = 'research review'; waitingOn = waitingOnFor(status); }
   // an answer to review findings goes back to the panel even with no new commit:
@@ -73,8 +75,11 @@ export async function afterAgentRun({ task, from, origin, mode, reply, unasked =
   // QA FAIL goes on to the panel, which sees the report and judges the dispute)
   else if (!deps.hasChecks(t) || (task.greenSha && head.startsWith(task.greenSha))) status = deps.hasQa(t) && head !== task.qaTestedSha ? 'testing' : 'reviewing';
   else status = 'waiting for checks';
-  return { type: 'status', status, ...(isParked(status) ? { waitingOn } : {}), pr, resetCrash, decision };
+  return { type: 'status', status, ...(isParked(status) ? { waitingOn } : {}), pr, resetCrash, resetNoPr: !!head, decision };
 }
+
+// the prompt of the carry-on turn after a turn that ended with no PR and no question
+export const noPrNudgePrompt = (n, max) => `[factory] Your turn ended without an open PR and without a question for the person (nudge ${n} of ${max}). The task is pre-approved: keep working until your definition of done is met and the PR is open. If something truly blocks you, end with a DECISION NEEDED block saying what and why; otherwise carry on from \`git status\` and your decision log.`;
 
 // the prompt of the carry-on turn after a death without a reply
 export const crashRetryPrompt = (retry, max) => `[factory] Your last turn was cut off: the process exited without a reply (retry ${retry} of ${max}). If you were stopping processes by name pattern, that killed you: your own process matches; kill by PID or port instead. Check \`git status\`, your decision log and your PR, then carry on with what you were doing.`;

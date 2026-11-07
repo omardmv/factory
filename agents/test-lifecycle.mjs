@@ -35,8 +35,19 @@ await test('plan mode on a change: waits for the person', async () => {
 await test('DECISION NEEDED on a change', async () => {
   assert.equal(await status(task(), { reply: 'DECISION NEEDED\noptions' }), 'decision needed');
 });
-await test('no open PR: waiting for you', async () => {
-  assert.equal(await status(task(), {}, deps({ findPr: async () => null })), 'waiting for you');
+await test('no PR at all: nudged to carry on twice (keeping a review origin), then waiting for you; a PR resets the count', async () => {
+  const none = deps({ findPr: async () => null });
+  const r1 = await run(task(), {}, none);
+  assert.equal(r1.type, 'nudge'); assert.equal(r1.nudge, 1); assert.equal(r1.from, 'start');
+  assert.equal((await run(task({ noPrNudges: 1 }), { from: 'review' }, none)).from, 'review');
+  const r3 = await run(task({ noPrNudges: 2 }), {}, none);
+  assert.equal(r3.status, 'waiting for you'); assert.match(r3.waitingOn, /3 turns in a row without opening a PR/);
+  assert.equal((await run(task({ noPrNudges: 1 }), {}, none, )).type, 'nudge');
+  assert.equal((await run(task({ noPrNudges: 1 }))).resetNoPr, true);
+  assert.equal((await run(task(), { mode: 'plan' }, none)).status, 'waiting for you', 'a brief is not nudged');
+  assert.equal((await run(task(), { reply: 'DECISION NEEDED\nx' }, none)).status, 'decision needed', 'a question is not nudged');
+});
+await test('a PR that is merged or closed: waiting for you, never nudged', async () => {
   assert.equal(await status(task(), {}, deps({ findPr: async () => ({ number: 7, state: 'merged', head: 'x' }) })), 'waiting for you');
 });
 await test('the PR found is returned; the old PR is kept when the lookup fails', async () => {
@@ -287,7 +298,8 @@ await test('research task: an open PR waits for the person, skipping checks, QA 
 await test('research task: earlier branches still win (decision, no PR, plan mode)', async () => {
   const t = task({ type: 'research' });
   assert.equal(await status(t, { reply: 'DECISION NEEDED\nx' }), 'decision needed');
-  assert.equal(await status(t, {}, deps({ findPr: async () => null })), 'waiting for you');
+  assert.equal((await run(t, {}, deps({ findPr: async () => null }))).type, 'nudge'); // no PR yet: carry on first
+  assert.equal(await status({ ...t, noPrNudges: 2 }, {}, deps({ findPr: async () => null })), 'waiting for you');
   assert.equal(await status(t, { mode: 'plan' }), 'waiting for you');
 });
 await test('a research task rests as stuck for the epic', () => {
