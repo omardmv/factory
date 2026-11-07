@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
-import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, talkAction } from './plan.mjs';
+import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, talkReply, isGoCommand } from './plan.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -602,18 +602,10 @@ function post(id, from, text) {
   }
   if (t.kind === 'program') {
     if (t.phase === 'talk') {
-      const act = talkAction(text);
-      if (act === 'go') { say(id, 'factory', '[factory] there is no plan yet, so there is nothing to approve. Keep talking, or write "plan" when you want the coordinator to write it.'); return load(id); }
-      if (act === 'plan') {
-        const thread = messages(id).filter((m) => m.from === 'you' || m.from === 'coordinator').map((m) => `${m.from === 'you' ? 'PERSON' : 'YOU'}: ${m.text}`).join('\n\n').slice(-12000);
-        t.phase = 'brief'; save(t);
-        enqueue(id, planningPrompt(`The person asked you to plan: ${text}\n\nTHE DISCUSSION SO FAR:\n${thread}`), 'plan', 'person');
-        return t;
-      }
-      enqueue(id, `The person replied: ${text}\n\nContinue the discussion: answer, give options and trade-offs, ask what you still need. Still no \`\`\`plan block: the person will write "plan" when ready.`, 'plan', 'person');
-      return t;
+      talkReply(t, text, messages(id), { say, save, enqueue, planningPrompt, continuePrompt: (x) => `The person replied: ${x}\n\nContinue the discussion: answer, give options and trade-offs, ask what you still need. Still no \`\`\`plan block: the person will write "plan" when ready.` });
+      return load(id);
     }
-    if (t.phase === 'brief' && /^\s*(go|ok|okay|yes|approved?|start|lgtm)\b/i.test(text)) {
+    if (t.phase === 'brief' && isGoCommand(text)) {
       const last = messages(id).filter((m) => m.from === 'coordinator').at(-1)?.text;
       if (/```plan/.test(last ?? '')) { approvePlan(t, last); return load(id); }
     }

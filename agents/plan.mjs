@@ -96,8 +96,26 @@ export function progress(items, stateOf) {
 }
 
 // A message that tells the coordinator to stop talking and write the plan:
-// "plan", "plan it", "plan:", "make the plan" at the start. Not "go" (that approves a plan).
-export const isPlanCommand = (text) => /^\s*(?:make\s+(?:the|a)\s+plan|plan)(?![\p{L}\p{N}_-])/iu.test(String(text ?? ''));
+// "plan", "plan it", "plan:" or "make the plan" at the start, then end of message or ":" / "!" / ".".
+// Not "go" (that approves a plan) and not "Plan B looks better".
+export const isPlanCommand = (text) => /^\s*(?:make\s+(?:the|a)\s+plan|plan(?:\s+it)?)(?:\s+(?:please|now))?\s*(?:[:!.]|$)/i.test(String(text ?? ''));
+// approval of a plan in `brief`
 export const isGoCommand = (text) => /^\s*(go|ok|okay|yes|approved?|start|lgtm)\b/i.test(String(text ?? ''));
-// What a reply to an epic in the talk phase does: 'plan' (write it now), 'go' (nothing to approve yet), 'talk' (keep discussing)
-export const talkAction = (text) => isPlanCommand(text) ? 'plan' : isGoCommand(text) ? 'go' : 'talk';
+// In `talk` only a bare "go" is special (there is nothing to approve); "yes, the server" is an answer.
+export const isBareGo = (text) => /^\s*go\s*[!.]*\s*$/i.test(String(text ?? ''));
+export const talkAction = (text) => isPlanCommand(text) ? 'plan' : isBareGo(text) ? 'go' : 'talk';
+
+// The reply handler for an epic in `talk`; deps are injected so it can be tested.
+// t: the program; thread: [{from, text}]; d: { say, save, enqueue, planningPrompt, continuePrompt }
+export function talkReply(t, text, thread, d) {
+  const act = talkAction(text);
+  if (act === 'go') { d.say(t.id, 'factory', '[factory] there is no plan yet, so there is nothing to approve. Keep talking, or write "plan" when you want the coordinator to write it.'); return act; }
+  if (act === 'plan') {
+    const past = thread.filter((m) => m.from === 'you' || m.from === 'coordinator').map((m) => `${m.from === 'you' ? 'PERSON' : 'YOU'}: ${m.text}`).join('\n\n').slice(-12000);
+    t.phase = 'brief'; d.save(t);
+    d.enqueue(t.id, d.planningPrompt(`The person asked you to plan: ${text}\n\nTHE DISCUSSION SO FAR:\n${past}`), 'plan', 'person');
+    return act;
+  }
+  d.enqueue(t.id, d.continuePrompt(text), 'plan', 'person');
+  return act;
+}

@@ -85,19 +85,19 @@ const two = parsePlan('old:\n```plan\n' + JSON.stringify({ tasks: [T('old')] }) 
 assert.equal(two.tasks[0].key, 'new');
 ok('fences inside task text are ignored; an unclosed block is refused; the last block wins');
 
-for (const y of ['plan', 'Plan it', 'plan: 3 tasks', 'make the plan', '  Make a plan please', 'PLAN!']) assert.ok(isPlanCommand(y), y);
-for (const x of ['go', 'planning is hard', 'what is the plan?', 'I would not plan yet', 'plans', '', null]) assert.ok(!isPlanCommand(x), String(x));
+for (const y of ['plan', 'Plan it', 'plan:', 'plan it!', 'make the plan', '  Make a plan please', 'PLAN!']) assert.ok(isPlanCommand(y), y);
+for (const x of ['go', 'planning is hard', 'what is the plan?', 'I would not plan yet', 'Plan B looks better', 'plan it later', 'plans', '', null]) assert.ok(!isPlanCommand(x), String(x));
 ok('isPlanCommand: plan / plan it / plan: / make the plan at the start, not go or other words');
 
-// the talk -> plan -> brief flow as the reply handler drives it
-let phase = 'talk'; const log = [];
-for (const m of ['what are the options?', 'go', 'use the second one', 'plan it']) {
-  const a = talkAction(m);
-  if (a === 'plan') phase = 'brief';
-  log.push(`${m} -> ${a} (${phase})`);
-}
-console.log(log.join('\n'));
-assert.deepEqual(log.map((l) => l.split(' -> ')[1]), ['talk (talk)', 'go (talk)', 'talk (talk)', 'plan (brief)']);
-ok('talk: questions keep talking, go approves nothing, plan moves to brief');
+// the real talk handler, with injected deps
+const prog = { id: 'e1', phase: 'talk' }, sent = [], notes = [], thread = [{ from: 'you', text: 'goal' }, { from: 'coordinator', text: 'Server or bot?' }];
+const deps = { say: (id, f, x) => notes.push(x), save: () => {}, enqueue: (id, p, m, f) => sent.push(p), planningPrompt: (n) => 'PLAN:' + n, continuePrompt: (x) => 'TALK:' + x };
+const seq = ['yes, the server, and keep it small', 'ok but small', 'go', 'Plan B looks better', 'plan it'].map((m) => `${m} -> ${talkReply(prog, m, thread, deps)} (${prog.phase})`);
+console.log(seq.join('\n'));
+assert.deepEqual(sent.map((s) => s.slice(0, 5)), ['TALK:', 'TALK:', 'TALK:', 'PLAN:']);
+assert.equal(notes.length, 1); assert.match(notes[0], /no plan yet/);
+assert.match(sent[3], /Server or bot\?/);
+assert.deepEqual(seq.map((l) => l.split('(').pop()), ['talk)', 'talk)', 'talk)', 'talk)', 'brief)']);
+ok('talk handler: "yes, ..." and "ok but" reach the coordinator, bare go approves nothing, "Plan B" is not a command, "plan it" sets brief and sends the discussion');
 
 console.log(`all ${n} passed`);
