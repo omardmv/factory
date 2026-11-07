@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
-import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS } from './plan.mjs';
+import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, talkAction } from './plan.mjs';
 import { publishMedia } from './media.mjs';
 import { spawn } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -470,19 +470,22 @@ End your reply with the whole plan as a fenced block exactly like:
 \`\`\`plan
 {"tasks": [{"key": "flag", "title": "one line", "task": "what to do, where, how done is checked", "depends_on": []}, {"key": "next-thing", "title": "...", "task": "...", "depends_on": ["flag"]}]}
 \`\`\``;
+// the planning prompt: sent when the person says "plan" at the end of the discussion
+const planningPrompt = (note) => `${note}
+Now write the plan. Frame it with the "large" playbook: the definition of done for the whole epic, scope, risks, shaped by the discussion so far. Reply to the person in plain words: the framing, then the waves the dependencies make (wave 1: what starts at once; wave 2: what each waits for; ...) as short lists, then the risks. ${PLAN_RULES}
+Do not change any file.`;
 function createProgram(project, goal) {
   const p = PROJECTS[project]; if (!p) throw new Error(`unknown project ${project}`);
   if (!goal) throw new Error('empty goal');
   const id = newId(); mkdirSync(dir(id), { recursive: true });
-  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'brief', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString() };
+  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'talk', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString() };
   save(t); say(id, 'you', goal);
   enqueue(id, `EPIC ${id} in ${p.repo} (base ${p.base}). You are its coordinator: you plan and track; you never write code. Agents do each piece as its own task and PR (each with its own tests and an independent review); approved PRs merge into ${p.autoMerge ?? p.base}${p.autoMerge ? ' by themselves' : ' when the person merges them'}.
 
 GOAL:
 ${goal}
 
-Read the code you need. Frame it with the "large" playbook: the definition of done for the whole epic, scope, risks. Then plan it.
-Reply to the person in plain words: the framing, then the waves the dependencies make (wave 1: what starts at once; wave 2: what each waits for; ...) as short lists, then the risks. ${PLAN_RULES}
+This is a DISCUSSION first. Read the code you need, then talk it through with the person: propose options and their trade-offs, say what you recommend, and ask the questions that change the answer. Do NOT write a \`\`\`plan block and do not lay out the full task plan yet: the person will tell you when to plan (they write "plan"). Keep replies short and in plain words.
 Do not change any file.`, 'plan', 'start');
   return t;
 }
@@ -522,6 +525,7 @@ function approvePlan(t, text) {
 function afterCoordinator(t, mode, from, last, decision) {
   if (decision) { t.status = 'decision needed'; save(t); return pump(); }
   if (/^\s*PROGRAM DONE\b/m.test(last)) { t.status = 'done'; save(t); return pump(); }
+  if (t.phase === 'talk') { t.status = 'waiting for you'; save(t); return pump(); } // discussion: never a plan, the person says "plan"
   if (t.phase === 'brief') { t.status = 'waiting for you'; save(t); return pump(); } // the plan waits for "go"
   if (/```plan/.test(last)) { // a revision while it runs: what has started keeps going
     const r = parsePlan(last), m = r.error ? r : mergePlan(t.plan, r.tasks);
@@ -597,6 +601,18 @@ function post(id, from, text) {
     return t;
   }
   if (t.kind === 'program') {
+    if (t.phase === 'talk') {
+      const act = talkAction(text);
+      if (act === 'go') { say(id, 'factory', '[factory] there is no plan yet, so there is nothing to approve. Keep talking, or write "plan" when you want the coordinator to write it.'); return load(id); }
+      if (act === 'plan') {
+        const thread = messages(id).filter((m) => m.from === 'you' || m.from === 'coordinator').map((m) => `${m.from === 'you' ? 'PERSON' : 'YOU'}: ${m.text}`).join('\n\n').slice(-12000);
+        t.phase = 'brief'; save(t);
+        enqueue(id, planningPrompt(`The person asked you to plan: ${text}\n\nTHE DISCUSSION SO FAR:\n${thread}`), 'plan', 'person');
+        return t;
+      }
+      enqueue(id, `The person replied: ${text}\n\nContinue the discussion: answer, give options and trade-offs, ask what you still need. Still no \`\`\`plan block: the person will write "plan" when ready.`, 'plan', 'person');
+      return t;
+    }
     if (t.phase === 'brief' && /^\s*(go|ok|okay|yes|approved?|start|lgtm)\b/i.test(text)) {
       const last = messages(id).filter((m) => m.from === 'coordinator').at(-1)?.text;
       if (/```plan/.test(last ?? '')) { approvePlan(t, last); return load(id); }

@@ -94,3 +94,10 @@ export function progress(items, stateOf) {
   return { state: st, ready, blocked, waiting, merged: count('merged'), total: items.length,
     done: count('merged') === items.length, stalled: moving === 0 && count('merged') < items.length };
 }
+
+// A message that tells the coordinator to stop talking and write the plan:
+// "plan", "plan it", "plan:", "make the plan" at the start. Not "go" (that approves a plan).
+export const isPlanCommand = (text) => /^\s*(?:make\s+(?:the|a)\s+plan|plan)(?![\p{L}\p{N}_-])/iu.test(String(text ?? ''));
+export const isGoCommand = (text) => /^\s*(go|ok|okay|yes|approved?|start|lgtm)\b/i.test(String(text ?? ''));
+// What a reply to an epic in the talk phase does: 'plan' (write it now), 'go' (nothing to approve yet), 'talk' (keep discussing)
+export const talkAction = (text) => isPlanCommand(text) ? 'plan' : isGoCommand(text) ? 'go' : 'talk';

@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS } from './plan.mjs';
+import { parsePlan, mergePlan, progress, MAX_PLAN_TASKS, isPlanCommand, talkAction } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
@@ -84,5 +84,20 @@ assert.match(parsePlan('```plan\n{"tasks": []').error, /not closed/);
 const two = parsePlan('old:\n```plan\n' + JSON.stringify({ tasks: [T('old')] }) + '\n```\nnew:\n```plan\n' + JSON.stringify({ tasks: [T('new')] }) + '\n```');
 assert.equal(two.tasks[0].key, 'new');
 ok('fences inside task text are ignored; an unclosed block is refused; the last block wins');
+
+for (const y of ['plan', 'Plan it', 'plan: 3 tasks', 'make the plan', '  Make a plan please', 'PLAN!']) assert.ok(isPlanCommand(y), y);
+for (const x of ['go', 'planning is hard', 'what is the plan?', 'I would not plan yet', 'plans', '', null]) assert.ok(!isPlanCommand(x), String(x));
+ok('isPlanCommand: plan / plan it / plan: / make the plan at the start, not go or other words');
+
+// the talk -> plan -> brief flow as the reply handler drives it
+let phase = 'talk'; const log = [];
+for (const m of ['what are the options?', 'go', 'use the second one', 'plan it']) {
+  const a = talkAction(m);
+  if (a === 'plan') phase = 'brief';
+  log.push(`${m} -> ${a} (${phase})`);
+}
+console.log(log.join('\n'));
+assert.deepEqual(log.map((l) => l.split(' -> ')[1]), ['talk (talk)', 'go (talk)', 'talk (talk)', 'plan (brief)']);
+ok('talk: questions keep talking, go approves nothing, plan moves to brief');
 
 console.log(`all ${n} passed`);
