@@ -139,7 +139,7 @@ async function prComments(token, repo, pr) {
   }
   return all;
 }
-const evidenceFor = async (token, t, msgs, kinds) => evidenceSection(await prComments(token, t.repo, t.pr.number).catch((e) => { log('evidence.comments_failed', { task: t.id, error: e.message }); return []; }), msgs, { kinds });
+const evidenceFor = async (token, t, msgs, kinds) => evidenceSection(await prComments(token, t.repo, t.pr.number).catch((e) => { log('evidence.comments_failed', { task: t.id, error: e.message }); return []; }), msgs, { kinds, mapping: mappingFrom(msgs), files: mediaFiles(`${dir(t.id)}/workspace`) });
 async function gh(token, url, method = 'GET', payload) {
   const r = await fetch(`https://api.github.com${url}`, { method, headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'factory-agents', ...(payload ? { 'content-type': 'application/json' } : {}) }, body: payload ? JSON.stringify(payload) : undefined });
   if (!r.ok) throw new Error(`github ${url}: ${r.status} ${(await r.text()).slice(0, 200)}`);
@@ -523,7 +523,7 @@ async function publishReport(id, outcome) {
     findings: outcome === 'stopped' ? { review: last('review'), qa: last('qa') } : {}, dashboard: DASHBOARD });
   const c = await upsertComment({ gh, token, repo: t.repo, pr: t.pr.number, mark: REPORT_MARK, body });
   update(id, (x) => { x.mediaPublished = m.done; x.reportComment = c.html_url; });
-  say(id, 'factory', reportSummary({ outcome, pr: t.pr.number, prUrl: c.html_url ?? pr.html_url, mapping: mappingFrom(msgs), items: m.items }));
+  say(id, 'factory', reportSummary({ outcome, pr: t.pr.number, prUrl: pr.html_url, reportUrl: c.html_url, mapping: mappingFrom(msgs), items: m.items }));
   log('report.published', { task: id, pr: t.pr.number, outcome, files: m.files, comment: c.html_url });
 }
 
@@ -705,7 +705,7 @@ function post(id, from, text) {
   if (from === 'factory') {
     const o = afterFactoryReport({ task: t, text, maxRounds: MAX_FACTORY_ROUNDS });
     if (o.action === 'ignore') return t;
-    t.lastChecks = { state: o.green ? 'green' : 'red', sha: /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1] ?? t.lastChecks?.sha };
+    t.lastChecks = { state: o.green ? 'green' : 'red', sha: /\(`([0-9a-f]{7,40})`\)/.exec(text)?.[1] };
     if (o.action === 'limit') { say(id, 'factory', o.say); t.status = o.status; t.waitingOn = o.waitingOn; save(t); if (t.pr) publishReport(id, 'stopped').catch((e) => log('report.failed', { task: id, error: e.message })); return t; }
     if (o.green) { t.greenSha = o.greenSha; t.previewHost = o.previewHost; }
     else t.factoryRounds = o.factoryRounds;

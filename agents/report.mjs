@@ -81,7 +81,7 @@ export function buildReport({ taskId, repo, pr, head, outcome, title, mapping, i
 }
 
 // the one-line Slack summary
-export const reportSummary = ({ outcome, pr, prUrl, mapping, items }) => {
+export const reportSummary = ({ outcome, pr, prUrl, reportUrl, mapping, items }) => {
   const rs = (mapping ?? []).map((e) => resolveProof(e, items).kind), shown = rs.filter((k) => k !== 'none').length;
-  return `[factory] ${outcome === 'stopped' ? '🛑 stopped at the round limit' : '✅ ready'}: PR #${pr} ${prUrl}. Evidence report: ${shown} of ${rs.length} expected results with proof.`;
+  return `[factory] ${outcome === 'stopped' ? '🛑 stopped at the round limit' : '✅ ready'}: PR #${pr} ${prUrl}. Evidence report${reportUrl ? ` ${reportUrl}` : ''}: ${mapping ? `${shown} of ${rs.length} expected results with proof${shown < rs.length ? ' (the rest are not shown)' : ''}` : '⚠️ the agent gave no expectation → proof mapping, so nothing is claimed as shown'}.`;
 };

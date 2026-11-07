@@ -62,4 +62,7 @@ test('summary: one line with the PR link and the count', () => {
   const s = reportSummary({ outcome: 'ready', pr: 7, prUrl: 'https://x/pr', mapping: parseMapping(block), items });
   assert.equal(s.includes('\n'), false); assert.match(s, /PR #7 https:\/\/x\/pr/); assert.match(s, /3 of 4/);
 });
+test('summary: warns when there is no mapping', () => {
+  assert.match(reportSummary({ outcome: 'ready', pr: 7, prUrl: 'https://x/pr', mapping: null, items }), /no expectation → proof mapping/);
+});
 console.log(`${n} passed`);
