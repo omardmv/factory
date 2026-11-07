@@ -99,7 +99,8 @@ and skills are mounted read-only into each container. New skills land only
 with the founder's approval; the safety gates (`brain/knowledge/gates.md`)
 never change without the founder.
 
-Tasks come from Telegram or the dashboard, from issues labelled
+Tasks come from Slack (`slack/`: one channel per task, archived when its PR
+closes), Telegram or the dashboard, from issues labelled
 `ready-for-agent` (change) or `needs-triage` (report; issues already labelled
 when triage first ran are left alone), polled every 2 minutes, or as a queue.
 The queue and the running jobs are on disk: after a restart (every deploy)
