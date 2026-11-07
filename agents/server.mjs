@@ -24,6 +24,7 @@ const SECRETS = process.env.AGENTS_SECRETS ?? '/opt/factory/agents';
 const IMAGE = process.env.AGENT_IMAGE ?? 'factory-agent:latest';
 const NETWORK = process.env.AGENT_NETWORK ?? 'factory-agents';
 const RUNTIME = process.env.AGENT_RUNTIME ?? '';           // e.g. runsc
+const CLASSIFY_MODEL = process.env.CLASSIFY_MODEL ?? 'haiku';
 const PORT = Number(process.env.PORT ?? 19300);
 const BIND = (process.env.BIND_ADDRESSES ?? '127.0.0.1').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 3);
@@ -545,6 +546,28 @@ function post(id, from, text) {
   return t;
 }
 
+// ---------- which project is a message about? ----------
+// A small one-shot Claude call (no repository, no tools) reads the person's
+// words against each project's "about" and names one project, or says unsure.
+// Callers ask the person whenever it is unsure or fails.
+async function classify(text) {
+  const names = Object.keys(PROJECTS);
+  const prompt = `Projects:\n${names.map((n) => `- ${n}: ${PROJECTS[n].about ?? PROJECTS[n].repo}`).join('\n')}\n\nMessage from the founder:\n"""\n${text.slice(0, 4000)}\n"""\n\nWhich project is this message about? Answer with ONE line of JSON and nothing else: {"project": "<one of: ${names.join(', ')}>" or null if it could fit more than one or none, "why": "<at most 12 words>"}. Pick a project only when the message clearly points to it.`;
+  const args = ['run', '--rm', '--network', NETWORK, '--memory', '1g', '--cpus', '1', '--security-opt', 'no-new-privileges:true', '-e', 'CLAUDE_CODE_OAUTH_TOKEN',
+    ...(RUNTIME ? ['--runtime', RUNTIME] : []), IMAGE, 'claude', '-p', prompt, '--model', CLASSIFY_MODEL, '--max-turns', '1', '--output-format', 'json', '--disallowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task'];
+  const out = await new Promise((resolve) => {
+    const child = spawn('docker', args, { env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: secret('claude-token') }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let buf = ''; child.stdout.on('data', (c) => { buf += c; });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 90000);
+    child.on('close', () => { clearTimeout(timer); resolve(buf); });
+  });
+  let result = ''; try { result = JSON.parse(out).result ?? ''; } catch { return { project: null, why: 'classifier gave no answer' }; }
+  const j = /\{[^{}]*\}/.exec(result); let ans = {}; try { ans = JSON.parse(j?.[0] ?? '{}'); } catch {}
+  const project = names.includes(ans.project) ? ans.project : null;
+  log('classify', { project, why: ans.why });
+  return { project, why: String(ans.why ?? '').slice(0, 200) };
+}
+
 // ---------- intake: labelled issues become tasks by themselves ----------
 // ready-for-agent -> a change (no brief); needs-triage -> a report. Issues that
 // already carried needs-triage when triage first ran are left alone.
@@ -623,6 +646,7 @@ const handler = async (req, res) => {
     if (url.pathname === '/health') return send(200, { ok: true, running: running.size, queued: queue.length });
     if (!authOk(req)) return send(401, { error: 'unauthorized' });
     if (url.pathname === '/digest' && req.method === 'GET') return send(200, await digest(Number(url.searchParams.get('hours') ?? 24)));
+    if (url.pathname === '/classify' && req.method === 'POST') { const b = await body(req); return send(200, await classify(String(b.text ?? ''))); }
     if (url.pathname === '/programs' && req.method === 'POST') { const b = await body(req); return send(201, createProgram(b.project, String(b.goal ?? '').trim())); }
     // a batch: independent tasks, each run without a brief to a reviewed PR
     if (url.pathname === '/batches' && req.method === 'POST') {

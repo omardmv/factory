@@ -1,10 +1,10 @@
 // The factory in Slack: one channel per task. Socket Mode (outbound only, no
 // public endpoint), answers only its paired owner, talks to factory-agents.
 //  - create a channel and write your idea in it: that is the task. The
-//    channel name picks the project (sayra-… for Sayra;
-//    the factory by default)
+//    channel name can pick the project (sayra-… / factory-…); otherwise the
+//    factory works it out from the words and asks with buttons when unsure
 //  - or DM the bot: a plain message starts a task in a new channel; "queue:",
-//    "bug:", "program:" as on Telegram (prefix "factory" for the factory repo)
+//    "bug:", "program:" as on Telegram ("sayra:" / "factory:" picks the project)
 //  - tasks from issues, queues and programs get their own channel too
 //  - everything you write in a task's channel goes to that task; briefs and
 //    plans get a Go button
@@ -26,13 +26,12 @@ const PUSH_EVERY_MS = Number(process.env.PUSH_EVERY_MS ?? 15000);
 // project -> channel-name prefixes (the first is used for channels the bot makes)
 const PROJECTS = { factory: ['factory'], sayra: ['sayra'] };
 const NAMES = Object.keys(PROJECTS).join('|');
-const DEFAULT_PROJECT = 'factory';
 const secret = (n) => readFileSync(`${SECRETS}/${n}`, 'utf8').trim();
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
 
 // ---- state: owner, DM channel, pairing code, task <-> channel, what was sent
 export const state = existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, 'utf8')) : {};
-state.sent ??= {}; state.taskChannel ??= {}; state.channelTask ??= {}; state.archived ??= {}; state.batches ??= {}; state.skip ??= {}; state.fresh ??= {};
+state.sent ??= {}; state.taskChannel ??= {}; state.channelTask ??= {}; state.archived ??= {}; state.batches ??= {}; state.skip ??= {}; state.fresh ??= {}; state.pending ??= {};
 if (!state.owner && !state.pairing) state.pairing = randomBytes(4).toString('hex');
 const persist = () => writeFileSync(STATE_FILE, JSON.stringify(state));
 persist();
@@ -43,8 +42,8 @@ export async function slack(method, payload, token = secret('slack-bot-token')) 
   if (!j.ok) throw Object.assign(new Error(`${method}: ${j.error}`), { slack: j.error });
   return j;
 }
-async function agents(path, init = {}) {
-  const r = await fetch(`${AGENTS}${path}`, { ...init, headers: { authorization: `Bearer ${secret('agents-token')}`, 'content-type': 'application/json' }, signal: AbortSignal.timeout(10000) });
+async function agents(path, init = {}, timeoutMs = 10000) {
+  const r = await fetch(`${AGENTS}${path}`, { ...init, headers: { authorization: `Bearer ${secret('agents-token')}`, 'content-type': 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
   const j = await r.json(); if (!r.ok) throw new Error(j.error ?? r.status); return j;
 }
 
@@ -113,7 +112,7 @@ const dm = (text) => (state.dm ? post(state.dm, text) : Promise.resolve());
 // ---- projects and channels
 export function projectOfChannel(name = '') {
   for (const [p, prefixes] of Object.entries(PROJECTS)) if (prefixes.some((x) => name === x || name.startsWith(`${x}-`) || name.startsWith(`${x}_`))) return p;
-  return DEFAULT_PROJECT;
+  return null;
 }
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
 export const channelName = (t) => `${PROJECTS[t.project]?.[0] ?? t.project}-${slug(t.title) || 'task'}-${t.id.slice(-6)}`.slice(0, 80);
@@ -141,20 +140,57 @@ async function archiveIfFinished(t) {
 
 // ---- incoming
 const HELP = `*What I understand*
-• create a channel (\`sayra-…\` for Sayra, anything else for the factory) and write your idea: that's the task
-• or DM me: a plain message starts a task in a new channel (start with \`sayra:\` for Sayra; the factory by default)
+• create a channel and write your idea: that's the task (name it \`sayra-…\` or \`factory-…\` to pick the project, or I'll work it out and ask if unsure)
+• or DM me: a plain message starts a task in a new channel (I work out the project from your words and ask if unsure; \`sayra:\` / \`factory:\` at the start picks it)
 • \`queue:\` + one task per line · \`bug:\` + what's wrong · \`program:\` + a big goal (add \`factory\`, e.g. \`bug factory:\`)
 • in a task's channel, everything you write goes to the agent; Go starts a brief or a plan
 • \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`help\` anywhere`;
 
-async function startTask(project, text, channel) {
+// ---- what to start, once the project is known
+// kind: task | queue | bug | program; channel: the founder's own channel (task only)
+async function begin(kind, project, text, channel, note = '') {
+  if (kind === 'queue') {
+    const items = text.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+    const b = await agents('/batches', { method: 'POST', body: JSON.stringify({ project, items }) });
+    state.batches[b.batch] = { ids: b.tasks.map((t) => t.id), project, reported: false };
+    for (const t of b.tasks) state.sent[t.id] = 1;
+    persist();
+    for (const t of b.tasks) await channelFor(t);
+    return dm(`📦 *Queue started: ${b.tasks.length} tasks* (${project}${note}), each in its own channel. One summary comes here when all are done.`);
+  }
+  if (kind === 'bug' || kind === 'program') {
+    const t = kind === 'bug'
+      ? await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, kind: 'report', text }) })
+      : await agents('/programs', { method: 'POST', body: JSON.stringify({ project, goal: text }) });
+    state.sent[t.id] = 1; persist();
+    const ch = await channelFor(t);
+    return dm(`${kind === 'bug' ? '🔎 Triage' : '🧭 Program'} started (${project}${note}) in <#${ch}>.`);
+  }
   const t = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, text }) });
   state.sent[t.id] = 1; // the person's own message is #0
   if (channel) bind(t.id, channel); else persist();
   const ch = channel ?? await channelFor(t);
-  await post(ch, `▶️ Task \`${t.id}\` started (${project}). The brief comes next: press Go or answer it here.`);
-  if (!channel) await dm(`▶️ Task \`${t.id}\` started in <#${ch}>.`);
+  await post(ch, `▶️ Task \`${t.id}\` started (${project}${note}). The brief comes next: press Go or answer it here.`);
+  if (!channel) await dm(`▶️ Task \`${t.id}\` started (${project}${note}) in <#${ch}>.`);
   return t;
+}
+
+// ---- no project named: guess from the words, ask when unsure
+const titleCase = (p) => p[0].toUpperCase() + p.slice(1);
+async function resolve(kind, text, channel) {
+  let guess = { project: null, why: '' };
+  try { guess = await agents('/classify', { method: 'POST', body: JSON.stringify({ text }) }, 120000); } catch (e) { log('classify.error', { error: e.message }); }
+  if (guess.project && PROJECTS[guess.project]) {
+    return begin(kind, guess.project, text, channel, `, guessed from your message: ${esc(guess.why || titleCase(guess.project))}. Wrong project? \`/factory stop\` and resend starting with the project name`);
+  }
+  const key = randomBytes(4).toString('hex');
+  state.pending[key] = { kind, text, channel: channel ?? null, at: new Date().toISOString() }; persist();
+  const where = channel ?? state.dm;
+  const why = guess.why ? ` (${esc(guess.why)})` : '';
+  await slack('chat.postMessage', { channel: where, text: `Which project is this for?${why}`, blocks: [
+    { type: 'section', text: { type: 'mrkdwn', text: `🤔 *Which project is this for?*${why}\n_${esc(short(text.split('\n')[0], 120))}_` } },
+    { type: 'actions', elements: Object.keys(PROJECTS).map((p) => ({ type: 'button', text: { type: 'plain_text', text: titleCase(p) }, action_id: `pick_${p}`, value: `${key}|${p}` })) },
+  ] });
 }
 
 export async function onMessage(ev) {
@@ -173,6 +209,9 @@ export async function onMessage(ev) {
   if (ev.user !== state.owner || !text) return;
   const taskId = state.channelTask[ev.channel];
   if (taskId) {
+    // a bare stop / pause / resume is a command, not an answer for the agent
+    const cmd = /^(stop|pause|resume)[.!]?$/i.exec(text)?.[1]?.toLowerCase();
+    if (cmd) { const r = await onCommand({ user_id: ev.user, channel_id: ev.channel, text: cmd }); return post(ev.channel, r.text); }
     await agents(`/tasks/${taskId}/messages`, { method: 'POST', body: JSON.stringify({ text }) });
     return slack('reactions.add', { channel: ev.channel, timestamp: ev.ts, name: 'eyes' }).catch(() => {});
   }
@@ -182,36 +221,20 @@ export async function onMessage(ev) {
     // Any other channel the bot happens to be in is never a task.
     delete state.fresh[ev.channel]; persist();
     const info = (await slack('conversations.info', { channel: ev.channel })).channel;
-    return startTask(projectOfChannel(info.name), text, ev.channel);
+    const named = projectOfChannel(info.name);
+    return named ? begin('task', named, text, ev.channel) : resolve('task', text, ev.channel);
   }
 }
 
 async function onDm(text) {
   const q = text.match(new RegExp(`^queue(?:\\s+(${NAMES}))?\\s*(?::|(?=\\n)|$)`, 'i'));
-  if (q) {
-    const project = (q[1] ?? DEFAULT_PROJECT).toLowerCase();
-    const items = text.slice(q[0].length).split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
-    if (!items.length) return dm('A queue is one task per line:\n```queue:\n- make the Save button sticky on phones\n- fix the login redirect```');
-    const b = await agents('/batches', { method: 'POST', body: JSON.stringify({ project, items }) });
-    state.batches[b.batch] = { ids: b.tasks.map((t) => t.id), project, reported: false };
-    for (const t of b.tasks) state.sent[t.id] = 1;
-    persist();
-    for (const t of b.tasks) await channelFor(t);
-    return dm(`📦 *Queue started: ${b.tasks.length} tasks* (${project}), each in its own channel. One summary comes here when all are done.`);
-  }
-  const k = text.match(new RegExp(`^(bug|program)(?:\\s+(${NAMES}))?\\s*:\\s*`, 'i'));
-  if (k) {
-    const project = (k[2] ?? DEFAULT_PROJECT).toLowerCase(), rest = text.slice(k[0].length).trim();
-    if (!rest) return dm(HELP);
-    const t = k[1].toLowerCase() === 'bug'
-      ? await agents('/tasks', { method: 'POST', body: JSON.stringify({ project, kind: 'report', text: rest }) })
-      : await agents('/programs', { method: 'POST', body: JSON.stringify({ project, goal: rest }) });
-    state.sent[t.id] = 1; persist();
-    const ch = await channelFor(t);
-    return dm(`${k[1].toLowerCase() === 'bug' ? '🔎 Triage' : '🧭 Program'} started (${project}) in <#${ch}>.`);
-  }
-  const m = text.match(new RegExp(`^(${NAMES})\\s*:\\s*`, 'i'));
-  return startTask(m ? m[1].toLowerCase() : DEFAULT_PROJECT, m ? text.slice(m[0].length) : text);
+  const k = !q && text.match(new RegExp(`^(bug|program)(?:\\s+(${NAMES}))?\\s*:\\s*`, 'i'));
+  const m = !q && !k && text.match(new RegExp(`^(${NAMES})\\s*:\\s*`, 'i'));
+  const kind = q ? 'queue' : k ? k[1].toLowerCase() : 'task';
+  const project = (q?.[1] ?? k?.[2] ?? m?.[1])?.toLowerCase() ?? null;
+  const rest = (q ? text.slice(q[0].length) : k ? text.slice(k[0].length) : m ? text.slice(m[0].length) : text).trim();
+  if (!rest) return kind === 'queue' ? dm('A queue is one task per line:\n```queue:\n- make the Save button sticky on phones\n- fix the login redirect```') : dm(HELP);
+  return project ? begin(kind, project, rest) : resolve(kind, rest);
 }
 
 // a channel the founder creates: join it so its first message can become the task
@@ -244,6 +267,14 @@ export async function onCommand(p) {
 export async function onAction(p) {
   if (p.user?.id !== state.owner) return;
   const a = p.actions?.[0];
+  if (a?.action_id?.startsWith('pick_')) {
+    const [key, project] = String(a.value ?? '').split('|');
+    const job = state.pending[key];
+    if (!job || !PROJECTS[project]) return;
+    delete state.pending[key]; persist();
+    if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, text: `Project: ${project}`, blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: `✔️ ${titleCase(project)}: ${esc(short(job.text.split('\n')[0], 120))}` }] }] }).catch(() => {});
+    return begin(job.kind, project, job.text, job.channel ?? undefined);
+  }
   if (a?.action_id !== 'go' || !a.value) return;
   await agents(`/tasks/${a.value}/messages`, { method: 'POST', body: JSON.stringify({ text: 'go' }) });
   // replace the button with who pressed it, so it can't be pressed twice
