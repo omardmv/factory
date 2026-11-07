@@ -17,7 +17,7 @@ import { createServer } from 'node:http';
 import { mergeDecision } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
-import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff } from './lifecycle.mjs';
+import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia, upsertComment, mediaFiles } from './media.mjs';
@@ -561,7 +561,7 @@ function itemState(i) {
   if (k.pr?.state === 'merged' || k.status === 'merged') return 'merged';
   if (k.pr?.state === 'closed' || k.status === 'stopped') return 'failed';
   if (running.has(k.id) || queue.some((j) => j.id === k.id)) return 'running';
-  if (['decision needed', 'waiting for you', 'paused', 'research review'].includes(k.status) || (k.status === 'ready for you' && !k.mergeWanted)) return 'stuck';
+  if (STUCK_STATUSES.includes(k.status) || (k.status === 'ready for you' && !k.mergeWanted)) return 'stuck';
   return 'running';
 }
 function startReady(t) {

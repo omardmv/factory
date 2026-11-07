@@ -39,17 +39,20 @@ export function needsResearch(t) {
 }
 // Adds the research task before each task that needs one and makes the task depend on it. Pure.
 export function addResearch(tasks) {
-  const keys = new Set(tasks.map((t) => t.key)), out = [];
+  const byKey = new Map(tasks.map((t) => [t.key, t])), keys = new Set(byKey.keys()), out = [];
   for (const t of tasks) {
     const { research: _r, ...rest } = t;
     if (!needsResearch(t)) { out.push(rest); continue; }
-    const rk = `${t.key}-research`.slice(0, 40);
+    const rk = `${t.key}-research`.slice(0, 40), listed = byKey.get(rk);
+    const link = { ...rest, deps: [...new Set([...t.deps, rk])], researchKey: rk, researchDoc: researchDoc(t.key) };
+    if (listed?.type === 'research') { out.push(link); continue; } // the coordinator sent the research task back (a revision): reuse it
     if (keys.has(rk)) return { error: `task "${t.key}" needs research but the key "${rk}" is taken` };
     keys.add(rk);
     out.push({ key: rk, type: 'research', title: `Research: ${t.title}`.slice(0, 90), task: `Research for the task "${t.key}" (${t.title}). Write ${researchDoc(t.key)}: what the task asks, the options with trade-offs and sources, your recommendation, the risks, and how done is checked. Open it as a docs-only PR (no code) for the person to discuss.\n\nThe task to research:\n${t.task}`, deps: [...t.deps], researchFor: t.key });
-    out.push({ ...rest, deps: [...new Set([...t.deps, rk])], researchKey: rk, researchDoc: researchDoc(t.key) });
+    out.push(link);
   }
-  return { tasks: out };
+  // an explicit research task keeps its link to the task it serves
+  return { tasks: out.map((t) => (t.type === 'research' && !t.researchFor && t.key.endsWith('-research') && keys.has(t.key.slice(0, -9)) ? { ...t, researchFor: t.key.slice(0, -9) } : t)) };
 }
 
 export function parsePlan(text) {
@@ -126,7 +129,10 @@ export function mergePlan(current, next) {
   const old = new Map(current.map((i) => [i.key, i]));
   // a kept key keeps its GitHub sub-issue (issue/issueId/linked) so a revision never opens a second one
   const gh = (k) => { const o = old.get(k); return o?.issue ? { issue: o.issue, issueId: o.issueId, ...(o.linked === undefined ? {} : { linked: o.linked }) } : {}; };
-  const merged = next.map((t) => ({ ...t, ...gh(t.key), ...(started.has(t.key) ? { taskId: started.get(t.key).taskId } : {}) }));
+  let merged = next.map((t) => ({ ...t, ...gh(t.key), ...(started.has(t.key) ? { taskId: started.get(t.key).taskId } : {}) }));
+  // research is never added to a task that has started (a revision may now match the rule): drop the new research task and the link
+  const skip = new Set(merged.filter((t) => t.type === 'research' && !t.taskId && started.has(t.researchFor) && !old.get(t.researchFor)?.researchKey).map((t) => t.key));
+  if (skip.size) merged = merged.filter((t) => !skip.has(t.key)).map((t) => (t.researchKey && skip.has(t.researchKey) ? (({ researchKey, researchDoc, ...r }) => ({ ...r, deps: t.deps.filter((d) => d !== researchKey) }))(t) : t));
   for (const [k, i] of started) if (!next.some((t) => t.key === k)) merged.push(i); // dropped from the plan but already running
   const w = waves(merged);
   if (w.error) return { error: w.error };

@@ -241,6 +241,17 @@ ok('a plan task keeps a known type (any case) and drops an unknown one');
   const kept = mergePlan(plan.map((t) => (t.key === 'a-research' ? { ...t, taskId: 'T1' } : t)), parsePlan(block([R('a', { research: true })])).tasks);
   assert.equal(kept.items.find((t) => t.key === 'a-research').taskId, 'T1');
   ok('a revised plan keeps the started research task');
+  // the coordinator sends the research task back with the whole plan: accepted, not refused
+  r = parsePlan(block([R('a-research', { type: 'research', task: 'r' }), R('a', { research: true }, ['a-research'])]));
+  assert.ok(!r.error, r.error); assert.deepEqual(keysOf(r.tasks), ['a-research', 'a']); assert.equal(r.tasks[0].researchFor, 'a');
+  ok('a research task sent back in a revision is reused, not refused');
+  // a started task never gains research from a revision
+  const cur = [{ key: 'a', title: 'a', task: 'do a', deps: [], wave: 1, taskId: 'T1' }];
+  const rev = mergePlan(cur, parsePlan(block([R('a', { task: 'now with a new schema' })])).tasks);
+  assert.deepEqual(rev.items.map((t) => t.key), ['a']); assert.deepEqual(rev.items[0].deps, []); assert.ok(!rev.items[0].researchKey);
+  const rev2 = mergePlan(cur, parsePlan(block([R('a', { task: 'x' }), R('b', { research: true })])).tasks);
+  assert.deepEqual(rev2.items.map((t) => t.key), ['a', 'b-research', 'b']);
+  ok('a revision adds no research to a started task, but still to a new one');
 }
 
 console.log(`all ${n} passed`);

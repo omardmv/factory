@@ -11,6 +11,8 @@ export const isDecision = (text) => /^\s*DECISION NEEDED\b/m.test(text ?? '');
 // one-line `waitingOn`: what the person is waited on for. Silent parking is the
 // bug, so server.mjs refuses to save a parked task without one (parkReason).
 export const PARKED = ['waiting for you', 'decision needed', 'ready for you', 'paused', 'waiting for merges', 'research review'];
+// statuses where a planned task rests on the person: its dependents are blocked, not waiting
+export const STUCK_STATUSES = ['decision needed', 'waiting for you', 'paused', 'research review'];
 export const isParked = (status) => PARKED.includes(status);
 // the reason a parked status gets when its caller gave none (never empty)
 export const waitingOnFor = (status, task = {}) => ({

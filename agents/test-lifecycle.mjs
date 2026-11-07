@@ -1,6 +1,6 @@
 // node agents/test-lifecycle.mjs
 import assert from 'node:assert/strict';
-import { PARKED, isParked, waitingOnFor, parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff } from './lifecycle.mjs';
+import { PARKED, isParked, waitingOnFor, parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
 
 let n = 0;
 const test = async (name, f) => { await f(); n++; console.log('ok', name); };
@@ -272,6 +272,31 @@ await test('the paths that park are exactly those in lifecycle.mjs: every status
   for (const line of src.split('\n')) {
     if (/\bstatus: '(waiting for you|decision needed|ready for you|paused)'/.test(line) && !line.includes('waitingOn') && !/waitingOnFor|isParked/.test(line)) assert.fail(`parking without waitingOn: ${line.trim()}`);
   }
+});
+
+await test('research task: an open PR waits for the person, skipping checks, QA and the panel', async () => {
+  const t = task({ type: 'research' });
+  const r = await run(t, {}, deps({ hasQa: () => true }));
+  assert.equal(r.status, 'research review');
+  assert.match(r.waitingOn, /comments on the research PR/);
+  assert.ok(isParked('research review'));
+  assert.equal(parkReason({ status: 'research review' }), waitingOnFor('research review'));
+  assert.equal(await status({ ...t, reviewedSha: 'bbb2222', verdict: 'CHANGES' }, { from: 'review' }), 'research review');
+  assert.equal(await status(task({ type: 'feature' })), 'waiting for checks');
+});
+await test('research task: earlier branches still win (decision, no PR, plan mode)', async () => {
+  const t = task({ type: 'research' });
+  assert.equal(await status(t, { reply: 'DECISION NEEDED\nx' }), 'decision needed');
+  assert.equal(await status(t, {}, deps({ findPr: async () => null })), 'waiting for you');
+  assert.equal(await status(t, { mode: 'plan' }), 'waiting for you');
+});
+await test('a research task rests as stuck for the epic', () => {
+  assert.ok(STUCK_STATUSES.includes('research review'));
+});
+await test('research handoff names the document and where the comments are', () => {
+  const h = researchHandoff({ doc: 'docs/research/a.md', pr: { number: 12 }, repo: 'o/r' });
+  assert.match(h, /docs\/research\/a\.md/); assert.match(h, /PR #12/); assert.match(h, /gh pr view 12 --repo o\/r --comments/);
+  assert.doesNotMatch(researchHandoff({ doc: 'd.md', repo: 'o/r' }), /gh pr view/);
 });
 
 console.log(`${n} groups passed`);
