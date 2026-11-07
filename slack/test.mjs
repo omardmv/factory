@@ -10,7 +10,11 @@ const body = async (req) => { let b = ''; for await (const c of req) b += c; ret
 
 // ---- fake Slack
 const calls = []; const channels = { C_GENERAL: { id: 'C_GENERAL', name: 'general' } }; let n = 0;
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 7)]);
+const fileAuth = [];
 const slackSrv = await listen(async (req, res) => {
+  // Slack's private file links: the image with the bot token; its sign-in page without files:read
+  if (req.url.startsWith('/files/')) { fileAuth.push(req.headers.authorization); if (req.url === '/files/ok.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(PNG); } res.writeHead(200, { 'content-type': 'text/html' }); return res.end('<html>sign in</html>'); }
   const method = req.url.slice(1), p = await body(req); calls.push({ method, p, auth: req.headers.authorization });
   let out = { ok: true };
   if (method === 'conversations.create') { if (Object.values(channels).some((c) => c.name === p.name)) out = { ok: false, error: 'name_taken' }; else { const id = `C${++n}`; channels[id] = { id, name: p.name }; out = { ok: true, channel: channels[id] }; } }
@@ -19,12 +23,13 @@ const slackSrv = await listen(async (req, res) => {
   res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out));
 });
 // ---- fake factory-agents
-const tasks = {}; let tid = 0; const classifyCalls = [];
+const tasks = {}; let tid = 0; const classifyCalls = []; const sentAttachments = [];
 const mk = (project, text, extra = {}) => { const id = `2611${String(++tid).padStart(2, '0')}-abc${tid}`; tasks[id] = { id, project, title: text.split('\n')[0], kind: 'change', phase: 'brief', status: 'briefing', messages: [{ from: 'you', text }], ...extra }; return tasks[id]; };
 const agentsSrv = await listen(async (req, res) => {
   const send = (o, c = 200) => { res.writeHead(c, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
   if (req.headers.authorization !== 'Bearer agents-secret') return send({ error: 'auth' }, 401);
   const u = new URL(req.url, 'http://x'), p = await body(req);
+  if (p.attachments?.length) sentAttachments.push({ path: u.pathname, text: p.text, attachments: p.attachments });
   if (u.pathname === '/classify') { classifyCalls.push(p.text); return send(/mini app/i.test(p.text) ? { project: 'sayra', why: 'Mini App feature' } : /slack bot/i.test(p.text) ? { project: 'factory', why: 'the Slack bot' } : { project: null, why: 'could be either' }); }
   if (u.pathname === '/tasks' && req.method === 'GET') return send(Object.values(tasks).map(({ messages, ...t }) => t));
   if (u.pathname === '/tasks' && req.method === 'POST') return send(mk(p.project, p.text, p.kind ? { kind: p.kind } : {}), 201);
@@ -235,6 +240,28 @@ await step('projects from channel names', () => {
   assert.equal(bot.projectOfChannel('ideas'), null);
   assert.equal(bot.projectOfChannel('factoryish'), null); assert.equal(bot.projectOfChannel('sayraa'), null);
   assert.equal(bot.projectOfChannel('sayra-voice-bug'), 'sayra');
+});
+const fileUrl = (f) => `http://127.0.0.1:${slackSrv.address().port}/files/${f}`;
+await step('an image sent in a task channel reaches the agent, fetched with the bot token', async () => {
+  const before = sentAttachments.length;
+  await bot.onMessage({ type: 'message', subtype: 'file_share', channel: 'C_NEW', channel_type: 'channel', user: 'U_ME', text: '', ts: '9.0', files: [{ id: 'F1', name: 'button.png', mimetype: 'image/png', url_private_download: fileUrl('ok.png') }, { id: 'F2', name: 'notes.pdf', mimetype: 'application/pdf', url_private_download: fileUrl('x.pdf') }] });
+  const sent = sentAttachments.slice(before);
+  assert.equal(sent.length, 1); assert.equal(sent[0].path, `/tasks/${sayraTask.id}/messages`);
+  assert.deepEqual(sent[0].attachments.map((a) => a.name), ['button.png'], 'only images are sent');
+  assert.deepEqual(Buffer.from(sent[0].attachments[0].data, 'base64'), PNG);
+  assert.equal(fileAuth.at(-1), 'Bearer xoxb-test');
+});
+await step('an image Slack will not hand over (no files:read): the person is told, nothing empty is sent', async () => {
+  const before = sentAttachments.length, msgs = tasks[sayraTask.id].messages.length, i = calls.length;
+  await bot.onMessage({ type: 'message', subtype: 'file_share', channel: 'C_NEW', channel_type: 'channel', user: 'U_ME', text: '', ts: '9.1', files: [{ id: 'F3', name: 'shot.png', mimetype: 'image/png', url_private_download: fileUrl('locked.png') }] });
+  assert.equal(sentAttachments.length, before); assert.equal(tasks[sayraTask.id].messages.length, msgs);
+  assert.match(posted(i, 'C_NEW')[0].p.text, /couldn't read your image[\s\S]*files:read/);
+});
+await step('a new task from a DM carries its image', async () => {
+  const before = sentAttachments.length;
+  await bot.onMessage({ type: 'message', subtype: 'file_share', channel: 'D1', channel_type: 'im', user: 'U_ME', text: 'factory: the gallery cuts this off', ts: '9.2', files: [{ id: 'F4', name: 'gallery.png', mimetype: 'image/png', url_private_download: fileUrl('ok.png') }] });
+  const sent = sentAttachments.slice(before);
+  assert.equal(sent.length, 1); assert.equal(sent[0].path, '/tasks'); assert.equal(sent[0].text, 'the gallery cuts this off');
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

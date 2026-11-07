@@ -161,7 +161,16 @@ assert.match(sent[3], /Server or bot\?/);
 assert.deepEqual(seq.map((l) => l.split('(').pop()), ['talk)', 'talk)', 'talk)', 'talk)', 'brief)']);
 ok('talk handler: "yes, ..." and "ok but" reach the coordinator, bare go approves nothing, "Plan B" is not a command, "plan it" sets brief and sends the discussion');
 
-console.log(`all ${n} passed`);
+{
+  // the chain a → b → c, where b merged before a (it started before a revision put it after a)
+  const chain = [{ key: 'a', deps: [] }, { key: 'b', deps: ['a'] }, { key: 'c', deps: ['b'] }];
+  let g2 = progress(chain, (i) => ({ a: 'running', b: 'merged' })[i.key] ?? 'pending');
+  assert.deepEqual(g2.ready.map((i) => i.key), []); assert.deepEqual(g2.waiting.map((i) => i.key), ['c']);
+  g2 = progress(chain, (i) => ({ a: 'merged', b: 'merged' })[i.key] ?? 'pending');
+  assert.deepEqual(g2.ready.map((i) => i.key), ['c']);
+}
+ok('a task waits for its whole chain: a link that merged early does not let the next one skip ahead');
+
 
 // declared files: overlap needs a dependency, in either direction, direct or through a chain
 const F = (key, files, deps = []) => ({ ...T(key, deps), ...(files ? { files } : {}) });
@@ -176,3 +185,5 @@ ok('overlap with a transitive dependency is accepted');
 assert.ok(!parsePlan(block([F('a', null), F('b', null), F('c', ['x'])])).error);
 assert.match(parsePlan(block([F('a', ['s.mjs']), F('b', ['s.mjs'], ['c']), F('c', null)])).error, /"a" and "b"/);
 ok('tasks without files are unaffected; a dependency on a third task does not excuse an overlap');
+
+console.log(`all ${n} passed`);
