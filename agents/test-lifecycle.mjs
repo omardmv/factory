@@ -1,6 +1,6 @@
 // node agents/test-lifecycle.mjs
 import assert from 'node:assert/strict';
-import { PARKED, isParked, waitingOnFor, parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport } from './lifecycle.mjs';
+import { PARKED, isParked, waitingOnFor, parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff } from './lifecycle.mjs';
 
 let n = 0;
 const test = async (name, f) => { await f(); n++; console.log('ok', name); };

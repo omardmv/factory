@@ -14,12 +14,43 @@ const KEY = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 // What the coordinator is told when it writes or revises a plan.
 export const PLAN_TYPES = ['feature', 'fix', 'hotfix', 'refactor', 'perf', 'design', 'test', 'docs', 'ci', 'chore', 'research'];
-export const PLAN_RULES = `The plan lists EVERY task of the epic. Each task is one PR an agent can finish and prove on its own (its own tests, its own review): say what to change, where, and how done is checked, in a few sentences, self-contained (the agent sees only the epic's goal and its own task). Give each task a short key (lowercase letters, digits, dashes) and "depends_on": the keys of the tasks that must be MERGED before it can start, and only real dependencies (code it builds on, a flag it needs, a file it would conflict on): everything else runs in parallel, so do not chain tasks just to order them. Tasks that edit the same files (agents/server.mjs, agents/plan.mjs, the Slack bot, ...) must depend on each other (directly or through a chain) or be merged into one task: two parallel tasks on the same file conflict. Give each task a "files" list of the files it edits; a plan where two tasks share a file and neither depends on the other is refused. At most ${MAX_PLAN_TASKS} tasks; split the epic if it needs more.
+export const PLAN_RULES = `The plan lists EVERY task of the epic. Each task is one PR an agent can finish and prove on its own (its own tests, its own review): say what to change, where, and how done is checked, in a few sentences, self-contained (the agent sees only the epic's goal and its own task). Give each task a short key (lowercase letters, digits, dashes) and "depends_on": the keys of the tasks that must be MERGED before it can start, and only real dependencies (code it builds on, a flag it needs, a file it would conflict on): everything else runs in parallel, so do not chain tasks just to order them. Add "research": true to a task that touches a new dependency, a data model or a public interface, or whose approach is unclear: a researcher agent first writes docs/research/<key>.md and opens it as a PR for the person to discuss, and the task starts only after that PR is merged (the factory adds that research task and the dependency; do not list it yourself). "research": false, or the words "no research" in the task, skips it. Tasks that edit the same files (agents/server.mjs, agents/plan.mjs, the Slack bot, ...) must depend on each other (directly or through a chain) or be merged into one task: two parallel tasks on the same file conflict. Give each task a "files" list of the files it edits; a plan where two tasks share a file and neither depends on the other is refused. At most ${MAX_PLAN_TASKS} tasks; split the epic if it needs more.
 End your reply with the whole plan as a fenced block exactly like:
 \`\`\`plan
-{"tasks": [{"key": "flag", "type": "feature", "title": "3 to 6 words naming the main thing", "task": "what to do, where, how done is checked", "depends_on": [], "files": ["agents/plan.mjs"]}, {"key": "next-thing", "type": "refactor", "title": "...", "task": "...", "depends_on": ["flag"], "files": ["agents/plan.mjs", "agents/server.mjs"]}]}
+{"tasks": [{"key": "flag", "type": "feature", "title": "3 to 6 words naming the main thing", "task": "what to do, where, how done is checked", "depends_on": [], "research": false, "files": ["agents/plan.mjs"]}, {"key": "next-thing", "type": "refactor", "title": "...", "task": "...", "depends_on": ["flag"], "files": ["agents/plan.mjs", "agents/server.mjs"]}]}
 \`\`\`
 The type is one of: feature, fix, hotfix, refactor, perf, design, test, docs, ci, chore, research.`;
+
+// Research step. A task is researched first when the coordinator marks it
+// ("research": true) or, with no mark, when its text matches the rule: it touches a
+// new dependency, a data model or a public interface, or the approach is unclear.
+// A "no research" phrase in the task text, or "research": false, skips it.
+// The researcher task (key `<key>-research`) writes docs/research/<key>.md and opens it as
+// a docs-only PR for discussion; the implementation depends on it, so it starts only
+// when that PR is merged, and is given the document and the person's comments.
+export const NO_RESEARCH = /\bno[\s-]+research\b/i;
+const RESEARCH_RULE = /\b(?:new|add(?:s|ed|ing)?|introduc\w*)\s+(?:a\s+|an\s+|the\s+)?(?:npm\s+|python\s+|third[- ]party\s+)?(?:dependenc|librar|package|service|database)\w*|\bdata[\s-]model\b|\bschema\b|\bmigrat\w+|\bpublic\s+(?:api|interface)\b|\b(?:api|url)\s+shape\b|\bapproach\s+is\s+unclear\b|\bunclear\s+(?:approach|how)\b|\bnot\s+sure\s+how\b/i;
+export const researchDoc = (key) => `docs/research/${key}.md`;
+export function needsResearch(t) {
+  if (t.type === 'research') return false; // a research task is never researched
+  const text = `${t.title ?? ''}\n${t.task ?? ''}`;
+  if (NO_RESEARCH.test(text) || t.research === false) return false;
+  return t.research === true || RESEARCH_RULE.test(text);
+}
+// Adds the research task before each task that needs one and makes the task depend on it. Pure.
+export function addResearch(tasks) {
+  const keys = new Set(tasks.map((t) => t.key)), out = [];
+  for (const t of tasks) {
+    const { research: _r, ...rest } = t;
+    if (!needsResearch(t)) { out.push(rest); continue; }
+    const rk = `${t.key}-research`.slice(0, 40);
+    if (keys.has(rk)) return { error: `task "${t.key}" needs research but the key "${rk}" is taken` };
+    keys.add(rk);
+    out.push({ key: rk, type: 'research', title: `Research: ${t.title}`.slice(0, 90), task: `Research for the task "${t.key}" (${t.title}). Write ${researchDoc(t.key)}: what the task asks, the options with trade-offs and sources, your recommendation, the risks, and how done is checked. Open it as a docs-only PR (no code) for the person to discuss.\n\nThe task to research:\n${t.task}`, deps: [...t.deps], researchFor: t.key });
+    out.push({ ...rest, deps: [...new Set([...t.deps, rk])], researchKey: rk, researchDoc: researchDoc(t.key) });
+  }
+  return { tasks: out };
+}
 
 export function parsePlan(text) {
   // fences only count on a line of their own: a task's text may mention "```plan"
@@ -44,8 +75,11 @@ export function parsePlan(text) {
     const deps = Array.isArray(t?.depends_on) ? t.depends_on.map(String) : [];
     const files = Array.isArray(t?.files) ? [...new Set(t.files.map((f) => String(f).trim().replace(/^\.\//, '')).filter(Boolean))] : [];
     const type = PLAN_TYPES.includes(String(t?.type ?? '').toLowerCase()) ? String(t.type).toLowerCase() : null;
-    out.push({ key, title: String(t?.title ?? task.split('\n')[0]).trim().slice(0, 90), task, deps: [...new Set(deps)], ...(files.length ? { files } : {}), ...(type ? { type } : {}) });
+    out.push({ key, title: String(t?.title ?? task.split('\n')[0]).trim().slice(0, 90), task, deps: [...new Set(deps)], ...(files.length ? { files } : {}), ...(type ? { type } : {}), ...(typeof t?.research === 'boolean' ? { research: t.research } : {}) });
   }
+  const withR = addResearch(out);
+  if (withR.error) return withR;
+  out.splice(0, out.length, ...withR.tasks); seen.clear(); out.forEach((t) => seen.add(t.key));
   for (const t of out) for (const d of t.deps) {
     if (d === t.key) return { error: `task "${t.key}" depends on itself` };
     if (!seen.has(d)) return { error: `task "${t.key}" depends on "${d}", which is not in the plan` };
