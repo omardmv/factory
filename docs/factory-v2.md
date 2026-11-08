@@ -1,6 +1,6 @@
 # Factory v2: design spec
 
-Status: updated 2026-11-08 to match the code. Each section says what is
+Status: updated 2026-11-08 (night) to match the code. Each section says what is
 built (with file pointers) and, under "Not built", what is still only a plan.
 Builds on README "Agents": brief -> run -> checks -> independent QA ->
 review panel -> auto-merge into the project's base branch. Production stays
@@ -29,6 +29,19 @@ a manual merge by the founder, always.
   workspace admin).
 - `DECISION NEEDED`, round-limit stops and approvals arrive in the idea's
   channel (the morning summary in one `#factory` channel), with buttons where a reply is a choice.
+- **Naming standard** (founder 2026-11-08): every message is classified once
+  (`/classify`, a haiku one-shot) into a project, a **type** (feature, fix,
+  hotfix, refactor, perf, design, test, docs, ci, chore, research, epic) and a
+  3-6 word **title**. Channels the bot makes are `<type>-<title>`, renamed
+  `pr-<N>-<type>-<title>` when the PR opens; epics are `epic-<title>`. A
+  channel the founder made keeps its name. PR titles are conventional commits,
+  `type(scope): summary`. A message classified `epic` starts an epic, with no
+  `epic:` prefix needed.
+- **Images both ways:** images attached in Slack are saved in the task's
+  workspace and named in the message (`agents/attachments.mjs`, needs
+  `files:read`); after each agent, coordinator or QA turn, its new screenshots
+  and videos are posted under its message (needs `files:write`). Factory
+  messages are shown whole in Slack (stall lists, stuck-doctor diagnoses).
 - Telegram stays until Slack has run a week without a miss, then goes.
 
 ## 2. Research stage
@@ -51,6 +64,7 @@ starts straight at its brief.
 - The task then rests in the status `research review`, with the reason "your comments on the research PR, then your merge of it". The person comments on the PR (replies to the researcher in the task chat update the document), then merges it.
 - The implementation task is given the document path and the research PR number, with the commands to read the person's comments (`researchHandoff` in `agents/lifecycle.mjs`), and says under "Decisions" where it departs from the document.
 - The approval step is the merge: the founder is asked nothing else, unless the research ends with a `DECISION NEEDED` block.
+- **On auto-go (the default, below)** there is no hand merge: a research PR goes through checks, QA and the review panel and merges like any other PR (`afterAgentRun` gets `autoGo`). The `research review` park above applies only with auto-go off.
 - Tests: `agents/test-plan.mjs` (rule, mark, "no research", blocked until merged) and `agents/test-lifecycle.mjs` (the new state).
 
 ## 3. The brain
@@ -74,8 +88,14 @@ starts straight at its brief.
 ## 4. Improvement loops
 
 - Kinds: performance, security, cleanup / tech debt, docs drift.
-- **Per project, switched on by the founder.** Stored per project in
-  `agents/projects.json`: `loops: { security: "weekly", docs: "monthly" }`.
+- **Per project, switched on by the founder.** Stored per project in the box
+  config (`/opt/factory/agents/projects.json`): `loops: { security: "weekly", docs: "monthly" }`.
+- **Set from Slack:** a panel with a dropdown per loop (off, daily, weekly,
+  every 2 weeks, monthly) and **Recommended** / **All off** buttons; a choice
+  saves at once through `POST /projects/:name/loops` (validated by
+  `normalizeLoops`, written atomically with a `.bak`, live without a restart;
+  no other config key is writable this way). The reminder for a project with
+  no loops arrives as this panel; `/factory loops [project]` shows it any time.
   Cadences: `daily`, `weekly`, `biweekly`, `monthly`; `true` means weekly.
   `loops: false` (or `{}`) is an explicit off.
 - **Scheduler** (decisions in `agents/loops.mjs`, tested by `agents/test-loops.mjs`; `loopsTick` in `server.mjs`'s poll): a kind is
@@ -156,7 +176,11 @@ Needed so the factory works from Claude anywhere, cloud sessions included
 
 ## 5b. One factory, many projects
 
-The factory is general; a project brings what is special about it.
+The factory is general; a project brings what is special about it. **The
+factory repo names no project but itself** (founder 2026-11-08, `AGENTS.md`):
+which projects it serves is box configuration (`/opt/factory/agents/projects.json`,
+shape in `agents/projects.example.json`), read through `GET /projects` by the
+Slack and Telegram bots and the dashboard. Examples use a made-up `shop`.
 
 | Layer | Lives in | Example |
 | --- | --- | --- |
@@ -197,7 +221,9 @@ project's rules, skills and AGENTS.md; then human review on staging.
 A big goal becomes an **epic** (today's "program"): a coordinator agent that
 plans and tracks, never codes. Founder 2026-11-08.
 
-- **Talk first** (done). A new epic starts in a discussion (`phase: talk`):
+- **Talk first, only with auto-go off** (done). On auto-go (the default) an
+  epic skips the discussion: the coordinator plans at once and a valid plan
+  with no `DECISION NEEDED` starts by itself. With auto-go off, a new epic starts in a discussion (`phase: talk`):
   you and the coordinator talk through what to build and how to improve it;
   it reads the code, proposes options and trade-offs, and is told not to
   write a plan block or change files. It writes the plan only when you write
@@ -229,7 +255,7 @@ plans and tracks, never codes. Founder 2026-11-08.
   not planned, a failed task's sub-issue is closed as not planned, and the
   epic issue is closed on `PROGRAM DONE`. It is updated only when something
   changed.
-- **In Slack** (done): the epic gets its own channel named `epic-<title>-<id>`
+- **In Slack** (done): the epic gets its own channel named `epic-<title>`
   where the discussion happens (with the Plan it button) and the plan gets a
   Go button. Once the plan is approved the bot posts a plan summary (tasks
   by wave, link to the epic issue) once, and keeps the channel topic at
@@ -248,6 +274,10 @@ plans and tracks, never codes. Founder 2026-11-08.
   back to its agent: merge staging into the branch, resolve, re-run the
   checks; then it is reviewed and merged again. At most 3 such rounds, then
   it waits for the founder.
+- **The coordinator sees the live epic** (`epicStatus` in `server.mjs`): every
+  reply the person sends to a running epic carries, for each task, its state,
+  task status, PR, what it waits on, what blocks it, and a stuck task's last
+  message, so "why is it stuck?" gets a real answer instead of a guess.
 - **Coordinator turns** are decided by `afterCoordinator` in `agents/lifecycle.mjs`:
   a `DECISION NEEDED` reply parks the epic, `PROGRAM DONE` closes it, a reply
   in `talk` or `brief` waits for the person's `plan` or `go`, and a ```plan block
@@ -326,6 +356,69 @@ its own test; `agents/server.mjs` only wires them (see `AGENTS.md`).
   and named in the message (`agents/attachments.mjs`); after a turn, new
   screenshots and videos are posted under its message in the task channel.
 
+## 5f. Auto-go: nobody waits for a Go (built)
+
+Founder 2026-11-08: "why other tasks doesn't automatically run, why waiting
+for my thing, just tell it to go". Default on; a project opts out with
+`"autoGo": false`, the whole factory with `AUTO_GO=0`.
+
+- A task's brief is accepted by itself when it has no `DECISION NEEDED` and no
+  question caught by the unasked check: the factory says "▶️ auto-go" and starts
+  the run, telling the agent to settle its own open questions and log them.
+- An epic plans at once and a valid plan starts by itself.
+- Agents and coordinators are told: state assumptions, don't ask; stop only for
+  a real architecture, design-taste, money or security call that is expensive
+  to undo, or for something only the person can do (a permission, an account,
+  a secret).
+- The unasked check follows the same rule on auto-go: a question the agent
+  answers with its own suggestion is its decision, not a stop.
+
+## 5g. Never block on the founder (planned)
+
+**Why.** An audit of every task on 2026-11-07/08 found 19 stops. 9 were an
+agent asking the founder something mid-run (median wait 22 min, longest 68,
+because nobody was there to answer), and 6 "epic is stuck" notices were their
+knock-on effect. Of the 9, only one truly needed the founder (rotate leaked
+secrets); the rest were product defaults the agent had already suggested
+(chat-list scope, icon sizes), engineering trade-offs it should own (a
+duplicate reminder, a symlink mount), and one misunderstood answer ("2").
+
+**Prior art.** Lauren Tan (poteto, Cursor) in pstack
+(`github.com/cursor/plugins`, `principle-never-block-on-the-human`,
+`poteto-mode`): proceed, then present; classify every question before asking;
+a fact a run can observe is answered by a throwaway probe, never by the human;
+only a product or preference call no experiment can settle is the human's, and
+even then the agent goes ahead with a default and logs why; pausing is kept
+for irreversible actions. The decision log is how the human audits afterwards.
+
+**The rule.** A task never waits on the founder for anything reversible.
+
+1. **Classify the question** (the unasked check and the agent prompts):
+   - *a fact* (does X build, is the API slow, what does the code do) → the
+     agent runs a probe and decides; never asked;
+   - *a reversible product or engineering call* → the agent takes its
+     recommended default, logs it, **keeps going**, and the factory posts a
+     non-blocking **"📌 Decided for you"** message: the question, the choice
+     taken, the alternatives as buttons. Pressing another option sends it to
+     the task as a change (or, after merge, as a follow-up task);
+   - *irreversible or only-the-founder* (rotate a secret, grant a permission,
+     create an account, spend money, deploy to production, delete data,
+     message users) → the only stop: `DECISION NEEDED`, pinged, with the
+     stuck doctor behind it.
+2. **Questions first for epics** (the founder's idea, without the wait): at
+   planning time the coordinator lists the product and preference calls the
+   whole epic needs, each with its recommended default, as one message with
+   buttons in the epic channel. Work starts at once on the defaults; an answer
+   that arrives before a task starts goes into that task's prompt, a later one
+   reaches the running task or becomes a follow-up. Every task of the epic gets
+   the epic's decisions so far, so no task asks what another already settled.
+3. **Answers by number:** a reply like "2" to a question with numbered options
+   is expanded to that option's text before it reaches the agent.
+4. **Measured:** stops per task and minutes waiting on the founder, in the
+   metrics (section 5); the target is zero waits for reversible calls.
+
+Builds on: auto-go (5f), the unasked check, the decision log, the stuck doctor.
+
 ## 6. Safety gates (never self-modified)
 
 Any change to these is `DECISION NEEDED` and waits for the founder, even
@@ -337,7 +430,12 @@ inside the factory repo:
 - the round limit and spend caps
 - the replay benchmark: its tasks and how results are scored
 - agent isolation (container limits, network, firewall, runtime)
-- secrets, tokens, GitHub App permissions
+- secrets, tokens, GitHub App permissions (agent tokens: contents, pull
+  requests, issues and workflows write; checks, statuses and actions read;
+  workflows write approved by the founder 2026-11-08, CI changes are reviewed
+  as security)
+- required checks per project (`requiredChecks`, enforced by the factory before
+  it merges)
 - this section itself
 
 The list is kept in `brain/knowledge/gates.md`. Not built: the factory
@@ -349,6 +447,6 @@ rule in `AGENTS.md` carry it.
 Done: (1) brain mounted into containers; (3) Slack adapter (`slack/`, alongside
 Telegram); (4) research step, inside epics; (5) loops per project; (7) remote
 factory MCP; (8) per-project agent images and knowledge; and the reliability
-work (5e). Not done: (2) the auto-merge refusal for gate files; (4) a
+work (5e); auto-go (5f). Next: never block on the founder (5g). Not done: (2) the auto-merge refusal for gate files; (4) a
 draft PR at once for every idea; (6) retro + metrics, then the replay
 benchmark (section 5 is still a plan).
