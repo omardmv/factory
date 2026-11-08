@@ -54,3 +54,19 @@ export function approveCheck(t, sha) {
   if (sha && sha !== t.reviewedSha) return { error: `the PR changed since you were asked (${String(sha).slice(0, 7)} -> ${t.reviewedSha.slice(0, 7)}); press Approve on the newest "Ready for your check" message` };
   return { ok: true, sha: t.reviewedSha };
 }
+
+// Is a merge live? After the factory merges, the project's staging is asked which commit it runs
+// (box config "deployCheck": { "url": ".../version.json", "field": "version", "withinMin": 45 }).
+// deploy: { sha, at, state: 'waiting' | 'late' }; version: what staging reports now (or null);
+// relation: GitHub's compare of the merge commit with that version ('identical' | 'ahead' | 'behind' | 'diverged' | null)
+// -> { state: 'live' | 'waiting' | 'late', say?: string }
+export function deployState(deploy, { version, relation, behindBy = null, now, withinMin = 45, base = 'staging' }) {
+  const live = !!version && (version === deploy.sha || relation === 'identical' || relation === 'ahead');
+  const mins = Math.round((now - Date.parse(deploy.at)) / 60000);
+  if (live) return { state: 'live', say: `🌐 Live on ${base}: it runs ${String(version).slice(0, 7)}, which includes this merge (${mins} min after it).${deploy.state === 'late' ? ' Late, but there.' : ''}` };
+  if (deploy.state === 'waiting' && mins >= withinMin) {
+    const where = version ? `${base} still runs ${String(version).slice(0, 7)}${behindBy ? `, ${behindBy} commit${behindBy === 1 ? '' : 's'} behind this merge` : ''}` : `${base} did not say which version it runs`;
+    return { state: 'late', say: `⏳ Not live on ${base} ${mins} min after the merge: ${where}. Its deploy may be slow, queued or failing; the factory keeps checking and says when it lands.` };
+  }
+  return { state: deploy.state };
+}

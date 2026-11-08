@@ -1,6 +1,6 @@
 // node agents/test-merge.mjs
 import assert from 'node:assert/strict';
-import { mergeDecision, requiredChecks, approvalGate, approveCheck } from './merge.mjs';
+import { mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
 const t = { reviewedSha: 'abc1234def' };
 const pr = (o = {}) => ({ state: 'open', merged_at: null, base: { ref: 'staging' }, head: { sha: 'abc1234def' }, mergeable: true, mergeable_state: 'clean', ...o });
 const cases = [
@@ -60,5 +60,18 @@ for (const [name, p, rounds, want] of cases) {
   assert.equal(approvalGate({ ...ready, previewFor: 'abc1234def' }, { approval: true, previews: true }).action, 'ask', 'preview of this head built (or failed): ask');
   assert.equal(approvalGate({ ...ready, previewFor: 'old0000' }, { approval: true, previews: true }).action, 'preview', 'a new head gets a new preview');
   console.log('ok approval: asked once per reviewed head, merges only the head the founder approved, a new head asks again');
+}
+{
+  const at = '2026-11-08T03:55:00Z', t0 = Date.parse(at), min = 60000;
+  const d = { sha: '262147cd6c67aa', at, state: 'waiting' };
+  assert.equal(deployState(d, { version: '262147cd6c67aa', now: t0 + 9 * min }).state, 'live', 'staging runs the merge commit');
+  assert.match(deployState(d, { version: '855e4ee804f6', relation: 'ahead', now: t0 + 30 * min }).say, /^🌐 Live on staging: it runs 855e4ee, which includes this merge \(30 min after it\)/);
+  assert.equal(deployState(d, { version: '9a4ee79818b4', relation: 'behind', now: t0 + 20 * min }).state, 'waiting', 'older version, still in time');
+  const late = deployState(d, { version: '9a4ee79818b4', relation: 'behind', behindBy: 2, now: t0 + 46 * min });
+  assert.equal(late.state, 'late'); assert.match(late.say, /Not live on staging 46 min after the merge: staging still runs 9a4ee79, 2 commits behind/);
+  assert.deepEqual(deployState({ ...d, state: 'late' }, { version: '9a4ee79818b4', relation: 'behind', now: t0 + 80 * min }), { state: 'late' }, 'said once');
+  assert.match(deployState({ ...d, state: 'late' }, { version: '262147cd6c67aa', now: t0 + 90 * min }).say, /Late, but there/);
+  assert.match(deployState(d, { version: null, now: t0 + 50 * min }).say, /did not say which version it runs/);
+  console.log('ok deploy check: live when staging runs a version that includes the merge; one late notice after 45 min; then live, late');
 }
 console.log(`all ${cases.length} passed`);

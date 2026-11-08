@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
-import { mergeDecision, approvalGate, approveCheck } from './merge.mjs';
+import { mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine, decidedMessage, expandNumberAnswer, hasDecisionBlock } from './unasked.mjs';
@@ -577,6 +577,36 @@ async function previewSweep() {
   }
 }
 
+// ---------- is the merge live? (decision in merge.mjs deployState) ----------
+// one read of each project's version per sweep; a merge is live once that version includes it
+const DEPLOY_GIVE_UP_MIN = 24 * 60;
+async function deploySweep() {
+  const watching = allTasks().filter((x) => x.deploy && ['waiting', 'late'].includes(x.deploy.state));
+  const versions = {};
+  for (const t of watching) {
+    const p = PROJECTS[t.project], c = p?.deployCheck;
+    if (!c?.url) { update(t.id, (x) => { delete x.deploy; }); continue; }
+    if (!(t.project in versions)) {
+      versions[t.project] = await fetch(c.url, { signal: AbortSignal.timeout(10000), headers: { 'cache-control': 'no-cache' } })
+        .then((r) => (r.ok ? r.json() : null)).then((j) => (j ? String(j[c.field ?? 'version'] ?? '') || null : null)).catch(() => null);
+    }
+    const version = versions[t.project];
+    let relation = null, behindBy = null;
+    if (version && version !== t.deploy.sha) {
+      const cmp = await gh(await githubToken(t.repo), `/repos/${t.repo}/compare/${t.deploy.sha}...${version}`).catch(() => null);
+      relation = cmp?.status ?? null; behindBy = cmp?.behind_by ?? null;
+    }
+    const d = deployState(t.deploy, { version, relation, behindBy, now: Date.now(), withinMin: c.withinMin ?? 45, base: p.autoMerge ?? t.base });
+    if (d.say) say(t.id, 'factory', `[factory] ${d.say}`, d.state === 'late' ? { ping: true } : {});
+    if (d.state === 'live') { update(t.id, (x) => { x.deploy = { ...x.deploy, state: 'live', version, liveAt: new Date().toISOString() }; }); log('deploy.live', { task: t.id, version }); }
+    else if (d.state !== t.deploy.state) { update(t.id, (x) => { x.deploy = { ...x.deploy, state: d.state }; }); log('deploy.late', { task: t.id, version }); }
+    else if ((Date.now() - Date.parse(t.deploy.at)) / 60000 > DEPLOY_GIVE_UP_MIN) {
+      update(t.id, (x) => { x.deploy = { ...x.deploy, state: 'gave-up' }; });
+      say(t.id, 'factory', `[factory] Stopped watching ${p.autoMerge ?? 'staging'} for this merge after 24 h: it never ran a version that includes it.`, { ping: true });
+    }
+  }
+}
+
 async function autoMerge(id) {
   const t = load(id), p = PROJECTS[t.project];
   if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
@@ -634,16 +664,19 @@ async function autoMerge(id) {
     enqueue(id, `[factory] Your PR #${pr.number} was approved, but it no longer merges into ${p.autoMerge}: another change landed there first and conflicts with yours. Bring your branch up to date: \`git fetch origin && git merge origin/${p.autoMerge}\`, resolve every conflict keeping both changes' intent (read what landed: \`git log -p HEAD..origin/${p.autoMerge}\`), re-run your tests and the checks your definition of done names, and push. Log the resolution in the decision log and add a "Merge" note to the PR. Do not rebase or force-push. It will be reviewed again.`, 'bypassPermissions', 'conflict');
     return;
   }
+  let merged;
   try {
-    await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: p.mergeMethod ?? 'merge', commit_title: `${pr.title} (#${pr.number})` });
+    merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: p.mergeMethod ?? 'merge', commit_title: `${pr.title} (#${pr.number})` });
   } catch (e) {
     const x = update(id, (x) => { x.mergeTries = (x.mergeTries ?? 0) + 1; });
     log('merge.retry', { task: id, tries: x.mergeTries, error: e.message });
     if (x.mergeTries >= MERGE_TRIES) giveUp(`GitHub refused ${MERGE_TRIES} times (${e.message.slice(0, 200)})`);
     return;
   }
-  update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; });
-  say(id, 'factory', `[factory] 🚀 merged into ${p.autoMerge} (PR #${pr.number}, reviewed head ${t.reviewedSha.slice(0, 7)}). ${p.autoMerge === 'dev' ? 'Staging deploys it now; production still waits for your sign-off.' : 'The server pulls it within 5 minutes.'}`);
+  // with a deploy check, the factory watches staging until it runs a version that includes this merge
+  const watch = p.deployCheck?.url && merged?.sha ? { sha: merged.sha, at: new Date().toISOString(), state: 'waiting' } : null;
+  update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; if (watch) x.deploy = watch; });
+  say(id, 'factory', `[factory] 🚀 merged into ${p.autoMerge} (PR #${pr.number}, reviewed head ${t.reviewedSha.slice(0, 7)}). ${watch ? `The factory tells you here when ${p.autoMerge} runs it.` : p.autoMerge === 'dev' ? 'Staging deploys it now; production still waits for your sign-off.' : 'The server pulls it within 5 minutes.'}`);
   log('merge.done', { task: id, pr: pr.number, into: p.autoMerge });
 }
 const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
@@ -1201,6 +1234,7 @@ const poll = () => drain.draining ? Promise.resolve() : intake().catch((e) => lo
   .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
   .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }))
   .then(() => loopsTick()).catch((e) => log('loops.failed', { error: e.message }))
+  .then(() => deploySweep()).catch((e) => log('deploy.sweep_failed', { error: e.message }))
   .then(() => { doctorSweep(); previewSweep().catch((e) => log('preview.sweep_failed', { error: e.message })); }); // in the background: a diagnosis takes a minute, the poll does not wait
 // ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
 const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);

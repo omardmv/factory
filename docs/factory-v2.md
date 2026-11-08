@@ -466,6 +466,13 @@ staging". A project with `"approval": true` in its box config:
   each preview its own network (`pre_up`/`post_down`) and prints its own
   sign-in link (`preview_login`). Previews are behind the factory's sign-in at
   `<type-title>-pr<N>.<domain>`.
+- **Is it live?** (project `"deployCheck": { "url": ".../version.json", "field":
+  "version", "withinMin": 45 }`): after each merge the factory records the merge
+  commit and asks staging which version it runs on every poll; when that version
+  includes the merge it posts "🌐 Live on staging" in the task's channel. Not live
+  within `withinMin` minutes: one "⏳ Not live" ping saying how far behind staging
+  is; it keeps checking and says when it lands; it gives up after 24 h
+  (`deployState` in `agents/merge.mjs`, `deploySweep`).
 
 ## 6. Safety gates (never self-modified)
 
