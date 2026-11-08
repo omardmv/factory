@@ -14,6 +14,7 @@ test('no knowledge dir -> no mount', () => assert.deepEqual(launchArgs({ ...base
 test('unknown project -> default, no mount', () => assert.deepEqual(launchArgs({ ...base, project: 'nope' }), { image: 'factory-agent:latest', mounts: [] }));
 test('inherited names are unknown', () => assert.deepEqual(launchArgs({ ...base, project: 'constructor' }), { image: 'factory-agent:latest', mounts: [] }));
 test('path-like project name never mounts', () => assert.deepEqual(launchArgs({ ...base, projects: { '../x': {} }, project: '../x' }).mounts, []));
+test('uppercase project name never mounts', () => assert.deepEqual(launchArgs({ ...base, projects: { Shop: {} }, project: 'Shop' }).mounts, []));
 test('malformed image falls back', () => assert.equal(launchArgs({ ...base, project: 'evil' }).image, 'factory-agent:latest'));
 test('image tag convention', () => assert.equal(projectImageTag('shopx'), 'factory-agent-shopx:latest'));
 console.log(`${n} passed`);

@@ -285,8 +285,29 @@ coolify_watch() {
   return 1
 }
 
+# per-project agent images (<PROJECTS_DIR>/<name>/agent.Dockerfile -> factory-agent-<name>:latest, on the box, not in the repo).
+# Runs on every self-update, also when the factory repo did not change: those files are not in git.
+# Built when the hash of the Dockerfile + the base image id differs from the last build (stored beside it) or the
+# image is missing; a failed build is logged and keeps the old image.
+build_project_images() {
+  local pdir="${PROJECTS_DIR:-/opt/factory/projects}" df pname h base
+  for df in "$pdir"/*/agent.Dockerfile; do
+    [ -f "$df" ] || continue
+    pname="$(basename "$(dirname "$df")")"
+    case "$pname" in *[!a-z0-9_.-]*|[!a-z0-9]*) log "agent image: skipping '$pname' (docker tags need lowercase letters, digits, _ . -)"; continue ;; esac
+    base="$(docker image inspect -f '{{.Id}}' factory-agent:latest 2>/dev/null || true)"
+    h="$( { cat "$df"; echo "$base"; } | sha256sum | cut -d' ' -f1)"
+    if [ "$(cat "$pdir/$pname/.image-hash" 2>/dev/null)" != "$h" ] || ! docker image inspect "factory-agent-$pname:latest" >/dev/null 2>&1; then
+      log "agent image factory-agent-$pname: building"
+      if docker build -q -f "$df" -t "factory-agent-$pname:latest" "$pdir/$pname" >/dev/null; then echo "$h" > "$pdir/$pname/.image-hash"; log "agent image factory-agent-$pname: built"
+      else log "agent image factory-agent-$pname: BUILD FAILED (old image kept)"; fi
+    fi
+  done
+}
+
 self_update() {
   [ "$(id -u)" = 0 ] || die "self-update needs root"
+  build_project_images
   local before after
   before="$(git -C "$FACTORY_DIR" rev-parse HEAD)"
   GIT_SSH_COMMAND="ssh -i /opt/factory/deploy_key -o IdentitiesOnly=yes" git -C "$FACTORY_DIR" fetch -q
@@ -342,20 +363,6 @@ self_update() {
   if ! cmp -s "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service; then
     install -m 644 "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service && systemctl daemon-reload && log "factory-agents unit installed"
   fi
-  # per-project agent images (<PROJECTS_DIR>/<name>/agent.Dockerfile -> factory-agent-<name>:latest, on the box, not in the repo):
-  # built when the folder's content hash differs from the last build (stored beside it) or the image is missing;
-  # a failed build is logged and keeps the old image
-  local pdir="${PROJECTS_DIR:-/opt/factory/projects}" df pname h
-  for df in "$pdir"/*/agent.Dockerfile; do
-    [ -f "$df" ] || continue
-    pname="$(basename "$(dirname "$df")")"
-    h="$(sha256sum "$df" | cut -d' ' -f1)"
-    if [ "$(cat "$pdir/$pname/.image-hash" 2>/dev/null)" != "$h" ] || ! docker image inspect "factory-agent-$pname:latest" >/dev/null 2>&1; then
-      log "agent image factory-agent-$pname: building"
-      if docker build -q -f "$df" -t "factory-agent-$pname:latest" "$pdir/$pname" >/dev/null; then echo "$h" > "$pdir/$pname/.image-hash"; log "agent image factory-agent-$pname: built"
-      else log "agent image factory-agent-$pname: BUILD FAILED (old image kept)"; fi
-    fi
-  done
   # restart = drain: the server finishes the running turns (up to 30 min) before it exits, so do not wait here
   # (--no-block); systemd starts the new one when the old one is gone. Containers are never killed by a deploy.
   if printf '%s\n' "$changed" | grep -q "^agents/"; then systemctl restart --no-block factory-agents && log "factory-agents restart queued (drains running turns first)"; fi

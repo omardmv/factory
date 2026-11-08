@@ -3,7 +3,7 @@
 //   projects.json: "myproj": { ..., "image": "factory-agent-myproj:latest" }  (extends factory-agent)
 //   <projectsDir>/<project>/knowledge/  ->  /factory/brain/project (read-only, only that project's agents)
 export const PROJECT_KNOWLEDGE_MOUNT = '/factory/brain/project';
-const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const SAFE_NAME = /^[a-z0-9][a-z0-9_.-]*$/; // also a valid docker tag part
 const SAFE_IMAGE = /^[a-z0-9][a-z0-9_./:-]*$/;
 
 // -> { image, mounts: ['host:container:ro', ...] }. Unset, unknown or malformed settings fall back to
