@@ -1,0 +1,23 @@
+// Which image and which extra mounts a project's agent container gets (spec 5b).
+// Pure: the caller injects the file check, so tests need no disk.
+//   projects.json: "myproj": { ..., "image": "factory-agent-myproj:latest" }  (extends factory-agent)
+//   <projectsDir>/<project>/knowledge/  ->  /factory/brain/project (read-only, only that project's agents)
+export const PROJECT_KNOWLEDGE_MOUNT = '/factory/brain/project';
+const SAFE_NAME = /^[a-z0-9][a-z0-9_.-]*$/; // also a valid docker tag part
+const SAFE_IMAGE = /^[a-z0-9][a-z0-9_./:-]*$/;
+
+// -> { image, mounts: ['host:container:ro', ...] }. Unset, unknown or malformed settings fall back to
+// the default image and no extra mount (today's behaviour).
+export function launchArgs({ project, projects = {}, defaultImage, projectsDir, exists = () => false }) {
+  const p = Object.hasOwn(projects, project) ? projects[project] : null;
+  const image = p && typeof p.image === 'string' && SAFE_IMAGE.test(p.image) ? p.image : defaultImage;
+  const mounts = [];
+  if (p && SAFE_NAME.test(project)) {
+    const host = `${projectsDir}/${project}/knowledge`;
+    if (exists(host)) mounts.push(`${host}:${PROJECT_KNOWLEDGE_MOUNT}:ro`);
+  }
+  return { image, mounts };
+}
+
+// the tag self-update builds from <projectsDir>/<project>/agent.Dockerfile (on the box, not in the repo)
+export const projectImageTag = (project) => `factory-agent-${project}:latest`;
