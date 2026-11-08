@@ -39,11 +39,14 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
 }
 
 // The founder approves each feature before it merges (project config "approval": true).
-// -> { action: 'merge' } | { action: 'ask' } (post the ready-for-your-check message once per reviewed head) | { action: 'wait' }
+// -> { action: 'merge' } | { action: 'preview' } (build the reviewed head's preview first) | { action: 'ask' } (post the ready-for-your-check message once per reviewed head) | { action: 'wait' }
 export function approvalGate(t, project) {
   if (!project?.approval) return { action: 'merge' };
   if (t.approved && t.approved === t.reviewedSha) return { action: 'merge' };
-  return t.approvalAskedSha === t.reviewedSha ? { action: 'wait' } : { action: 'ask' };
+  if (t.approvalAskedSha === t.reviewedSha) return { action: 'wait' };
+  // a project with previews: build the reviewed head's preview first, then ask (a failed build asks too)
+  if (project.previews && t.previewFor !== t.reviewedSha) return { action: 'preview' };
+  return { action: 'ask' };
 }
 // the founder pressed Approve for the head they were shown
 export function approveCheck(t, sha) {

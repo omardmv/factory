@@ -32,7 +32,7 @@ import { createMcp } from './mcp.mjs';
 import { launchArgs } from './launch.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync, renameSync, rmSync } from 'node:fs';
 
 const HOME = process.env.AGENTS_DIR ?? '/srv/factory/agents';
 const SECRETS = process.env.AGENTS_SECRETS ?? '/opt/factory/agents';
@@ -529,6 +529,54 @@ const MERGE_TRIES = 10;
 const MAX_CONFLICT_ROUNDS = Number(process.env.MAX_CONFLICT_ROUNDS ?? 3);
 const MAX_CHECK_ROUNDS = Number(process.env.MAX_CHECK_ROUNDS ?? 3);
 const REQUIRED_CHECKS_WAIT_MIN = Number(process.env.REQUIRED_CHECKS_WAIT_MIN ?? 45);
+// ---------- per-PR previews (bin/factory-box up/down; the project's config lives on the box) ----------
+// one build at a time (they are heavy); the preview is of the reviewed head, from a clean export of that commit
+const previewJobs = new Set(); let previewBusy = false; const previewWaiting = [];
+const FACTORY_BOX = process.env.FACTORY_BOX ?? '/opt/factory/src/bin/factory-box';
+const PREVIEW_SRC = `${HOME}/previews`;
+function startPreview(id) { previewJobs.add(id); previewWaiting.push(id); pumpPreviews(); }
+function pumpPreviews() {
+  if (previewBusy || !previewWaiting.length) return;
+  const id = previewWaiting.shift(); previewBusy = true;
+  buildPreview(id).catch((e) => log('preview.failed', { task: id, error: e.message }))
+    .finally(() => { previewBusy = false; previewJobs.delete(id); pumpPreviews(); });
+}
+const run = (cmd, args, { timeoutMs = 1800000, input } = {}) => new Promise((resolve) => {
+  const c = spawn(cmd, args, { stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] }); let out = '', err = '';
+  c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err = (err + d).slice(-4000); });
+  const timer = setTimeout(() => c.kill('SIGKILL'), timeoutMs);
+  c.on('close', (code) => { clearTimeout(timer); resolve({ code, out, err }); });
+});
+async function buildPreview(id) {
+  const t = load(id), sha = t.reviewedSha, n = t.pr?.number;
+  if (!sha || !n) return;
+  const src = `${PREVIEW_SRC}/${id}`, repo = `${dir(id)}/workspace/repo`;
+  log('preview.build', { task: id, pr: n, sha });
+  rmSync(src, { recursive: true, force: true }); mkdirSync(src, { recursive: true });
+  const ar = await run('sh', ['-c', `git -c safe.directory='*' -C "$1" archive "$2" | tar -x -C "$3"`, 'x', repo, sha, src], { timeoutMs: 300000 });
+  let url = null, error = null;
+  if (ar.code !== 0) error = `could not export ${sha.slice(0, 7)} (${ar.err.trim().split('\n').at(-1)})`;
+  else {
+    const name = `${t.type ?? 'task'}-${t.title ?? ''}`;
+    const r = await run(FACTORY_BOX, ['up', t.project, String(n), src, name]);
+    url = r.code === 0 ? r.out.trim().split('\n').filter(Boolean).at(-1) : null;
+    if (!url?.startsWith('https://')) { url = null; error = (r.err.trim().split('\n').filter((l) => !/^\s*(Container|#\d|\[)/.test(l)).at(-1) ?? `exit ${r.code}`).slice(0, 300); }
+  }
+  update(id, (x) => { x.previewFor = sha; x.previewUrl = url; x.previewError = error; x.previewPr = n; });
+  log(url ? 'preview.ready' : 'preview.failed', { task: id, pr: n, sha, ...(error ? { error } : {}) });
+  autoMerge(id).catch((e) => log('merge.failed', { task: id, error: e.message })); // now ask, with the link
+}
+// a preview whose PR merged or closed, or whose task ended, is removed
+async function previewSweep() {
+  for (const t of allTasks().filter((x) => x.previewPr && (x.status === 'merged' || ['stopped', 'done'].includes(x.status) || ['merged', 'closed'].includes(x.pr?.state)))) {
+    if (previewJobs.has(t.id)) continue;
+    const r = await run(FACTORY_BOX, ['down', t.project, String(t.previewPr)], { timeoutMs: 300000 });
+    rmSync(`${PREVIEW_SRC}/${t.id}`, { recursive: true, force: true });
+    update(t.id, (x) => { delete x.previewPr; x.previewUrl = null; });
+    log('preview.down', { task: t.id, pr: t.previewPr, code: r.code });
+  }
+}
+
 async function autoMerge(id) {
   const t = load(id), p = PROJECTS[t.project];
   if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
@@ -536,10 +584,16 @@ async function autoMerge(id) {
   // the founder checks the result and approves each feature before it merges (project "approval": true)
   const gate = approvalGate(t, p);
   if (gate.action === 'wait') return;
+  if (gate.action === 'preview') {
+    // build the preview of exactly the reviewed head first, then ask (a failed build still asks, with the reason)
+    if (!previewJobs.has(id)) startPreview(id);
+    return;
+  }
   if (gate.action === 'ask') {
     update(id, (x) => { x.approvalAskedSha = x.reviewedSha; x.waitingOn = 'your approval: check the result (recordings, preview) and press Approve & merge, or reply with what to change'; });
     const qa = t.qaVerdict === 'PASS' && t.qaTestedSha === t.reviewedSha ? ', QA' : '';
-    const links = [t.pr?.url ? `PR: ${t.pr.url} (its "Evidence report" comment lists what was checked, with proof)` : '', t.previewUrl ? `Preview to try it: ${t.previewUrl}` : 'No preview for this project yet: the recordings and screenshots above show it.'].filter(Boolean).join('\n');
+    const cur = load(id);
+    const links = [cur.previewUrl ? `Try it yourself (opens signed in as you): ${cur.previewUrl}` : cur.previewError ? `The preview could not be built: ${cur.previewError}` : '', t.pr?.url ? `PR: ${t.pr.url} (its "Evidence report" comment lists what was checked, with proof)` : '', p.previews ? '' : 'This project has no previews: the recordings and screenshots above show the result.'].filter(Boolean).join('\n');
     say(id, 'factory', `[factory] ✅ Ready for your check: PR #${t.pr.number} passed review${qa} and the checks at ${t.reviewedSha.slice(0, 7)}.\n${links}\nPress Approve & merge to merge it into ${p.autoMerge}, or reply here with what to change.`, { approve: { sha: t.reviewedSha, pr: t.pr.number }, ping: true });
     log('approval.asked', { task: id, pr: t.pr.number, sha: t.reviewedSha });
     return;
@@ -1147,7 +1201,7 @@ const poll = () => drain.draining ? Promise.resolve() : intake().catch((e) => lo
   .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
   .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }))
   .then(() => loopsTick()).catch((e) => log('loops.failed', { error: e.message }))
-  .then(() => { doctorSweep(); }); // in the background: a diagnosis takes a minute, the poll does not wait
+  .then(() => { doctorSweep(); previewSweep().catch((e) => log('preview.sweep_failed', { error: e.message })); }); // in the background: a diagnosis takes a minute, the poll does not wait
 // ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
 const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);
 const NUDGE_PROMPT = '[factory] Nudge: the factory saw no progress on this task for a while. Check `git status`, your decision log, your PR and its checks, then carry on with what you were doing. If you are blocked, say exactly on what.';
