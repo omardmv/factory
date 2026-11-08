@@ -1,0 +1,15 @@
+# The agents' share of the box: every agent container runs in this slice (docker run --cgroup-parent,
+# AGENT_CGROUP_PARENT in agents/server.mjs). The box is shared with production, so all agents together get
+# at most 9 of its 12 cores, whatever MAX_PARALLEL is; one agent can still use its own 4. On 2026-11-08 five
+# agent containers running e2e with video took every core (load 50) and production's API waited.
+# Install (never restart or stop this slice: that stops every agent in it):
+#   cp agents/factory-agents.slice /etc/systemd/system/ && systemctl daemon-reload
+#   systemctl set-property --runtime factory-agents.slice CPUAccounting=yes CPUQuota=900% CPUWeight=50   # applies it live
+[Unit]
+Description=factory agents' containers (CPU cap, leaves cores for production)
+Before=slices.target
+
+[Slice]
+CPUAccounting=yes
+CPUQuota=900%
+CPUWeight=50
