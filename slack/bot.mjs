@@ -455,7 +455,11 @@ export async function renameForPr(t) {
 export async function pushNotices() {
   const ns = await agents('/notices');
   if (!ns.length || !state.dm) return;
-  for (const n of ns) await dm(n.text);
+  state.noticesSent ??= {};
+  for (const n of ns) { // remembered before the ack: a failed ack is retried without sending the DM again
+    if (state.noticesSent[n.id]) continue;
+    await dm(n.text); state.noticesSent[n.id] = true; persist();
+  }
   await agents('/notices/ack', { method: 'POST', body: JSON.stringify({ ids: ns.map((n) => n.id) }) });
 }
 
