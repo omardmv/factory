@@ -622,34 +622,8 @@ async function autoMerge(id) {
   const t = load(id), p = PROJECTS[t.project];
   if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
   if (t.qaVerdict === 'FAIL' && t.qaTestedSha === t.reviewedSha) return;
-  // the founder checks the result and approves each feature before it merges (project "approval": true)
-  const lastRun = lastE2eRun(`${dir(id)}/workspace`);
-  const gate = approvalGate(t, p, lastRun);
-  if (gate.action === 'fix-e2e') {
-    // the founder's time is for checking a result, not for finding a red test run: back to the agent first
-    update(id, (x) => { x.e2eFixSha = x.reviewedSha; x.status = 'working'; delete x.waitingOn; });
-    say(id, 'factory', `[factory] Not asking the founder yet: the agent's last e2e run failed (${lastRun.count} test${lastRun.count === 1 ? '' : 's'}: ${lastRun.failed.join('; ') || 'see /workspace/videos'}). Sent back to fix it.`);
-    log('approval.e2e_red', { task: id, failed: lastRun.failed });
-    enqueue(id, `[factory] Before the founder is asked to approve, your last e2e run (in /workspace/videos, ${lastRun.at}) shows a FAILURE: ${lastRun.failed.join('; ') || `${lastRun.count} failed test(s)`}. Read each failed test's error-context.md there. Re-run the whole e2e suite for your change on the current head with videos into /workspace/videos, fix the cause in the code (not by loosening a test; if a test is wrong, fix it and say why in the decision log), push, and reply with the real pass/fail counts.`, 'bypassPermissions', 'e2e');
-    return;
-  }
-  if (gate.action === 'wait') return;
-  if (gate.action === 'preview') {
-    // build the preview of exactly the reviewed head first, then ask (a failed build still asks, with the reason)
-    if (!previewJobs.has(id)) startPreview(id);
-    return;
-  }
-  if (gate.action === 'ask') {
-    update(id, (x) => { x.approvalAskedSha = x.reviewedSha; x.waitingOn = 'your approval: check the result (recordings, preview) and press Approve & merge, or reply with what to change'; });
-    const qa = t.qaVerdict === 'PASS' && t.qaTestedSha === t.reviewedSha ? ', QA' : '';
-    const cur = load(id);
-    const red = lastRun?.status === 'failed' ? `⚠️ The agent's last e2e run still fails (${lastRun.failed.join('; ') || `${lastRun.count} test(s)`}): check that before approving.` : '';
-    const links = [red, cur.previewUrl ? `Try it yourself (opens signed in as you): ${cur.previewUrl}` : cur.previewError ? `The preview could not be built: ${cur.previewError}` : '', t.pr?.url ? `PR: ${t.pr.url} (its "Evidence report" comment lists what was checked, with proof)` : '', p.previews ? '' : 'This project has no previews: the recordings and screenshots above show the result.'].filter(Boolean).join('\n');
-    say(id, 'factory', `[factory] ✅ Ready for your check: PR #${t.pr.number} passed review${qa} and the checks at ${t.reviewedSha.slice(0, 7)}.\n${links}\nPress Approve & merge to merge it into ${p.autoMerge}, or reply here with what to change.`, { approve: { sha: t.reviewedSha, pr: t.pr.number }, ping: true });
-    log('approval.asked', { task: id, pr: t.pr.number, sha: t.reviewedSha });
-    publishReport(id, 'ready').catch((e) => log('report.failed', { task: id, error: e.message })); // refreshed: the links the founder will use now
-    return;
-  }
+  // already asked and not yet approved: nothing to do until the founder presses (no GitHub calls every poll)
+  if (p.approval && t.approvalAskedSha === t.reviewedSha && t.approved !== t.reviewedSha) return;
   const token = await githubToken(t.repo);
   const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
   const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`); log('merge.refused', { task: id, why }); };
@@ -684,6 +658,35 @@ async function autoMerge(id) {
     log('merge.conflict', { task: id, pr: pr.number, round: d.round });
     say(id, 'factory', `[factory] PR #${pr.number} no longer merges into ${p.autoMerge}: something merged there first conflicts with it (round ${d.round} of ${MAX_CONFLICT_ROUNDS}). Sent back to the agent to resolve.`);
     enqueue(id, `[factory] Your PR #${pr.number} was approved, but it no longer merges into ${p.autoMerge}: another change landed there first and conflicts with yours. Bring your branch up to date: \`git fetch origin && git merge origin/${p.autoMerge}\`, resolve every conflict keeping both changes' intent (read what landed: \`git log -p HEAD..origin/${p.autoMerge}\`), re-run your tests and the checks your definition of done names, and push. Log the resolution in the decision log and add a "Merge" note to the PR. Do not rebase or force-push. It will be reviewed again.`, 'bypassPermissions', 'conflict');
+    return;
+  }
+  // only now, with the required checks green, no conflict and the reviewed head unchanged, is the founder asked
+  // the founder checks the result and approves each feature before it merges (project "approval": true)
+  const lastRun = lastE2eRun(`${dir(id)}/workspace`);
+  const gate = approvalGate(t, p, lastRun);
+  if (gate.action === 'fix-e2e') {
+    // the founder's time is for checking a result, not for finding a red test run: back to the agent first
+    update(id, (x) => { x.e2eFixSha = x.reviewedSha; x.status = 'working'; delete x.waitingOn; });
+    say(id, 'factory', `[factory] Not asking the founder yet: the agent's last e2e run failed (${lastRun.count} test${lastRun.count === 1 ? '' : 's'}: ${lastRun.failed.join('; ') || 'see /workspace/videos'}). Sent back to fix it.`);
+    log('approval.e2e_red', { task: id, failed: lastRun.failed });
+    enqueue(id, `[factory] Before the founder is asked to approve, your last e2e run (in /workspace/videos, ${lastRun.at}) shows a FAILURE: ${lastRun.failed.join('; ') || `${lastRun.count} failed test(s)`}. Read each failed test's error-context.md there. Re-run the whole e2e suite for your change on the current head with videos into /workspace/videos, fix the cause in the code (not by loosening a test; if a test is wrong, fix it and say why in the decision log), push, and reply with the real pass/fail counts.`, 'bypassPermissions', 'e2e');
+    return;
+  }
+  if (gate.action === 'wait') return;
+  if (gate.action === 'preview') {
+    // build the preview of exactly the reviewed head first, then ask (a failed build still asks, with the reason)
+    if (!previewJobs.has(id)) startPreview(id);
+    return;
+  }
+  if (gate.action === 'ask') {
+    update(id, (x) => { x.approvalAskedSha = x.reviewedSha; x.waitingOn = 'your approval: check the result (recordings, preview) and press Approve & merge, or reply with what to change'; });
+    const qa = t.qaVerdict === 'PASS' && t.qaTestedSha === t.reviewedSha ? ', QA' : '';
+    const cur = load(id);
+    const red = lastRun?.status === 'failed' ? `⚠️ The agent's last e2e run still fails (${lastRun.failed.join('; ') || `${lastRun.count} test(s)`}): check that before approving.` : '';
+    const links = [red, cur.previewUrl ? `Try it yourself (opens signed in as you): ${cur.previewUrl}` : cur.previewError ? `The preview could not be built: ${cur.previewError}` : '', t.pr?.url ? `PR: ${t.pr.url} (its "Evidence report" comment lists what was checked, with proof)` : '', p.previews ? '' : 'This project has no previews: the recordings and screenshots above show the result.'].filter(Boolean).join('\n');
+    say(id, 'factory', `[factory] ✅ Ready for your check: PR #${t.pr.number} passed review${qa} and the checks at ${t.reviewedSha.slice(0, 7)}.\n${links}\nPress Approve & merge to merge it into ${p.autoMerge}, or reply here with what to change.`, { approve: { sha: t.reviewedSha, pr: t.pr.number }, ping: true });
+    log('approval.asked', { task: id, pr: t.pr.number, sha: t.reviewedSha });
+    publishReport(id, 'ready').catch((e) => log('report.failed', { task: id, error: e.message })); // refreshed: the links the founder will use now
     return;
   }
   let merged;
