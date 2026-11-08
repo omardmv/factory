@@ -13,6 +13,7 @@
     "base": "staging",
     "autoMerge": "staging",
     "requiredChecks": ["e2e"],
+    "loops": { "security": "weekly", "docs": "weekly" },
     "mergeMethod": "squash",
     "githubApp": { "id": "<app id>", "key": "github-app-factory.pem", "bot": { "name": "<app slug>[bot]", "email": "<user id>+<app slug>[bot]@users.noreply.github.com" } }
   }

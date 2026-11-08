@@ -26,6 +26,7 @@ import { REPORT_MARK, buildReport, mappingFrom, reportSummary, openFindings } fr
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
 import { evidenceSection } from './evidence.mjs';
+import { loopDecision, openLoopTasks, isOpenLoop, loopTaskText, afterStart, afterRemind } from './loops.mjs';
 import { createMcp } from './mcp.mjs';
 import { launchArgs } from './launch.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -896,6 +897,8 @@ const handler = async (req, res) => {
     if (url.pathname === '/digest' && req.method === 'GET') return send(200, await digest(Number(url.searchParams.get('hours') ?? 24)));
     // names and repos only: never the GitHub App ids or key files
     if (url.pathname === '/projects' && req.method === 'GET') return send(200, Object.entries(PROJECTS).map(([name, p]) => ({ name, about: p.about ?? '', repo: p.repo, base: p.base, autoMerge: p.autoMerge ?? null })));
+    if (url.pathname === '/notices' && req.method === 'GET') return send(200, readJson(LOOPS_FILE, {}).notices ?? []);
+    if (url.pathname === '/notices/ack' && req.method === 'POST') { const b = await body(req); const f = readJson(LOOPS_FILE, {}); f.notices = (f.notices ?? []).filter((n) => !(b.ids ?? []).includes(n.id)); writeFileSync(LOOPS_FILE, JSON.stringify(f, null, 1)); return send(200, { ok: true }); }
     if (url.pathname === '/classify' && req.method === 'POST') { const b = await body(req); return send(200, await classify(String(b.text ?? ''))); }
     if (url.pathname === '/programs' && req.method === 'POST') { const b = await body(req); return send(201, createProgram(b.project, String(b.goal ?? '').trim(), b.attachments, named(b))); }
     // a batch: independent tasks, each run without a brief to a reviewed PR
@@ -991,9 +994,35 @@ async function doctorSweep() {
   finally { doctoring = null; }
 }
 
+// ---------- improvement loops (decisions in loops.mjs): due loops start a normal task; reminders wait for the Slack bot ----------
+const LOOPS_FILE = `${HOME}/loops.json`; // { state: { <project>: { lastStarted, lastReminder } }, notices: [{ id, project, text, at }] }
+async function loopsTick(now = Date.now()) {
+  const file = readJson(LOOPS_FILE, {}); file.state ??= {}; file.notices ??= [];
+  // a loop PR merged or closed by hand frees the cap: refresh the PR state of open loop tasks
+  for (const t of allTasks().filter((x) => isOpenLoop(x) && x.pr)) {
+    const pr = await findPr(t);
+    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; if (pr.state === 'merged') x.status = 'merged'; });
+  }
+  const tasks = allTasks();
+  for (const [name, project] of Object.entries(PROJECTS)) {
+    const st = file.state[name] ?? {};
+    const d = loopDecision({ name, project, state: st, openLoops: openLoopTasks(tasks, name), now });
+    if (d.action === 'remind') {
+      file.notices.push({ id: `loops-${name}-${now}`, project: name, text: d.text, at: new Date(now).toISOString() });
+      file.state[name] = afterRemind(st, now); log('loops.remind', { project: name });
+    } else if (d.action === 'start') {
+      file.state[name] = afterStart(st, d.kind, now); // marked first: a failed start is not retried every tick
+      writeFileSync(LOOPS_FILE, JSON.stringify(file, null, 1));
+      const t = createTask(name, loopTaskText(d.kind, name), true, { loop: d.kind, title: `loop(${d.kind}): ${name}` });
+      log('loops.start', { project: name, kind: d.kind, task: t.id });
+    }
+  }
+  writeFileSync(LOOPS_FILE, JSON.stringify(file, null, 1));
+}
 const poll = () => drain.draining ? Promise.resolve() : intake().catch((e) => log('intake.failed', { error: e.message }))
   .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
   .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }))
+  .then(() => loopsTick()).catch((e) => log('loops.failed', { error: e.message }))
   .then(() => { doctorSweep(); }); // in the background: a diagnosis takes a minute, the poll does not wait
 // ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
 const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);

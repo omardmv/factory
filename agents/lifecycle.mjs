@@ -58,6 +58,8 @@ export async function afterAgentRun({ task, from, origin, mode, reply, unasked =
   let status, waitingOn;
   if (mode === 'plan') { status = 'waiting for you'; waitingOn = 'your go-ahead on the plan (or your changes to it)'; }
   else if (decision) { status = 'decision needed'; waitingOn = 'your answer to the decision the agent is asking for'; }
+  // an improvement loop that found nothing worth a PR finishes cleanly: done, which frees the project's loop cap
+  else if (task.loop && !pr && reply) { status = 'done'; }
   // a run turn with no PR and no question is never a place to wait for the person: carry on (bounded)
   else if (!pr && reply && (task.noPrNudges ?? 0) < maxNoPrNudges) return { type: 'nudge', nudge: (task.noPrNudges ?? 0) + 1, from: reviewOrigin(from, origin) ? 'review' : from, resetCrash };
   else if (!head) { status = 'waiting for you'; waitingOn = pr ? `your call: PR #${pr.number} is ${pr.state ?? 'not open'}, so there is nothing to review` : `your call: the agent ended ${maxNoPrNudges + 1} turns in a row without opening a PR or asking anything`; }
