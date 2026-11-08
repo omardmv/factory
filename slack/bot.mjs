@@ -180,6 +180,8 @@ export function render(t, m) {
     const b = clip(m.text.replace(/^\[factory\]\s*/, ''), 2500);
     const text = `🏭 ${mrkdwn(b.text)}${b.cut ? `\n… <${taskLink(t.id)}|the rest>` : ''}`;
     // a reversible call the agent took: one button per other option, to change it
+    // ready for the founder's check: one press merges the head they were shown
+    if (m.approve?.sha) return { text, choices: [{ label: 'Approve & merge', value: `${t.id}|${m.approve.sha}`, action: 'approve', style: 'primary', raw: true }] };
     if (m.epicDecided?.key && Array.isArray(m.epicDecided.options)) return { text, choices: m.epicDecided.options.map((o, i) => ({ label: o, value: `${t.id}|${m.epicDecided.key}|${i}`, epic: true })).filter((c) => c.label !== m.epicDecided.chosen).slice(0, 5) };
     if (m.decided?.id && Array.isArray(m.decided.options)) return { text, choices: m.decided.options.map((o, i) => ({ label: o, value: `${t.id}|${m.decided.id}|${i}` })).filter((c) => c.label !== m.decided.chosen).slice(0, 5) };
     return { text };
@@ -204,7 +206,7 @@ async function post(channel, text, { go, plan, taskId, choices } = {}) {
     const last = i === chunks.length - 1;
     const btn = go ? ['Go', 'go'] : plan ? ['Plan it', 'plan'] : null;
     if (choices?.length && last) {
-      const blocks = [{ type: 'section', text: { type: 'mrkdwn', text: c } }, { type: 'actions', elements: choices.map((x, j) => ({ type: 'button', text: { type: 'plain_text', text: short(`Use: ${x.label}`, 75) }, action_id: `${x.epic ? 'edecide' : 'decide'}_${j}`, value: x.value })) }];
+      const blocks = [{ type: 'section', text: { type: 'mrkdwn', text: c } }, { type: 'actions', elements: choices.map((x, j) => ({ type: 'button', text: { type: 'plain_text', text: x.raw ? x.label : short(`Use: ${x.label}`, 75) }, action_id: x.action ?? `${x.epic ? 'edecide' : 'decide'}_${j}`, value: x.value, ...(x.style ? { style: x.style } : {}) })) }];
       await slack('chat.postMessage', { channel, text: c, blocks, unfurl_links: false, unfurl_media: false });
       continue;
     }
@@ -433,6 +435,16 @@ export async function onCommand(p) {
 export async function onAction(p) {
   if (p.user?.id !== state.owner) return;
   const a = p.actions?.[0];
+  if (a?.action_id === 'approve') {
+    const [taskId, sha] = String(a.value ?? '').split('|');
+    let note;
+    try { await agents(`/tasks/${taskId}/approve`, { method: 'POST', body: JSON.stringify({ sha }) }); note = `✔️ Approved by you at \`${String(sha).slice(0, 7)}\`: merging.`; }
+    catch (e) { note = `⚠️ Not approved: ${esc(e.message)}`; }
+    log('approval.pressed', { task: taskId, sha, note });
+    const section = p.message?.blocks?.find((b) => b.type === 'section');
+    if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, text: p.message.text, blocks: [...(section ? [section] : []), { type: 'context', elements: [{ type: 'mrkdwn', text: note }] }] }).catch(() => {});
+    return;
+  }
   if (a?.action_id?.startsWith('edecide_')) {
     // an epic decision: the factory applies it to every task of the epic
     const [epicId, key, idx] = String(a.value ?? '').split('|');

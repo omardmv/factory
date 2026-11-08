@@ -37,3 +37,17 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
   }
   return { action: 'merge' };
 }
+
+// The founder approves each feature before it merges (project config "approval": true).
+// -> { action: 'merge' } | { action: 'ask' } (post the ready-for-your-check message once per reviewed head) | { action: 'wait' }
+export function approvalGate(t, project) {
+  if (!project?.approval) return { action: 'merge' };
+  if (t.approved && t.approved === t.reviewedSha) return { action: 'merge' };
+  return t.approvalAskedSha === t.reviewedSha ? { action: 'wait' } : { action: 'ask' };
+}
+// the founder pressed Approve for the head they were shown
+export function approveCheck(t, sha) {
+  if (t.status !== 'ready for you' || t.verdict !== 'PASS' || !t.reviewedSha) return { error: 'this task is not ready for approval' };
+  if (sha && sha !== t.reviewedSha) return { error: `the PR changed since you were asked (${String(sha).slice(0, 7)} -> ${t.reviewedSha.slice(0, 7)}); press Approve on the newest "Ready for your check" message` };
+  return { ok: true, sha: t.reviewedSha };
+}

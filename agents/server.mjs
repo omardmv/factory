@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
-import { mergeDecision } from './merge.mjs';
+import { mergeDecision, approvalGate, approveCheck } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine, decidedMessage, expandNumberAnswer, hasDecisionBlock } from './unasked.mjs';
@@ -533,6 +533,17 @@ async function autoMerge(id) {
   const t = load(id), p = PROJECTS[t.project];
   if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
   if (t.qaVerdict === 'FAIL' && t.qaTestedSha === t.reviewedSha) return;
+  // the founder checks the result and approves each feature before it merges (project "approval": true)
+  const gate = approvalGate(t, p);
+  if (gate.action === 'wait') return;
+  if (gate.action === 'ask') {
+    update(id, (x) => { x.approvalAskedSha = x.reviewedSha; x.waitingOn = 'your approval: check the result (recordings, preview) and press Approve & merge, or reply with what to change'; });
+    const qa = t.qaVerdict === 'PASS' && t.qaTestedSha === t.reviewedSha ? ', QA' : '';
+    const links = [t.pr?.url ? `PR: ${t.pr.url} (its "Evidence report" comment lists what was checked, with proof)` : '', t.previewUrl ? `Preview to try it: ${t.previewUrl}` : 'No preview for this project yet: the recordings and screenshots above show it.'].filter(Boolean).join('\n');
+    say(id, 'factory', `[factory] ✅ Ready for your check: PR #${t.pr.number} passed review${qa} and the checks at ${t.reviewedSha.slice(0, 7)}.\n${links}\nPress Approve & merge to merge it into ${p.autoMerge}, or reply here with what to change.`, { approve: { sha: t.reviewedSha, pr: t.pr.number }, ping: true });
+    log('approval.asked', { task: id, pr: t.pr.number, sha: t.reviewedSha });
+    return;
+  }
   const token = await githubToken(t.repo);
   const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
   const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`); log('merge.refused', { task: id, why }); };
@@ -1013,7 +1024,7 @@ const handler = async (req, res) => {
       const buf = readFileSync(f.path);
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': buf.length }); return res.end(buf);
     }
-    const m = url.pathname.match(/^\/tasks(?:\/([\w-]+))?(?:\/(messages|stop|pause|decisions))?$/);
+    const m = url.pathname.match(/^\/tasks(?:\/([\w-]+))?(?:\/(messages|stop|pause|decisions|approve))?$/);
     if (!m) return send(404, { error: 'not found' });
     const [, id, sub] = m;
     if (!id && req.method === 'GET') return send(200, allTasks().map((t) => ({ ...t, running: running.has(t.id), lastActivity: running.has(t.id) ? activity(t.id, 1)[0] ?? null : null, lastAgent: lastJsonLine(`${dir(t.id)}/messages.jsonl`, (m) => ['agent', 'coordinator'].includes(m.from))?.text ?? '' })));
@@ -1024,6 +1035,15 @@ const handler = async (req, res) => {
     }
     if (!existsSync(`${dir(id)}/task.json`)) return send(404, { error: 'no such task' });
     if (!sub && req.method === 'GET') return send(200, { ...load(id), running: running.has(id), messages: messages(id), activity: activity(id), decisions: decisions(id) });
+    if (sub === 'approve' && req.method === 'POST') {
+      const b = await body(req); const t0 = load(id); const c = approveCheck(t0, b.sha ? String(b.sha) : null);
+      if (c.error) return send(409, { error: c.error });
+      update(id, (x) => { x.approved = c.sha; x.mergeWanted = true; delete x.waitingOn; });
+      say(id, 'factory', `[factory] 👍 Approved by the founder at ${c.sha.slice(0, 7)}: merging.`);
+      log('approval.given', { task: id, sha: c.sha });
+      autoMerge(id).catch((e) => log('merge.failed', { task: id, error: e.message }));
+      return send(200, load(id));
+    }
     if (sub === 'decisions' && req.method === 'POST') { const b = await body(req); return send(200, setEpicDecision(id, String(b.key ?? ''), String(b.option ?? ''))); }
     if (sub === 'messages' && req.method === 'POST') { const b = await body(req); const from = b.from === 'factory' ? 'factory' : 'you'; return send(200, post(id, from, from === 'you' ? withAttachments(String(b.text ?? '').trim(), `${dir(id)}/workspace`, b.attachments).trim() : String(b.text ?? '').trim())); }
     if (sub === 'stop' && req.method === 'POST') {

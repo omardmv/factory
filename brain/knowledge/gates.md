@@ -9,7 +9,8 @@ Never loosen one to finish a task.
   logic in `agents/server.mjs`)
 - auto-merge targets and branch protection (each project's `autoMerge` in the
   box config, `/opt/factory/agents/projects.json`); production is never
-  merged by the factory. `requiredChecks` (per project, box config): checks that
+  merged by the factory. `approval` (per project): the founder approves each
+  feature before the factory merges it. `requiredChecks` (per project, box config): checks that
   must pass on the reviewed head before the factory merges; the factory enforces
   them itself, since private repos on a free plan have no branch protection
 - the round limit and spend caps

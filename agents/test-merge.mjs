@@ -1,6 +1,6 @@
 // node agents/test-merge.mjs
 import assert from 'node:assert/strict';
-import { mergeDecision, requiredChecks } from './merge.mjs';
+import { mergeDecision, requiredChecks, approvalGate, approveCheck } from './merge.mjs';
 const t = { reviewedSha: 'abc1234def' };
 const pr = (o = {}) => ({ state: 'open', merged_at: null, base: { ref: 'staging' }, head: { sha: 'abc1234def' }, mergeable: true, mergeable_state: 'clean', ...o });
 const cases = [
@@ -46,4 +46,16 @@ for (const [name, p, rounds, want] of cases) {
   console.log('ok required checks: pass merges, running or missing waits (45 min), failure goes back to the agent (3 rounds), latest re-run wins');
 }
 
+{
+  const ready = { status: 'ready for you', verdict: 'PASS', reviewedSha: 'abc1234def' };
+  assert.equal(approvalGate(ready, { autoMerge: 'staging' }).action, 'merge', 'no approval set: merges as before');
+  assert.equal(approvalGate(ready, { approval: true }).action, 'ask', 'first time ready: ask the founder');
+  assert.equal(approvalGate({ ...ready, approvalAskedSha: 'abc1234def' }, { approval: true }).action, 'wait', 'asked once per head');
+  assert.equal(approvalGate({ ...ready, approved: 'abc1234def' }, { approval: true }).action, 'merge', 'approved this head: merge');
+  assert.equal(approvalGate({ ...ready, approved: 'old0000', approvalAskedSha: 'old0000' }, { approval: true }).action, 'ask', 'a new head after approval: ask again');
+  assert.deepEqual(approveCheck(ready, 'abc1234def'), { ok: true, sha: 'abc1234def' });
+  assert.match(approveCheck(ready, 'fff0000aaa').error, /changed since you were asked/);
+  assert.match(approveCheck({ ...ready, status: 'working' }, 'abc1234def').error, /not ready/);
+  console.log('ok approval: asked once per reviewed head, merges only the head the founder approved, a new head asks again');
+}
 console.log(`all ${cases.length} passed`);
