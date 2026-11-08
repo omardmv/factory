@@ -19,7 +19,8 @@ not code; the bots and the dashboard read it through `GET /projects`).
 project, keyed by name, with `about`, `repo`, `base`, `autoMerge`,
 `mergeMethod`, `githubApp` (`id`, `key`, `bot`) and optional `requiredChecks`
 (checks that must pass on a PR's reviewed head before the factory merges it;
-the factory enforces them itself, so they work on any GitHub plan). The factory itself is
+the factory enforces them itself, so they work on any GitHub plan), `image`
+(the project's own agent image) and `loops` (improvement loops, below). The factory itself is
 one project too (`factory`, repo `omardmv/factory`, base `main`): this
 repo can name itself.
 
@@ -117,8 +118,10 @@ Tasks come from Slack (`slack/`: one channel per task, archived when its PR
 closes), Telegram or the dashboard, from issues labelled
 `ready-for-agent` (change) or `needs-triage` (report; issues already labelled
 when triage first ran are left alone), polled every 2 minutes, or as a queue.
-The queue and the running jobs are on disk: after a restart (every deploy)
-an interrupted job resumes its session, told it was interrupted. `/pause`
+The queue and the running jobs are on disk. A deploy restarts the service as a
+drain (below): running turns finish first. A job that was still cut off resumes
+its session, told it was interrupted, and keeps what it was doing (a review fix
+stays a review fix). `/pause`
 leaves a work-in-progress commit and a resume note. A summary arrives on
 Telegram at 08:00 Tashkent (`/digest` any time).
 
@@ -133,6 +136,50 @@ refused merge retries for about 20 minutes, then waits for you. A project's prod
 merged by the factory: it keeps the staging sign-off. Self-update refuses a
 factory commit whose shell, JavaScript or projects.json does not parse.
 
+**No silent stalls.** Every decision about what happens next lives in a pure,
+tested module; `agents/server.mjs` only wires them.
+- `agents/lifecycle.mjs`: the status after each run, QA verdict, review
+  verdict and check report; crash retry (2) and no-PR nudges (2), both bounded;
+  round limit (6 failed rounds). Every status that waits on the person carries a
+  one-line `waitingOn` saying what for.
+- `agents/unasked.mjs`: a reply that asks the person something in plain text,
+  without a `DECISION NEEDED` block, still parks as `decision needed`.
+- `agents/watchdog.mjs`: a task that stops moving in a working state gets one
+  automatic nudge, then a `[factory] STUCK` message and a Slack ping.
+  `agents/doctor.mjs` then posts a diagnosis (cause, fix, who acts).
+- `agents/drain.mjs`: on SIGTERM no new job starts and running turns finish
+  (up to 30 min, `DRAIN_TIMEOUT_S`); a deploy never kills agent containers.
+- `agents/evidence.mjs`: the review and QA panels also read the PR's comments
+  by the agent and the factory and the agent's reply to the last review.
+  `agents/report.mjs`: one evidence report comment per PR, edited in place; the
+  agent supplies only an expectation → proof mapping.
+- `agents/merge.mjs`: auto-merge decisions, including `requiredChecks`.
+
+**Epics** also: `agents/plan.mjs` refuses a plan where two tasks share a file
+with no dependency between them, a task starts only when its whole dependency
+chain has merged, and a task that needs it (a new dependency, a data model, a
+public interface, an unclear approach) is researched first: a docs-only PR
+(`docs/research/<key>.md`) the person comments on and merges before the task
+starts. `agents/epic-issue.mjs` keeps the GitHub epic issue and sub-issues.
+
+**Improvement loops** (`agents/loops.mjs`): per project, `"loops": { "security":
+"weekly", "docs": "monthly" }` (kinds: performance, security, cleanup, docs;
+cadences daily, weekly, biweekly, monthly). A due loop starts one normal task
+that makes one small change as a PR; at most one open loop PR per project. A
+project without a `loops` key gets a weekly Slack reminder; `false` is an
+explicit off.
+
+**Project images** (`agents/launch.mjs`): `<PROJECTS_DIR>/<name>/agent.Dockerfile`
+and `knowledge/`, see Independent QA above.
+
+**Remote MCP** (`agents/mcp.mjs`): the agents API serves an MCP endpoint at `/mcp`
+behind the same API token (bearer). Tools: `list_tasks`, `get_task`,
+`list_projects`, `start_task`, `start_epic`, `reply_to_task`. No merge, stop or
+gate powers; rate-limited to 120 calls a minute. Exposing it outside the box is
+box configuration.
+
+Design and what is still only planned: [docs/factory-v2.md](docs/factory-v2.md).
+
 ## Commands
 
 Laptop (`bin/factory`): `url`, `login`, `api`, `shot` against `staging` or a
@@ -140,7 +187,8 @@ PR number, signed in; `init`, `runner`, `push`.
 
 Box (`factory-box`, runs from `/opt/factory/src`, pulled every 5 minutes):
 `up`, `e2e`, `down`, `reset`, `snapshot`, `snapshot-all` (nightly 03:00),
-`sync`, `runner-add`, `self-update`, `ls`.
+`sync`, `runner-add`, `self-update`, `ls`. `self-update` restarts
+`factory-agents` without blocking, and the service drains first.
 
 ## Agents
 

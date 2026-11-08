@@ -1,8 +1,10 @@
 # Factory v2: design spec
 
-Status: draft, 2026-11-07. Builds on what runs today (README "Agents"):
-brief -> run -> checks -> independent QA -> review panel -> auto-merge into
-staging. Production stays a manual merge by the founder, always.
+Status: updated 2026-11-08 to match the code. Each section says what is
+built (with file pointers) and, under "Not built", what is still only a plan.
+Builds on README "Agents": brief -> run -> checks -> independent QA ->
+review panel -> auto-merge into the project's base branch. Production stays
+a manual merge by the founder, always.
 
 ## Goals
 
@@ -29,30 +31,26 @@ staging. Production stays a manual merge by the founder, always.
   channel (the morning summary in one `#factory` channel), with buttons where a reply is a choice.
 - Telegram stays until Slack has run a week without a miss, then goes.
 
-## 2. PR first, research stage
+## 2. Research stage
 
-- The idea opens a **draft PR** at once (branch `agent/<task>`). The PR is
-  the hub: every agent posts there, the Slack thread links it.
-- **Researcher** (fresh session, read-only on code, web allowed): reads the
-  code and outside sources, commits `docs/specs/<task>.md` to the branch:
-  problem, findings with sources, the spec, the implementation plan, the
-  definition of done as runnable checks.
-- No approval step (founder 2026-11-07): the implementer starts as soon as
-  the spec is in. The founder is asked only when the spec touches
-  architecture or design, or is a big implementation: then `DECISION
-  NEEDED` in the channel, and nothing is built until the answer.
-- **Droids** are the agent roles (researcher, implementer, QA, reviewers),
-  all Claude Code sessions as today; no second engine.
-- Then the existing path: checks -> QA -> review panel -> merge to staging.
-  The PR leaves draft when the panel passes.
+Droids are the agent roles (researcher, implementer, QA, reviewers), all
+Claude Code sessions; no second engine. The path after the research is the
+existing one: checks -> QA -> review panel -> merge.
 
-### As built: the research step
+Not built: a draft PR opened at once for every idea as the hub, and
+`docs/specs/<task>.md` committed by the researcher. As built, the research
+runs as its own task inside an epic (below), and a task without an epic
+starts straight at its brief.
+
+### The research step (built)
 
 - A task is researched first when the coordinator marks it `"research": true` in the plan, or, with no mark, when its text matches the rule in `agents/plan.mjs` (a new dependency, a data model, a public interface, or an unclear approach). The words "no research" in the task, or `"research": false`, skip it.
 - `parsePlan` adds a task `<key>-research` (type `research`) and makes the task depend on it, so the implementation starts only when the research PR is **merged**.
 - The researcher (prompt: `brain/prompts/research.md`) writes `docs/research/<key>.md` and opens it as a docs-only PR: no code, no checks, QA or review panel.
+- The researcher is told to write the document and open the PR; `agents/lifecycle.mjs` (`afterAgentRun`) sends a research task to `research review` instead of checks, QA or the panel.
 - The task then rests in the status `research review`, with the reason "your comments on the research PR, then your merge of it". The person comments on the PR (replies to the researcher in the task chat update the document), then merges it.
 - The implementation task is given the document path and the research PR number, with the commands to read the person's comments (`researchHandoff` in `agents/lifecycle.mjs`), and says under "Decisions" where it departs from the document.
+- The approval step is the merge: the founder is asked nothing else, unless the research ends with a `DECISION NEEDED` block.
 - Tests: `agents/test-plan.mjs` (rule, mark, "no research", blocked until merged) and `agents/test-lifecycle.mjs` (the new state).
 
 ## 3. The brain
@@ -80,7 +78,7 @@ staging. Production stays a manual merge by the founder, always.
   `agents/projects.json`: `loops: { security: "weekly", docs: "monthly" }`.
   Cadences: `daily`, `weekly`, `biweekly`, `monthly`; `true` means weekly.
   `loops: false` (or `{}`) is an explicit off.
-- **Scheduler** (`agents/loops.mjs`, wired in `server.mjs`'s poll): a kind is
+- **Scheduler** (decisions in `agents/loops.mjs`, tested by `agents/test-loops.mjs`; `loopsTick` in `server.mjs`'s poll): a kind is
   due when its cadence has passed since it last started (never run = due).
   A due loop starts a normal pre-approved task marked `loop: <kind>`: it
   makes one small, proven change as a PR and goes through review, QA and the
@@ -105,6 +103,9 @@ staging. Production stays a manual merge by the founder, always.
 
 ## 5. Learning from its own tasks
 
+Not built: this whole section is still a plan (no retro session, no metrics
+file, no replay benchmark).
+
 - After each task ends (merged, stopped, or round limit), a **retro**
   session reads the decision log, failed rounds, review CHANGES and QA
   FAILs, and asks: what should an agent have known?
@@ -128,25 +129,30 @@ staging. Production stays a manual merge by the founder, always.
   for brain, prompt, model or panel PRs, and counts against the factory's
   daily cap.
 
-## 5a. Access: a remote factory MCP
+## 5a. Access: a remote factory MCP (built)
 
 Needed so the factory works from Claude anywhere, cloud sessions included
 (founder 2026-11-07): a cloud session or claude.ai has no ssh, no
-`bin/factory` and no reach into the box's loopback, so a remote MCP
-server is its only way in.
+`bin/factory` and no reach into the box's loopback.
 
-- A remote MCP server (streamable HTTP) at `factory.contentcoach.org/mcp`,
-  in front of the agents API; added once as a custom connector, it is
-  then available in the founder's laptop sessions, cloud sessions and
-  claude.ai.
-- Tools: submit a task to a project, list tasks and their state, read a
-  task's messages, PR and preview, reply, pause, stop.
-- Auth: OAuth for the founder only (connectors expect it), or a bearer
-  token where the client supports one; every call is in the audit trail.
-- Adds no new powers: no merge, no gate changes, no secrets; the same
-  limits as Slack and the dashboard, which sit on the same API.
-- The MCP endpoint is internet-facing, unlike the agents API: rate-limit
-  it and keep it behind Cloudflare.
+- `agents/mcp.mjs` is a remote MCP server (streamable HTTP, stateless JSON
+  replies, protocol `2025-03-26`), mounted by `agents/server.mjs` at `/mcp`
+  on the agents API. Tested by `agents/test-mcp.mjs`, including the client
+  handshake.
+- Tools: `list_tasks`, `get_task` (status, PR, last messages), `list_projects`,
+  `start_task`, `start_epic`, `reply_to_task`. Three are read-only.
+- Auth: the same API token as the rest of the agents API, as a bearer token
+  (no header: 401; wrong token: 403). No OAuth. Each `tools/call` is written to
+  the audit log (tool name and outcome).
+- Adds no new powers: no merge, no stop, no pause, no gate changes, no
+  secrets. Output passes an allow-list in code (`TASK_FIELDS`, `PR_FIELDS`, …)
+  and free text is scrubbed of token-shaped strings, so a task's tokens, env
+  and GitHub App key paths can never be listed.
+- Limits: POST only, one message per request (batches refused), body up to
+  256 KB, 120 calls per minute per process (429 past that).
+- Not built: pause and stop tools, OAuth, and a public route. This repo
+  has no gateway or Cloudflare route for `/mcp`; reaching it from outside
+  the box is box configuration.
 
 ## 5b. One factory, many projects
 
@@ -156,16 +162,27 @@ The factory is general; a project brings what is special about it.
 | --- | --- | --- |
 | How every agent works | `brain/` (factory repo) | playbooks, review, QA, security |
 | How this project's previews run | `projects/<name>/` (factory repo) + `preview.compose.yaml` (project repo) | Postgres + pgvector, Redis, a Node or Python app, its snapshot and disarm |
-| What the factory does for it | `agents/projects.json` | base branch, QA on/off, auto-merge target, loops |
+| What the factory does for it | `agents/projects.json` (on the box) | base branch, QA on/off, auto-merge target, loops |
 | How to work in its code | the project repo: `AGENTS.md`, `.claude/skills/` | its test commands, conventions, verification skill |
-| What its agents need installed | `projects/<name>/agent.Dockerfile`, `FROM factory-agent-base` | Postgres 16 + pgvector for a project that needs it; Go, Rust or nothing extra for others |
-| Factory-side facts about it | `projects/<name>/knowledge/`, mounted only into that project's containers | its data quirks, its staging, what not to touch |
+| What its agents need installed | `<PROJECTS_DIR>/<name>/agent.Dockerfile` on the box, `FROM factory-agent:latest` | Postgres 16 + pgvector for a project that needs it; Go, Rust or nothing extra for others |
+| Factory-side facts about it | `<PROJECTS_DIR>/<name>/knowledge/` on the box, mounted only into that project's containers | its data quirks, its staging, what not to touch |
 
-Today the agent image is shaped by the factory's first project (Postgres +
-pgvector, Python + uv baked in): it splits into a general `factory-agent-base` and a thin image
-per project, built by self-update when its Dockerfile changes. Onboarding
-stays `factory init`: a new project fills these in and nothing in the
-factory changes.
+As built (`agents/launch.mjs`, tested by `agents/test-launch.mjs`):
+
+- The general image is `factory-agent` (`agents/image`). A project may name its
+  own in `projects.json` as `"image"`. It lives on the box, not in this repo:
+  `<PROJECTS_DIR>/<name>/agent.Dockerfile` (`FROM factory-agent:latest`, default
+  dir `/opt/factory/projects`), and `factory-box self-update` builds it as
+  `factory-agent-<name>:latest` when its content hash changed or the image is
+  missing. The general image is not rebuilt by self-update.
+- `<PROJECTS_DIR>/<name>/knowledge/` is mounted read-only at
+  `/factory/brain/project` in that project's containers only.
+- Unset, unknown or malformed settings fall back to the default image and no
+  mount. `brain/projects/_example/` is a made-up template.
+
+Not done: slimming the general image. It still carries Postgres, pgvector
+and Python + uv from the factory's first project; they move into that
+project's own image later. Onboarding stays `factory init`.
 
 ## 5c. The quality bar
 
@@ -192,8 +209,13 @@ plans and tracks, never codes. Founder 2026-11-08.
 - **The whole plan up front:** every task, each one PR an agent can finish
   and prove alone, with what it **depends on**. Waves are just the result:
   wave 1 = no dependencies, wave 2 = depends only on wave 1, and so on.
+- **No two parallel tasks on one file** (`fileOverlap` in `agents/plan.mjs`):
+  each task lists the `files` it edits, and a plan where two tasks share a file
+  and neither depends on the other (directly or through a chain) is refused with
+  the reason, so the coordinator fixes it before anything starts.
 - **A task starts as soon as everything it depends on has merged**, not when
-  the whole previous wave has. Unrelated work never waits. After each merge
+  the whole previous wave has. That means the whole dependency chain, not only
+  the direct dependencies (`agents/plan.mjs`, `ready`); a task behind a failed one is blocked, not waiting. Unrelated work never waits. After each merge
   the coordinator may revise the rest from what actually landed.
 - **On GitHub** (done): when you approve the plan (`go`), the factory opens
   one epic issue in the project repo (goal, progress `M/T tasks merged`,
@@ -226,10 +248,83 @@ plans and tracks, never codes. Founder 2026-11-08.
   back to its agent: merge staging into the branch, resolve, re-run the
   checks; then it is reviewed and merged again. At most 3 such rounds, then
   it waits for the founder.
+- **Coordinator turns** are decided by `afterCoordinator` in `agents/lifecycle.mjs`:
+  a `DECISION NEEDED` reply parks the epic, `PROGRAM DONE` closes it, a reply
+  in `talk` or `brief` waits for the person's `plan` or `go`, and a ```plan block
+  in a running epic revises the plan.
 
 Build order (all four done): (1) conflicts back to the agent + more agents
 at once; (2) task-level dependencies; (3) the epic issue and sub-issues; (4)
 discussion mode and the epic channel.
+
+## 5e. Reliability: no silent stalls (built)
+
+From the stalls of 2026-11-07. Rule: a task never stops moving without the
+person being told what it waits on. Every decision below is a pure module with
+its own test; `agents/server.mjs` only wires them (see `AGENTS.md`).
+
+- **Task lifecycle** (`agents/lifecycle.mjs`, `agents/test-lifecycle.mjs`):
+  what happens after each agent run (`afterAgentRun`), QA verdict (`afterQa`),
+  review panel (`afterReview`, `panelVerdict`), check report (`afterFactoryReport`)
+  and coordinator reply (`afterCoordinator`), and what a job found on disk after
+  a restart does (`pickupJob`). Failed rounds (red e2e, QA FAIL, review CHANGES)
+  stop at 6 (`MAX_FACTORY_ROUNDS`, an env var read in `server.mjs`). Covered stalls: an answer to review findings
+  with no new commit goes back to the panel (a CHANGES verdict counts toward the
+  limit, so it is bounded); a turn that dies without a reply is retried up to 2
+  times (`MAX_CRASH_RETRIES`, also env) with a prompt that warns against killing processes
+  by name; a restart keeps a job's origin, so a review fix stays a review fix;
+  a run turn that ends with no PR and no question is nudged up to 2 times
+  (`MAX_NO_PR_NUDGES`) before it parks. An improvement-loop task that finds
+  nothing finishes `done`.
+- **`waitingOn`**: every parked status (`waiting for you`, `decision needed`,
+  `ready for you`, `paused`, `waiting for merges`, `research review`) carries a
+  one-line reason. `parkReason` in `agents/lifecycle.mjs` fills a default, and
+  `save()` in `server.mjs` always fills it in for a parked task (the given reason, else the default), so no parked task is saved without one. Slack, the dashboard
+  and the MCP show it.
+- **Unasked questions** (`agents/unasked.mjs`, `agents/test-unasked.mjs`): after a
+  turn that has no `DECISION NEEDED` block, one cheap model call (60 s) asks
+  whether the reply still asks the person to decide something. If so the factory
+  posts it as a `DECISION NEEDED` message and the task parks as `decision needed`.
+  It fails open: an error, timeout or unreadable answer means no question.
+- **Stall watchdog** (`agents/watchdog.mjs`, `agents/test-watchdog.mjs`): checked
+  every 60 s. A task in `queued` (5 min), `working`, `briefing`, `planning`,
+  `reviewing`, `waiting for checks` (30 min) or `testing` (40 min) with no sign of
+  life (status change or a write to its activity log) gets one automatic nudge
+  and a `[factory]` message. If it has not moved 5 min later, a `[factory] STUCK`
+  message says what is stuck and why; the Slack bot posts it as a ping to the
+  owner. After that, silence until the task changes state. A task waiting for a
+  free slot is not stalled.
+- **Stuck doctor** (`agents/doctor.mjs`, `agents/test-doctor.mjs`): when a task
+  gives up (a `your call: …` park) or the watchdog escalates, one model call
+  (`DOCTOR_MODEL`, default `sonnet`) reads its history and posts the cause, evidence,
+  fix and who must act, once per stall. It diagnoses only.
+- **Restart without interrupting** (`agents/drain.mjs`, `agents/test-drain.mjs`,
+  `agents/factory-agents.service`): on SIGTERM the server starts no new job and
+  finishes the running turns, then exits. The limit is 30 min
+  (`DRAIN_TIMEOUT_S`); past it the remaining turns are cut off and listed in
+  `drain.json`, and the next start re-queues them from their saved session and
+  tells the task. The unit has `KillMode=process` and `TimeoutStopSec=1900`, so
+  a deploy never kills the agents' containers. `factory-box self-update` installs
+  the unit whenever it differs, and restarts with `--no-block`.
+- **Panels see the evidence** (`agents/evidence.mjs`, `agents/test-evidence.mjs`):
+  the review and QA prompts get the last 10 PR comments written by bots (the agent
+  and the factory; text only, images and videos stripped, 3000 characters each),
+  the agent's reply to the last review or QA findings, and the agent's
+  expectation → proof mapping next to the media files that really exist.
+- **Evidence report** (`agents/report.mjs`, `agents/test-report.mjs`): one comment
+  per PR, edited in place, replaces the old media comment. It is posted when the
+  panel passes or the round limit stops the loop. The factory writes every fact
+  (head sha, check result on that head, open findings, files); the agent supplies
+  only a fenced `evidence` block of `<expected result> | video|screenshot|test <ref>|not shown`
+  lines. A video or screenshot the factory cannot find shows as "not shown".
+- **Required checks** (`requiredChecks` in `agents/merge.mjs`, `agents/test-merge.mjs`):
+  a project may list `requiredChecks`; the factory itself holds the auto-merge
+  until they pass on the reviewed head (free private repos have no branch
+  protection). A failing one goes back to the agent (3 rounds), a pending one is
+  waited on (45 min), then the task parks with the reason.
+- **Slack extras**: images the person attaches are saved in the task workspace
+  and named in the message (`agents/attachments.mjs`); after a turn, new
+  screenshots and videos are posted under its message in the task channel.
 
 ## 6. Safety gates (never self-modified)
 
@@ -245,17 +340,15 @@ inside the factory repo:
 - secrets, tokens, GitHub App permissions
 - this section itself
 
-Enforced by the factory, not only by prompt: a PR touching the files that
-hold these (list kept in `brain/knowledge/gates.md`) is never auto-merged.
+The list is kept in `brain/knowledge/gates.md`. Not built: the factory
+refusing to auto-merge a PR that touches those files. Today the panel and the
+rule in `AGENTS.md` carry it.
 
 ## Order of work
 
-1. Brain: move playbooks + rules into `brain/`, mount into containers
-   (done in this PR).
-2. Safety-gate file list + the auto-merge refusal for it.
-3. Slack adapter alongside Telegram (`slack/`).
-4. PR-first + researcher stage.
-5. Loops per project.
-6. Retro + metrics, then the replay benchmark (5).
-7. Remote factory MCP for cloud sessions (5a).
-8. Per-project agent images and knowledge (5b).
+Done: (1) brain mounted into containers; (3) Slack adapter (`slack/`, alongside
+Telegram); (4) research step, inside epics; (5) loops per project; (7) remote
+factory MCP; (8) per-project agent images and knowledge; and the reliability
+work (5e). Not done: (2) the auto-merge refusal for gate files; (4) a
+draft PR at once for every idea; (6) retro + metrics, then the replay
+benchmark (section 5 is still a plan).
