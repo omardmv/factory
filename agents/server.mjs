@@ -17,6 +17,7 @@ import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
 import { mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
+import { addAgentJob, takeJobs } from './queue.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine, decidedMessage, expandNumberAnswer, hasDecisionBlock } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
@@ -44,6 +45,9 @@ const CLASSIFY_MODEL = process.env.CLASSIFY_MODEL ?? 'haiku';
 const PORT = Number(process.env.PORT ?? 19300);
 const BIND = (process.env.BIND_ADDRESSES ?? '127.0.0.1').split(',').map((s) => s.trim()).filter(Boolean);
 const MAX_PARALLEL = Number(process.env.MAX_PARALLEL ?? 5);
+// every agent container runs in this systemd slice; factory-agents.slice caps them all together (CPUQuota), so the
+// agents never take the cores production runs on, however many run. Empty = no parent (docker's default).
+const CGROUP_PARENT = process.env.AGENT_CGROUP_PARENT ?? 'factory-agents.slice';
 const MAX_FACTORY_ROUNDS = Number(process.env.MAX_FACTORY_ROUNDS ?? 6);
 const MAX_CRASH_RETRIES = Number(process.env.MAX_CRASH_RETRIES ?? 2);
 // the review panel: fresh sessions, each its own model and angle; every one must pass
@@ -180,8 +184,11 @@ const DRAIN_TIMEOUT_MS = Number(process.env.DRAIN_TIMEOUT_S ?? 1800) * 1000;
 // jobs from start to the end of their handling (running only covers the container, not what follows: the PR lookup,
 // the next status, queueing the review). A drain waits for these, not just for containers.
 const inflight = new Map(); // job seq -> task id
+// busy tasks: a job taken off the queue and not yet fully handled, or a container still up. One job per task at a
+// time, and MAX_PARALLEL counts these (see queue.mjs for why a running container alone is not enough).
+const busyIds = () => new Set([...running.keys(), ...inflight.values()]);
 const drain = createDrain({
-  running: () => [...new Set([...running.keys(), ...inflight.values()])],
+  running: () => [...busyIds()],
   now: Date.now,
   describe: (id) => ({ id, kind: (() => { try { return load(id).job?.kind; } catch { return undefined; } })() }),
   // docker kill, not the client's death: the turn must be cut off for sure before node exits
@@ -198,7 +205,7 @@ const containers = new Map(); // task id -> container name
 const QUEUE_FILE = `${HOME}/queue.json`;
 const queue = readJson(QUEUE_FILE, []); // { id, kind: 'agent' | 'qa' | 'review', prompt?, mode?, from? }
 const saveQueue = () => writeFileSync(QUEUE_FILE, JSON.stringify(queue));
-function enqueue(id, prompt, mode, from, origin) { queue.push({ id, kind: 'agent', prompt, mode, from, ...(origin ? { origin } : {}) }); saveQueue(); pump(); }
+function enqueue(id, prompt, mode, from, origin) { addAgentJob(queue, { id, kind: 'agent', prompt, mode, from, ...(origin ? { origin } : {}) }); saveQueue(); pump(); }
 function enqueueReview(id, from) { if (!queue.some((j) => j.id === id && j.kind === 'review')) queue.push({ id, kind: 'review', ...(from ? { from } : {}) }); saveQueue(); pump(); }
 function enqueueQa(id) { return enqueueQaFrom(id); }
 function enqueueQaFrom(id, from) { if (!queue.some((j) => j.id === id && j.kind === 'qa')) queue.push({ id, kind: 'qa', ...(from ? { from } : {}) }); saveQueue(); pump(); }
@@ -206,10 +213,9 @@ const JOB_NAME = { agent: 'agent', qa: 'QA tester', review: 'reviewer' };
 function dropQueued(id) { for (let i = queue.length - 1; i >= 0; i--) if (queue[i].id === id) queue.splice(i, 1); saveQueue(); }
 function pump() {
   if (drain.draining) return; // a deploy is waiting for the running turns: nothing new starts
-  while (running.size < MAX_PARALLEL && queue.length) {
-    const i = queue.findIndex((j) => !running.has(j.id));
-    if (i < 0) break;
-    const [job] = queue.splice(i, 1); saveQueue();
+  const jobs = takeJobs(queue, busyIds(), MAX_PARALLEL);
+  if (jobs.length) saveQueue();
+  for (const job of jobs) {
     job.seq = randomBytes(4).toString('hex');
     update(job.id, (t) => { t.job = job; jobStarted(t, job); });
     // forget the job once it ended, unless the next job of this task already took its place
@@ -221,7 +227,7 @@ function pump() {
       say(job.id, 'factory', `[factory] the ${JOB_NAME[job.kind] ?? job.kind} could not run: ${e.message}`);
       update(job.id, (t) => { forget(t); t.status = 'waiting for you'; t.waitingOn = `your call: the ${JOB_NAME[job.kind] ?? job.kind} could not run (${String(e.message).replace(/\s+/g, ' ').slice(0, 120)})`; });
       pump();
-    }).finally(() => inflight.delete(job.seq));
+    }).finally(() => { inflight.delete(job.seq); pump(); }); // the task's next job (a review it queued, a message) starts now
   }
 }
 // session pickup: a job that was running when the factory stopped runs again,
@@ -248,6 +254,8 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
   const launch = launchArgs({ project: t.project, projects: PROJECTS, defaultImage: IMAGE, projectsDir: PROJECTS_DIR, exists: existsSync });
   const args = ['run', '--rm', '--name', name, '--network', NETWORK,
     '--cpus', '4', '--memory', '8g', '--pids-limit', '2048', '--shm-size', '1g',
+    // --init: claude does not reap the processes its tools leave (dead chrome, node), so zombies pile up to the pids limit
+    '--init', ...(CGROUP_PARENT ? ['--cgroup-parent', CGROUP_PARENT] : []),
     '--security-opt', 'no-new-privileges:true', '--cap-drop', 'NET_RAW', '--cap-drop', 'MKNOD', '--cap-drop', 'SYS_CHROOT', '--cap-drop', 'AUDIT_WRITE', '--cap-drop', 'SETFCAP',
     '-v', `${dir(id)}/${workspace}:/workspace`, '-v', `${dir(id)}/${claudeDir}:/home/agent/.claude`,
     ...[...BRAIN_MOUNTS(), ...launch.mounts, ...mounts].flatMap((m) => ['-v', m]),
@@ -1103,7 +1111,7 @@ const handler = async (req, res) => {
   const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
   try {
     const url = new URL(req.url, 'http://x');
-    if (url.pathname === '/health') return send(200, { ok: true, running: running.size, queued: queue.length });
+    if (url.pathname === '/health') return send(200, { ok: true, running: busyIds().size, queued: queue.length });
     if (url.pathname === '/mcp') return mcp(req, res);
     if (!authOk(req)) return send(401, { error: 'unauthorized' });
     if (url.pathname === '/digest' && req.method === 'GET') return send(200, await digest(Number(url.searchParams.get('hours') ?? 24)));
@@ -1282,7 +1290,7 @@ function watchdog(now = Date.now()) {
   if (drain.draining) return;
   for (const t of allTasks()) {
     const act = `${dir(t.id)}/activity.log`;
-    const d = watchdogDecision(t, { now, running: running.has(t.id), anyRunning: running.size > 0, inQueue: queue.some((j) => j.id === t.id), slotsFull: running.size >= MAX_PARALLEL, lastActivityAt: existsSync(act) ? statSync(act).mtime.toISOString() : undefined });
+    const d = watchdogDecision(t, { now, running: running.has(t.id), anyRunning: busyIds().size > 0, inQueue: queue.some((j) => j.id === t.id), slotsFull: busyIds().size >= MAX_PARALLEL, lastActivityAt: existsSync(act) ? statSync(act).mtime.toISOString() : undefined });
     if (d.action === 'none') continue;
     log(`watchdog.${d.action}`, { task: t.id, state: d.state, idleMin: d.idleMin });
     if (d.action === 'escalate') {
