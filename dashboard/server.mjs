@@ -4,7 +4,7 @@
 // every minute (factory-box status), the e2e reports, and Coolify's API.
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { readFileSync, existsSync, readdirSync, createReadStream } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, createReadStream, statSync } from 'node:fs';
 import { chatView, chatCss, agents, mediaFile, projectNames } from './chat.mjs';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -187,7 +187,16 @@ createServer(async (req, res) => {
     if (mm && req.method === 'GET') {
       const f = mediaFile(mm[1], mm[2], decodeURIComponent(mm[3]));
       if (!f) return send(404, 'not found');
-      res.writeHead(200, { 'content-type': f.type, 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff' });
+      // byte ranges: browsers seek in a video with them, and Safari will not play one without
+      const size = statSync(f.file).size, head = { 'content-type': f.type, 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff', 'accept-ranges': 'bytes' };
+      const rg = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
+      if (rg && (rg[1] || rg[2])) {
+        let start = rg[1] ? Number(rg[1]) : Math.max(0, size - Number(rg[2])), end = rg[1] && rg[2] ? Math.min(Number(rg[2]), size - 1) : size - 1;
+        if (start >= size || start > end) { res.writeHead(416, { 'content-range': `bytes */${size}` }); return res.end(); }
+        res.writeHead(206, { ...head, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': end - start + 1 });
+        return createReadStream(f.file, { start, end }).pipe(res);
+      }
+      res.writeHead(200, { ...head, 'content-length': size });
       return createReadStream(f.file).pipe(res);
     }
     const tm = url.pathname.match(/^\/t\/([0-9]{6}-[0-9a-f]{6})\/(reply|stop|pause|state)$/);

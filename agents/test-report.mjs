@@ -26,7 +26,8 @@ test('mappingFrom takes the newest agent message with a block', () => {
 test('ready case: proof next to each result, media listed, marker first', () => {
   const r = buildReport({ ...base, outcome: 'ready', mapping: parseMapping(block) });
   assert.ok(r.startsWith(REPORT_MARK)); assert.match(r, /Evidence report: ready/);
-  assert.match(r, /Login shows the form\n {3}→ 🎬 \[videos\/login\/video\.webm\]\(https:\/\/github\.com\/o\/r\/blob\/c0ffee\/t1\/videos\/login\/video\.webm\)/);
+  assert.match(r, /Login shows the form\n {3}→ 🎬 \[videos\/login\/video\.webm\]\(https:\/\/d\/t\/t1\/media\/videos\/login\/video\.webm\)/, 'a video plays in the factory player, not on GitHub');
+  assert.match(r, /\[file on GitHub\]\(https:\/\/github\.com\/o\/r\/blob\/c0ffee\/t1\/videos\/login\/video\.webm\?raw=true\)/, 'the GitHub copy is still linked');
   assert.match(r, /Home is drawn\n {3}→ 📸/); assert.match(r, /Something else\n {3}→ ❌ not shown/);
   assert.match(r, /<img src="[^"]+home\.png\?raw=true"/); assert.doesNotMatch(r, /Still failing/);
 });

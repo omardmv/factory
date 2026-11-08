@@ -626,6 +626,7 @@ async function autoMerge(id) {
     const links = [cur.previewUrl ? `Try it yourself (opens signed in as you): ${cur.previewUrl}` : cur.previewError ? `The preview could not be built: ${cur.previewError}` : '', t.pr?.url ? `PR: ${t.pr.url} (its "Evidence report" comment lists what was checked, with proof)` : '', p.previews ? '' : 'This project has no previews: the recordings and screenshots above show the result.'].filter(Boolean).join('\n');
     say(id, 'factory', `[factory] ✅ Ready for your check: PR #${t.pr.number} passed review${qa} and the checks at ${t.reviewedSha.slice(0, 7)}.\n${links}\nPress Approve & merge to merge it into ${p.autoMerge}, or reply here with what to change.`, { approve: { sha: t.reviewedSha, pr: t.pr.number }, ping: true });
     log('approval.asked', { task: id, pr: t.pr.number, sha: t.reviewedSha });
+    publishReport(id, 'ready').catch((e) => log('report.failed', { task: id, error: e.message })); // refreshed: the links the founder will use now
     return;
   }
   const token = await githubToken(t.repo);
@@ -1108,6 +1109,18 @@ const handler = async (req, res) => {
       if (!msub) return send(200, files.map((f) => ({ sub: f.sub, rel: f.rel, mtime: f.mtime, video: f.video, bytes: statSync(f.path).size })));
       const f = files.find((x) => x.sub === msub && x.rel === decodeURIComponent(mrel));
       if (!f) return send(404, { error: 'no such file' });
+      // ?as=mp4: a .webm converted once (cached beside the task) for players that cannot play webm, like Slack's
+      if (url.searchParams.get('as') === 'mp4' && /\.webm$/i.test(f.rel)) {
+        const out = `${dir(mid)}/mp4-cache/${f.sub}/${f.rel.replace(/\.webm$/i, '.mp4')}`;
+        if (!existsSync(out) || statSync(out).mtimeMs < statSync(f.path).mtimeMs) {
+          mkdirSync(out.slice(0, out.lastIndexOf('/')), { recursive: true });
+          const r = await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', f.path, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-movflags', '+faststart', '-an', `${out}.tmp.mp4`], { timeoutMs: 180000 });
+          if (r.code !== 0) { log('media.mp4_failed', { task: mid, file: f.rel, error: r.err.slice(-200) }); return send(500, { error: 'could not convert to mp4' }); }
+          renameSync(`${out}.tmp.mp4`, out);
+        }
+        const mp4 = readFileSync(out);
+        res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': mp4.length }); return res.end(mp4);
+      }
       const buf = readFileSync(f.path);
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': buf.length }); return res.end(buf);
     }
