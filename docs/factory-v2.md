@@ -162,10 +162,10 @@ The factory is general; a project brings what is special about it.
 | --- | --- | --- |
 | How every agent works | `brain/` (factory repo) | playbooks, review, QA, security |
 | How this project's previews run | `projects/<name>/` (factory repo) + `preview.compose.yaml` (project repo) | Postgres + pgvector, Redis, a Node or Python app, its snapshot and disarm |
-| What the factory does for it | `agents/projects.json` | base branch, QA on/off, auto-merge target, loops |
+| What the factory does for it | `agents/projects.json` (on the box) | base branch, QA on/off, auto-merge target, loops |
 | How to work in its code | the project repo: `AGENTS.md`, `.claude/skills/` | its test commands, conventions, verification skill |
-| What its agents need installed | `projects/<name>/agent.Dockerfile`, `FROM factory-agent-base` | Postgres 16 + pgvector for a project that needs it; Go, Rust or nothing extra for others |
-| Factory-side facts about it | `projects/<name>/knowledge/`, mounted only into that project's containers | its data quirks, its staging, what not to touch |
+| What its agents need installed | `<PROJECTS_DIR>/<name>/agent.Dockerfile` on the box, `FROM factory-agent:latest` | Postgres 16 + pgvector for a project that needs it; Go, Rust or nothing extra for others |
+| Factory-side facts about it | `<PROJECTS_DIR>/<name>/knowledge/` on the box, mounted only into that project's containers | its data quirks, its staging, what not to touch |
 
 As built (`agents/launch.mjs`, tested by `agents/test-launch.mjs`):
 
@@ -268,10 +268,10 @@ its own test; `agents/server.mjs` only wires them (see `AGENTS.md`).
   review panel (`afterReview`, `panelVerdict`), check report (`afterFactoryReport`)
   and coordinator reply (`afterCoordinator`), and what a job found on disk after
   a restart does (`pickupJob`). Failed rounds (red e2e, QA FAIL, review CHANGES)
-  stop at 6 (`MAX_FACTORY_ROUNDS`). Covered stalls: an answer to review findings
+  stop at 6 (`MAX_FACTORY_ROUNDS`, an env var read in `server.mjs`). Covered stalls: an answer to review findings
   with no new commit goes back to the panel (a CHANGES verdict counts toward the
   limit, so it is bounded); a turn that dies without a reply is retried up to 2
-  times (`MAX_CRASH_RETRIES`) with a prompt that warns against killing processes
+  times (`MAX_CRASH_RETRIES`, also env) with a prompt that warns against killing processes
   by name; a restart keeps a job's origin, so a review fix stays a review fix;
   a run turn that ends with no PR and no question is nudged up to 2 times
   (`MAX_NO_PR_NUDGES`) before it parks. An improvement-loop task that finds
@@ -279,7 +279,7 @@ its own test; `agents/server.mjs` only wires them (see `AGENTS.md`).
 - **`waitingOn`**: every parked status (`waiting for you`, `decision needed`,
   `ready for you`, `paused`, `waiting for merges`, `research review`) carries a
   one-line reason. `parkReason` in `agents/lifecycle.mjs` fills a default, and
-  `server.mjs` refuses to save a parked task without one. Slack, the dashboard
+  `save()` in `server.mjs` always fills it in for a parked task (the given reason, else the default), so no parked task is saved without one. Slack, the dashboard
   and the MCP show it.
 - **Unasked questions** (`agents/unasked.mjs`, `agents/test-unasked.mjs`): after a
   turn that has no `DECISION NEEDED` block, one cheap model call (60 s) asks
