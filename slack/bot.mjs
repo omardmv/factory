@@ -176,7 +176,13 @@ export function render(t, m) {
   // the watchdog's escalation: names the person, says exactly what is stuck and why, and what is waited on
   if (m.from === 'factory' && m.ping) return { text: `🚨 ${state.owner ? `<@${state.owner}> ` : ''}*Stuck*\n${mrkdwn(clip(m.text.replace(/^\[factory\]\s*(STUCK:\s*)?/, ''), 1200).text)}\n${links}` };
   // the whole message: a stall names the stuck tasks, the doctor's diagnosis spans lines
-  if (m.from === 'factory') { const b = clip(m.text.replace(/^\[factory\]\s*/, ''), 2500); return { text: `🏭 ${mrkdwn(b.text)}${b.cut ? `\n… <${taskLink(t.id)}|the rest>` : ''}` }; }
+  if (m.from === 'factory') {
+    const b = clip(m.text.replace(/^\[factory\]\s*/, ''), 2500);
+    const text = `🏭 ${mrkdwn(b.text)}${b.cut ? `\n… <${taskLink(t.id)}|the rest>` : ''}`;
+    // a reversible call the agent took: one button per other option, to change it
+    if (m.decided?.id && Array.isArray(m.decided.options)) return { text, choices: m.decided.options.map((o, i) => ({ label: o, value: `${t.id}|${m.decided.id}|${i}` })).filter((c) => c.label !== m.decided.chosen).slice(0, 5) };
+    return { text };
+  }
   const decision = /^\s*DECISION NEEDED\b/m.test(m.text);
   const body = clip(m.text, 3500);
   const triage = t.kind === 'report' && /^TRIAGE:\s*(\S+)\s+(\S+)\s*(\S*)/m.exec(m.text);
@@ -191,11 +197,16 @@ export function render(t, m) {
   const waiting = t.waitingOn && decision ? `\n_Waiting on: ${esc(t.waitingOn)}_` : '';
   return { text: `${head(icon, label)}\n${mrkdwn(body.text)}${body.cut ? '\n…' : ''}${waiting}\n${links}`, go: brief, plan: talk };
 }
-async function post(channel, text, { go, plan, taskId } = {}) {
+async function post(channel, text, { go, plan, taskId, choices } = {}) {
   const chunks = []; for (let i = 0; i < text.length; i += 3900) chunks.push(text.slice(i, i + 3900));
   for (const [i, c] of chunks.entries()) {
     const last = i === chunks.length - 1;
     const btn = go ? ['Go', 'go'] : plan ? ['Plan it', 'plan'] : null;
+    if (choices?.length && last) {
+      const blocks = [{ type: 'section', text: { type: 'mrkdwn', text: c } }, { type: 'actions', elements: choices.map((x, j) => ({ type: 'button', text: { type: 'plain_text', text: short(`Use: ${x.label}`, 75) }, action_id: `decide_${j}`, value: x.value })) }];
+      await slack('chat.postMessage', { channel, text: c, blocks, unfurl_links: false, unfurl_media: false });
+      continue;
+    }
     const blocks = btn && last ? [{ type: 'section', text: { type: 'mrkdwn', text: c } }, { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: btn[0] }, style: 'primary', action_id: btn[1], value: taskId }] }] : undefined;
     await slack('chat.postMessage', { channel, text: c, blocks, unfurl_links: false, unfurl_media: false });
   }
@@ -421,6 +432,24 @@ export async function onCommand(p) {
 export async function onAction(p) {
   if (p.user?.id !== state.owner) return;
   const a = p.actions?.[0];
+  if (a?.action_id?.startsWith('decide_')) {
+    // the founder changes a reversible call the agent took: tell the task, or start a follow-up when its work has merged
+    const [taskId, did, idx] = String(a.value ?? '').split('|');
+    const t = await agents(`/tasks/${taskId}`).catch(() => null);
+    const d = t?.decisions?.find((x) => x.id === did); const option = d?.options?.[Number(idx)];
+    if (!t || !d || !option) return;
+    const finishedTask = ['merged', 'done', 'stopped'].includes(t.status) || t.pr?.state === 'merged';
+    if (finishedTask) {
+      const f = await agents('/tasks', { method: 'POST', body: JSON.stringify({ project: t.project, auto: true, ...(t.type ? { type: t.type } : {}), text: `Follow-up to task ${t.id}${t.pr ? ` (PR #${t.pr.number}, merged)` : ''}: the founder changed a decision. "${d.question}": use "${option}" instead of "${d.chosen}". Change what that task built to follow it, with the same checks and evidence.` }) });
+      await post(state.taskChannel[t.id] ?? p.channel?.id, `↪️ The work already merged, so a follow-up task \`${f.id}\` makes the change.`);
+    } else {
+      await agents(`/tasks/${taskId}/messages`, { method: 'POST', body: JSON.stringify({ text: `Change of decision from the founder: "${d.question}": use "${option}" instead of "${d.chosen}". Change what you built to follow it, log it in the decision log, and carry on.` }) });
+    }
+    log('decision.changed', { task: taskId, question: d.question.slice(0, 100), to: option.slice(0, 80) });
+    const section = p.message?.blocks?.find((b) => b.type === 'section');
+    if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, text: p.message.text, blocks: [...(section ? [section] : []), { type: 'context', elements: [{ type: 'mrkdwn', text: `✔️ Changed to: ${esc(option)}` }] }] }).catch(() => {});
+    return;
+  }
   if (a?.action_id?.startsWith('loops_')) {
     const [name, kind, cadence] = String(a.selected_option?.value ?? a.value ?? '').split('|');
     if (!PROJECTS[name]) return;
@@ -524,7 +553,7 @@ export async function pushUpdates() {
     const fresh = full.messages.slice(from).filter((m) => m.from !== 'you');
     if (fresh.length) {
       const ch = await channelFor(full);
-      for (const m of fresh) { const r = render(full, m); await post(ch, r.text, { go: r.go, plan: r.plan, taskId: t.id }); }
+      for (const m of fresh) { const r = render(full, m); await post(ch, r.text, { go: r.go, plan: r.plan, taskId: t.id, choices: r.choices }); }
       // a run ended (the agent, coordinator or QA tester spoke): its new screenshots and videos follow
       if (fresh.some((m) => ['agent', 'coordinator', 'qa'].includes(m.from))) await postMedia(full, ch).catch((e) => log('media.error', { task: t.id, error: e.message }));
     }

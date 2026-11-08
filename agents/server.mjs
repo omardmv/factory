@@ -18,7 +18,7 @@ import { tailLines, lastJsonLine } from './tail.mjs';
 import { mergeDecision } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
-import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
+import { checkUnasked, decisionMessage, waitingOnLine, decidedMessage, expandNumberAnswer, hasDecisionBlock } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
 import { parsePlan, mergePlan, progress, announcements, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
@@ -284,8 +284,9 @@ const UNASKED_TIMEOUT_MS = 60000;
 // design-taste, money or security call) stops for the person. A project opts out with "autoGo": false.
 const AUTO_GO = process.env.AUTO_GO !== '0';
 const autoGo = (t) => AUTO_GO && PROJECTS[t.project]?.autoGo !== false;
-const AUTO_GO_RULE = 'The founder runs the factory on auto-go: nobody approves this step, the work starts right after your reply. So do not ask questions you can settle yourself: pick the most reasonable option, say it as an assumption, and log it in the decision log. Stop for the person (end with a DECISION NEEDED block instead) only for a real architecture, design-taste, money or security call that would be expensive to undo.';
+const AUTO_GO_RULE = 'The founder runs the factory on auto-go: nobody approves this step, the work starts right after your reply. Classify every question before asking: a fact you can find out by running or reading something, find out; a reversible product, design, architecture or engineering call, take the option you would recommend, say it as an assumption and log it in the decision log (the factory shows the founder your pick with one-press alternatives); stop for the person (end with a DECISION NEEDED block) only for something irreversible or that only they can do (rotate or provide a secret, grant a permission, create an account, spend money, deploy to production, delete data, message users), or a choice with no sensible default.';
 const MAX_NO_PR_NUDGES = Number(process.env.MAX_NO_PR_NUDGES ?? 2);
+const MAX_AUTO_DECIDED = Number(process.env.MAX_AUTO_DECIDED ?? 3);
 async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
   const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: t.type === 'research' ? RESEARCH_RULES() : RULES(), disallowed: ['AskUserQuestion'], resume: t.sessionId });
@@ -298,13 +299,32 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   let asked = { asks: false };
   if (from !== 'pause' && mode !== 'plan' && r.last && !['stopped', 'pausing'].includes(load(id).status)) {
     const hold = { kill() {} }; running.set(id, hold);
-    try { asked = await checkUnasked(r.last, { ask: (p) => oneShot(p, UNASKED_TIMEOUT_MS), timeoutMs: UNASKED_TIMEOUT_MS, log, autoGo: autoGo(t) }); }
+    try { asked = await checkUnasked(r.last, { ask: (p) => oneShot(p, UNASKED_TIMEOUT_MS), timeoutMs: UNASKED_TIMEOUT_MS, log, autoGo: autoGo(t), classifyBlocks: autoGo(t) }); }
     finally { if (running.get(id) === hold) running.delete(id); }
   }
   const done = load(id);
   if (r.sessionId && !done.sessionId) done.sessionId = r.sessionId;
   // cut off by a stop: the job stays on the task, so the next start picks it up again ("you were interrupted")
   if (r.cutOff) { save(done); log('run.cutoff', { task: id, code: r.code, signal: r.signal }); return 'keep-job'; }
+  // never block on the founder (design 5g): on auto-go a fact is found out and a reversible call is taken
+  // with the agent's own pick, posted as "📌 Decided for you"; only a blocking question stops. Bounded per task.
+  if (autoGo(done) && asked.asks && asked.kind !== 'blocking' && (done.autoDecided ?? 0) < MAX_AUTO_DECIDED) {
+    done.autoDecided = (done.autoDecided ?? 0) + 1;
+    const keep = [from, origin].includes('review') ? 'review' : (origin ?? from);
+    if (asked.kind === 'reversible') {
+      const d = { id: randomBytes(3).toString('hex'), at: new Date().toISOString(), question: asked.question, chosen: asked.chosen, options: asked.options };
+      done.decisions = [...(done.decisions ?? []), d]; save(done);
+      say(id, 'factory', decidedMessage(asked), { decided: d });
+      log('decided.default', { task: id, question: asked.question.slice(0, 120), chosen: asked.chosen.slice(0, 80) });
+      enqueue(id, `[factory] Auto-go: "${asked.question}" is a reversible call, so it is yours: go with your own pick, "${asked.chosen}". Log it in the decision log as an assumption the founder may change, then carry on until your definition of done is met. If you were already done, make sure the PR says this choice under "Decisions" and finish.`, mode, 'decided', keep);
+    } else {
+      save(done);
+      say(id, 'factory', `[factory] 🔎 "${asked.question}" is a fact the agent can find out itself: sent back to check it and carry on.`);
+      log('decided.fact', { task: id, question: asked.question.slice(0, 120) });
+      enqueue(id, `[factory] "${asked.question}" can be answered by running or reading something, so don't ask: find out (a throwaway probe is fine), decide from what you see, log it in the decision log, and carry on until your definition of done is met.`, mode, 'decided', keep);
+    }
+    return pump();
+  }
   const out = await afterAgentRun({ task: done, from, origin, mode, reply: r.last, unasked: asked.asks, maxCrashRetries: MAX_CRASH_RETRIES, maxNoPrNudges: MAX_NO_PR_NUDGES, autoGo: autoGo(done) }, { findPr, hasChecks, hasQa });
   if (out.type === 'stopped') { save(done); return pump(); }
   // pause: one more turn to leave a checkpoint, then rest
@@ -331,7 +351,8 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   if (out.resetNoPr) done.noPrNudges = 0;
   // the person's answer to a decision carries the turn's origin, so a review-fix round still returns to the panel
   if (out.decision || asked.asks) done.askedFrom = [from, origin].includes('review') ? 'review' : (origin ?? from);
-  if (asked.asks) {
+  if (asked.asks) done.lastOptions = asked.options; // so a reply of "2" can be expanded to the option
+  if (asked.asks && !hasDecisionBlock(r.last)) {
     say(id, 'agent', decisionMessage(asked), { unasked: true });
     done.waitingOn = waitingOnLine(asked);
     log('unasked.caught', { task: id, question: asked.question });
@@ -784,7 +805,9 @@ ${text}
 5. File it: ${t.issue ? `comment your verdict on issue #${t.issue.number} (restatement, evidence, suspected cause), remove its \`${TRIAGE_LABEL}\` label and add exactly one of` : 'open one GitHub issue (restatement, evidence, suspected cause) with exactly one label of'}: \`${INTAKE_LABEL}\` (clear, reproduced or confidently traced, a fix an agent can make and prove), \`ready-for-human\` (needs a person: a product call, access, risk), \`needs-info\` (cannot act without more from the reporter: ask the precise question). A feature or question is ${INTAKE_LABEL} only when it is small and fully specified. Create a missing label with \`gh label create\`.
 Write nothing anywhere except that one issue. End with exactly one line: \`TRIAGE: <class> <label> <issue url>\`.`;
 function post(id, from, text) {
-  const t = load(id); say(id, from, text);
+  const t = load(id);
+  if (from === 'you' && t.lastOptions?.length) { const x = expandNumberAnswer(text, t.lastOptions); if (x !== text) { text = x; delete t.lastOptions; save(t); } }
+  say(id, from, text);
   if (from === 'factory') {
     const o = afterFactoryReport({ task: t, text, maxRounds: MAX_FACTORY_ROUNDS });
     if (o.action === 'ignore') return t;

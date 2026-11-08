@@ -54,4 +54,33 @@ assert.match(waitingOnLine({ question: 'Purple\nor teal?' }), /^your answer to: 
   assert.match(seen, /auto-go/, 'checkUnasked passes auto-go to the prompt');
   console.log('ok on auto-go, a question the agent answers with its own suggestion is not a stop; only real calls or things only the person can do are');
 }
+{
+  const U = await import('./unasked.mjs');
+  // kinds, from the audit of 2026-11-08
+  const rev = U.parseUnasked('{"asks": true, "kind": "reversible", "question": "Default icon size 24 or 20?", "options": ["24", "20"], "chosen": "24"}');
+  assert.deepEqual(rev, { asks: true, kind: 'reversible', question: 'Default icon size 24 or 20?', options: ['24', '20'], chosen: '24' });
+  assert.equal(U.parseUnasked('{"asks": true, "kind": "reversible", "question": "Purple or red?", "options": ["purple", "red"], "chosen": ""}').kind, 'blocking', 'no pick of its own: blocking');
+  assert.equal(U.parseUnasked('{"asks": true, "kind": "fact", "question": "Does the build pass on Node 22?", "options": []}').kind, 'fact');
+  assert.equal(U.parseUnasked('{"asks": true, "kind": "blocking", "question": "Rotate the leaked secrets?", "options": []}').kind, 'blocking');
+  assert.equal(U.parseUnasked('{"asks": true, "kind": "whatever", "question": "Q?", "options": []}').kind, 'blocking', 'unknown kind: the safe side');
+  assert.deepEqual(U.parseUnasked('{"asks": true, "kind": "reversible", "question": "Q?", "options": ["a"], "chosen": "b"}').options, ['b', 'a'], 'the pick is always among the options');
+  console.log('ok a question is a fact, a reversible call with the agent\'s own pick, or blocking (anything unclear is blocking)');
+
+  const m = U.decidedMessage(rev);
+  assert.match(m, /^\[factory\] 📌 Decided for you \(reversible\): Default icon size 24 or 20\?/); assert.match(m, /Taken: 24/); assert.match(m, /Other options: 20/); assert.match(m, /press another option/);
+  console.log('ok the "Decided for you" notice: the question, what was taken, the alternatives');
+
+  assert.equal(U.expandNumberAnswer('2', ['24px', '20px']), '2: 20px');
+  assert.equal(U.expandNumberAnswer('option 1.', ['24px', '20px']), 'option 1.: 24px');
+  assert.equal(U.expandNumberAnswer('3', ['24px', '20px']), '3', 'no such option: unchanged');
+  assert.equal(U.expandNumberAnswer('2 but smaller', ['a', 'b']), '2 but smaller', 'more than a number: unchanged');
+  assert.equal(U.expandNumberAnswer('2', undefined), '2');
+  console.log('ok a reply of "2" becomes "2: <that option>"');
+
+  const block = 'Done.\nDECISION NEEDED\nIcon size: 24 (recommended) or 20?';
+  let called = 0; const ask = async () => { called++; return '{"asks": true, "kind": "reversible", "question": "Icon size?", "options": ["24", "20"], "chosen": "24"}'; };
+  assert.deepEqual(await U.checkUnasked(block, { ask }), { asks: false }); assert.equal(called, 0, 'a block is left to the lifecycle by default');
+  assert.equal((await U.checkUnasked(block, { ask, classifyBlocks: true })).kind, 'reversible'); assert.equal(called, 1);
+  console.log('ok on auto-go a DECISION NEEDED block is classified too (a reversible one is not a stop)');
+}
 console.log(`all ${n} passed`);
