@@ -56,6 +56,9 @@ for (const [name, p, rounds, want] of cases) {
   assert.deepEqual(approveCheck(ready, 'abc1234def'), { ok: true, sha: 'abc1234def' });
   assert.match(approveCheck(ready, 'fff0000aaa').error, /changed since you were asked/);
   assert.match(approveCheck({ ...ready, status: 'working' }, 'abc1234def').error, /not ready/);
+  assert.equal(approvalGate(ready, { approval: true, previews: true }).action, 'preview', 'previews: build the preview first');
+  assert.equal(approvalGate({ ...ready, previewFor: 'abc1234def' }, { approval: true, previews: true }).action, 'ask', 'preview of this head built (or failed): ask');
+  assert.equal(approvalGate({ ...ready, previewFor: 'old0000' }, { approval: true, previews: true }).action, 'preview', 'a new head gets a new preview');
   console.log('ok approval: asked once per reviewed head, merges only the head the founder approved, a new head asks again');
 }
 console.log(`all ${cases.length} passed`);

@@ -455,9 +455,17 @@ staging". A project with `"approval": true` in its box config:
   head is asked about after its review. Changes: reply in the channel.
 - Inside an epic, a task waiting for approval counts as waiting, not stuck; its
   dependents start after it merges.
-- Not built yet: per-PR previews for projects whose staging stack can't simply
-  be cloned (a Telegram bot and a tunnel must not run twice); see the plan in
-  the README's preview section.
+- **Previews** (project `"previews": true`): before asking, the factory builds a
+  preview of exactly the reviewed commit (`git archive` of it, then
+  `factory-box up <project> <PR> <src> <type-title>`), one build at a time, and
+  puts its link in the "Ready for your check" message; a failed build still asks,
+  with the reason. The preview is removed when the PR merges or closes, or the
+  task ends (`previewSweep`). The project's preview config is box config
+  (`/opt/factory/projects/<name>/project.sh` + `preview.compose.yaml`): it builds
+  the images, copies a disarmed snapshot of staging's database per PR, may give
+  each preview its own network (`pre_up`/`post_down`) and prints its own
+  sign-in link (`preview_login`). Previews are behind the factory's sign-in at
+  `<type-title>-pr<N>.<domain>`.
 
 ## 6. Safety gates (never self-modified)
 
