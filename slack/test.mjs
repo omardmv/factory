@@ -299,7 +299,7 @@ await step("after the agent's turn, its new screenshots and videos go up under i
   const ids = JSON.parse(done[0].p.files).map((f) => f.id);
   assert.deepEqual(uploads[ids[0]], PNG); assert.equal(uploads[ids[1]].toString(), 'webm-bytes');
   const asked = since(i).filter((c) => c.method === 'files.getUploadURLExternal').map((c) => c.p.filename);
-  assert.deepEqual(asked, ['01-red.png', 'save.webm']);
+  assert.deepEqual(asked, ['01-red.png', 'save.mp4'], 'videos go to Slack as mp4 (it does not play webm)');
   // nothing new: nothing posted again, even after another message
   mediaTask.messages.push({ from: 'agent', text: 'Still red.' });
   const j = calls.length; await bot.pushUpdates();

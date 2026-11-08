@@ -84,8 +84,13 @@ export async function postMedia(t, channel) {
   const pick = [...pics, ...vids].slice(0, MEDIA_PER_POST), files = [];
   try {
     for (const f of pick) {
-      const buf = await agentsBytes(`/tasks/${t.id}/media/${f.sub}/${f.rel.split('/').map(encodeURIComponent).join('/')}`);
-      const u = await slackForm('files.getUploadURLExternal', { filename: f.rel.split('/').pop(), length: String(buf.length) });
+      // Slack plays mp4 inline but not webm: the factory converts videos for it
+      const asMp4 = /\.webm$/i.test(f.rel);
+      const buf = await agentsBytes(`/tasks/${t.id}/media/${f.sub}/${f.rel.split('/').map(encodeURIComponent).join('/')}${asMp4 ? '?as=mp4' : ''}`);
+      // Playwright names every recording video.webm in a folder named after the test: use the folder
+      const base = f.rel.split('/').pop(), parts = f.rel.split('/');
+      const name = (/^video\.webm$/i.test(base) && parts.length > 1 ? parts.at(-2) : base.replace(/\.[^.]+$/, '')) + '.' + (asMp4 ? 'mp4' : base.split('.').pop());
+      const u = await slackForm('files.getUploadURLExternal', { filename: name, length: String(buf.length) });
       const up = await fetch(u.upload_url, { method: 'POST', body: buf, signal: AbortSignal.timeout(120000) });
       if (!up.ok) throw new Error(`upload ${f.rel}: ${up.status}`);
       files.push({ id: u.file_id, title: f.rel });

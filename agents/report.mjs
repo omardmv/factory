@@ -54,9 +54,11 @@ export function checksLine(checks, head) {
 
 export function buildReport({ taskId, repo, pr, head, outcome, title, taskText, mapping, items = [], checks, findings = {}, dashboard, tests = null }) {
   const url = (i, raw) => `https://github.com/${repo}/blob/${i.commit}/${i.repoPath.split('/').map(encodeURIComponent).join('/')}${raw ? '?raw=true' : ''}`;
+  // GitHub does not play a repo's .webm (it offers only "View raw"): videos open in the factory's own player
+  const play = (i) => (dashboard ? `${dashboard}/t/${taskId}/media/${i.sub}/${i.rel.split('/').map(encodeURIComponent).join('/')}` : url(i));
   const rows = (mapping ?? []).map((e, k) => {
     const p = resolveProof(e, items);
-    const proof = p.kind === 'video' ? `🎬 [${p.item.sub}/${p.item.rel}](${url(p.item)})`
+    const proof = p.kind === 'video' ? `🎬 [${p.item.sub}/${p.item.rel}](${play(p.item)})`
       : p.kind === 'screenshot' ? `📸 [${p.item.sub}/${p.item.rel}](${url(p.item)})`
       : p.kind === 'test' ? `🧪 test \`${p.ref}\` (the agent's claim)`
       : `❌ not shown${p.missing ? ` (the agent named \`${p.missing}\`, which the factory did not find)` : ''}`;
@@ -74,7 +76,7 @@ export function buildReport({ taskId, repo, pr, head, outcome, title, taskText, 
     `\n**Expected results and their proof**\n${rows.length ? rows.join('\n') : '❌ The agent gave no expectation → proof mapping: nothing is claimed as shown.'}`,
     `\n**Results on the final head**\n${checksLine(checks, head)}${tests ? `\n${tests}` : ''}`,
     stopped ? `\n**Still failing and why** (the round limit stopped the loop; the last findings, in their own words)\n${open.length ? open.map(([who, t]) => `<details open><summary>${who}</summary>\n\n${clip(t.trim(), 3000)}\n\n</details>`).join('\n\n') : 'No review or QA findings were recorded; see the checks line above.'}` : '',
-    vids.length ? `\n**Videos** (open to play on GitHub)\n${vids.map((i) => `- 🎬 [${i.sub}/${i.rel}](${url(i)})`).join('\n')}` : '',
+    vids.length ? `\n**Videos** (play in the factory's player; [all of them on the dashboard](${dashboard}/?task=${taskId}))\n${vids.map((i) => `- 🎬 [${i.sub}/${i.rel}](${play(i)}) · [file on GitHub](${url(i, true)})`).join('\n')}` : '',
     pics.length ? `\n**Screenshots**\n\n${pics.length > 1 ? '| | |\n|---|---|\n' : '| |\n|---|\n'}${gallery.join('\n')}` : '',
     !pics.length && !vids.length ? '\n_No screenshots or videos were recorded._' : '',
     `\n<sub>Written by the factory; only the expectation → proof mapping is the agent's claim. Edited in place on every final outcome.</sub>`].filter(Boolean).join('\n');
