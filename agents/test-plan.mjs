@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS, isPlanCommand, talkAction, talkReply, needsResearch } from './plan.mjs';
+import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS, isPlanCommand, talkReply, needsResearch } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';

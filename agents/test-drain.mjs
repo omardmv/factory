@@ -1,6 +1,6 @@
 // node agents/test-drain.mjs
 import assert from 'node:assert/strict';
-import { drainDecision, drainRecord, startupPlan, createDrain, DRAIN_TIMEOUT_MS } from './drain.mjs';
+import { drainRecord, startupPlan, createDrain, DRAIN_TIMEOUT_MS } from './drain.mjs';
 
 let n = 0;
 const test = async (name, f) => { await f(); n++; console.log('ok', name); };
