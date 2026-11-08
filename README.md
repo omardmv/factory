@@ -125,6 +125,8 @@ stays a review fix). `/pause`
 leaves a work-in-progress commit and a resume note. A summary arrives on
 Telegram at 08:00 Tashkent (`/digest` any time).
 
+**Auto-go** (default on; a project opts out with `"autoGo": false`, the whole factory with `AUTO_GO=0`): a task's brief and an epic's plan start by themselves. Agents state assumptions instead of asking, and stop for the founder only with a DECISION NEEDED (a real architecture, design-taste, money or security call). Epics plan at once, with no discussion phase.
+
 **Auto-merge** (`autoMerge` in the project's config): when the whole panel
 passes, the factory merges the PR itself, but only into that one branch
 (e.g. a project whose base is `staging`; the factory: `main`), only at the exact

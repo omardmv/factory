@@ -281,6 +281,11 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
 }
 
 const UNASKED_TIMEOUT_MS = 60000;
+// auto-go: briefs and epic plans start by themselves; only a DECISION NEEDED (a real architecture,
+// design-taste, money or security call) stops for the person. A project opts out with "autoGo": false.
+const AUTO_GO = process.env.AUTO_GO !== '0';
+const autoGo = (t) => AUTO_GO && PROJECTS[t.project]?.autoGo !== false;
+const AUTO_GO_RULE = 'The founder runs the factory on auto-go: nobody approves this step, the work starts right after your reply. So do not ask questions you can settle yourself: pick the most reasonable option, say it as an assumption, and log it in the decision log. Stop for the person (end with a DECISION NEEDED block instead) only for a real architecture, design-taste, money or security call that would be expensive to undo.';
 const MAX_NO_PR_NUDGES = Number(process.env.MAX_NO_PR_NUDGES ?? 2);
 async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
@@ -334,6 +339,14 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   } else done.waitingOn = out.waitingOn;
   if (out.type === 'coordinator') { save(done); return afterCoordinator(done, mode, from, r.last, out.decision); }
   if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
+  // auto-go: a brief with no question for the person starts the run at once
+  if (out.status === 'waiting for you' && mode === 'plan' && done.kind === 'change' && done.phase === 'brief' && !out.decision && !asked.asks && autoGo(done)) {
+    done.phase = 'run'; done.status = 'queued'; delete done.waitingOn; save(done);
+    say(id, 'factory', '[factory] ▶️ auto-go: the brief is accepted and the run starts now. Reply here to change course.');
+    log('autogo.brief', { task: id });
+    enqueue(id, runPrompt(done, messages(id)[0].text, `Your brief is accepted (auto-go). Where you listed questions, decide them yourself and log each choice in the decision log. ${AUTO_GO_RULE}`), 'bypassPermissions', 'person');
+    return pump();
+  }
   const next = out.status;
   done.status = next; save(done);
   log('run.end', { task: id, kind: done.kind, mode, from, pr: done.pr?.number ?? null, status: next });
@@ -584,15 +597,15 @@ function createProgram(project, goal, attachments, extra = {}) {
   if (!goal && !attachments?.length) throw new Error('empty goal');
   const id = newId(); mkdirSync(dir(id), { recursive: true });
   goal = withAttachments(goal, `${dir(id)}/workspace`, attachments);
-  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: 'talk', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString(), type: 'epic', ...extra };
+  const t = { id, project, repo: p.repo, base: p.base, kind: 'program', title: goal.split('\n')[0].slice(0, 90), phase: autoGo({ project }) ? 'brief' : 'talk', status: 'queued', children: [], plan: [], factoryRounds: 0, createdAt: new Date().toISOString(), type: 'epic', ...extra };
   save(t); say(id, 'you', goal);
   enqueue(id, `EPIC ${id} in ${p.repo} (base ${p.base}). You are its coordinator: you plan and track; you never write code. Agents do each piece as its own task and PR (each with its own tests and an independent review); approved PRs merge into ${p.autoMerge ?? p.base}${p.autoMerge ? ' by themselves' : ' when the person merges them'}.
 
 GOAL:
 ${goal}
 
-This is a DISCUSSION first. Read the code you need, then talk it through with the person: propose options and their trade-offs, say what you recommend, and ask the questions that change the answer. Do NOT write a \`\`\`plan block and do not lay out the full task plan yet: the person will tell you when to plan (they write "plan"). Keep replies short and in plain words.
-Do not change any file.`, 'plan', 'start');
+${autoGo(t) ? planningPrompt(`There is no discussion first: plan now. ${AUTO_GO_RULE}`) : `This is a DISCUSSION first. Read the code you need, then talk it through with the person: propose options and their trade-offs, say what you recommend, and ask the questions that change the answer. Do NOT write a \`\`\`plan block and do not lay out the full task plan yet: the person will tell you when to plan (they write "plan"). Keep replies short and in plain words.
+Do not change any file.`}`, 'plan', 'start');
   return t;
 }
 // where one planned task stands (agents/plan.mjs progress())
@@ -665,6 +678,12 @@ async function syncEpic(id, done = false) {
 }
 function afterCoordinator(t, mode, from, last, decision) {
   const o = coordinatorNext({ phase: t.phase, reply: last, decision });
+  // auto-go: a valid plan with no question for the person starts at once
+  if (o.status !== 'running' && t.phase === 'brief' && !decision && autoGo(t) && /```plan/.test(last ?? '')) {
+    log('autogo.plan', { task: t.id });
+    say(t.id, 'factory', '[factory] ▶️ auto-go: the plan starts now. Reply here to change it; tasks that started keep going.');
+    approvePlan(t, last); return pump();
+  }
   if (o.status !== 'running') { t.status = o.status; t.waitingOn = o.waitingOn; save(t); if (o.closeEpic) syncEpic(t.id, true); return pump(); }
   if (o.revise) { // a revision while it runs: what has started keeps going
     const r = parsePlan(last), m = r.error ? r : mergePlan(t.plan, r.tasks);
@@ -731,7 +750,7 @@ function createTask(project, text, auto, { attachments, ...extra } = {}) {
   if (t.kind === 'report') enqueue(id, reportPrompt(t, text), 'bypassPermissions', 'start');
   else if (auto && t.type === 'research') enqueue(id, researchPrompt(t, text), 'bypassPermissions', 'start');
   else if (auto) enqueue(id, runPrompt(t, text, 'Pre-approved: no brief, start now. First pick your playbook and write your definition of done as checks anyone can run; it goes in the PR description under "Done".'), 'bypassPermissions', 'start');
-  else enqueue(id, `TASK ${id} in ${p.repo} (base ${p.base}).\n\n${text}\n\n${prTitleLine(t)}\n\nThis is the BRIEF. Read the code you need (and the repository's own rules: AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills, if present). Reply with ONE message: your playbook, the questions you genuinely need answered (or "no questions"), your plan in a few lines, and the definition of done as checks anyone can run. Do not change any file.`, 'plan', 'start');
+  else enqueue(id, `TASK ${id} in ${p.repo} (base ${p.base}).\n\n${text}\n\n${prTitleLine(t)}\n\nThis is the BRIEF. Read the code you need (and the repository's own rules: AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills, if present). Reply with ONE message: your playbook, ${autoGo(t) ? 'your assumptions' : 'the questions you genuinely need answered (or "no questions")'}, your plan in a few lines, and the definition of done as checks anyone can run. Do not change any file.${autoGo(t) ? `\n\n${AUTO_GO_RULE}` : ''}`, 'plan', 'start');
   return t;
 }
 const runPrompt = (t, task, reply) => `${reply}\n\nNow RUN task ${t.id}: ${task}\n${prTitleLine(t)}\nYou are on branch agent/${t.id} in /workspace/repo (base ${t.base}). Work until your definition of done is met. Commit, push the branch, and open a PR into ${t.base} with \`gh pr create\` (title: the task in one line; body: Done / Decisions / Attention). ${hasChecks(t) ? 'Every push builds a preview and runs e2e; the results arrive here as [factory] messages. ' : ''}When it is done, an independent reviewer reads the PR; its findings arrive as [review] messages. Do not ask questions.`;
