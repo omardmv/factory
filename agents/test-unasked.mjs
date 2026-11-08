@@ -45,4 +45,13 @@ assert.equal(hasDecisionBlock('x\nDECISION NEEDED\n'), true); assert.equal(hasDe
 const m = decisionMessage({ question: 'Purple or teal?', options: ['purple', 'teal'] });
 assert.ok(/^DECISION NEEDED\b/m.test(m) && m.includes('1. purple') && m.includes('2. teal')); ok('message starts with DECISION NEEDED and lists options');
 assert.match(waitingOnLine({ question: 'Purple\nor teal?' }), /^your answer to: Purple or teal\?$/); ok('waitingOn is one line');
+{
+  const { unaskedPrompt } = await import('./unasked.mjs');
+  assert.doesNotMatch(unaskedPrompt('x'), /auto-go/);
+  const p = unaskedPrompt('Open questions: 1. 24 or 20? I suggest 24.', { autoGo: true });
+  assert.match(p, /auto-go/); assert.match(p, /suggests, recommends or will assume is the agent's own decision/); assert.match(p, /grant a permission/);
+  let seen = ''; await checkUnasked('Open questions: 1. 24 or 20? I suggest 24.', { ask: async (q) => { seen = q; return '{"asks": false}'; }, autoGo: true });
+  assert.match(seen, /auto-go/, 'checkUnasked passes auto-go to the prompt');
+  console.log('ok on auto-go, a question the agent answers with its own suggestion is not a stop; only real calls or things only the person can do are');
+}
 console.log(`all ${n} passed`);
