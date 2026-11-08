@@ -1,6 +1,6 @@
 // node agents/test-plan.mjs
 import assert from 'node:assert/strict';
-import { parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS, isPlanCommand, talkReply, needsResearch } from './plan.mjs';
+import { parseDecisions, mergeDecisions, decisionsBrief, changeDecision, parsePlan, mergePlan, progress, wavesReport, announcements, MAX_PLAN_TASKS, isPlanCommand, talkReply, needsResearch } from './plan.mjs';
 
 let n = 0; const ok = (name) => console.log(`ok ${++n} - ${name}`);
 const block = (tasks) => 'Here is the plan.\n```plan\n' + JSON.stringify({ tasks }) + '\n```\n';
@@ -274,6 +274,39 @@ ok('a plan task keeps a known type (any case) and drops an unknown one');
   const rev2 = mergePlan(cur, parsePlan(block([R('a', { task: 'x' }), R('b', { research: true })])).tasks);
   assert.deepEqual(rev2.items.map((t) => t.key), ['a', 'b-research', 'b']);
   ok('a revision adds no research to a started task, but still to a new one');
+}
+
+{
+  const D = (key, options, dflt, question = `${key}?`) => ({ key, question, options, default: dflt });
+  const withDecisions = '```plan\n' + JSON.stringify({ decisions: [D('read-state', ['open marks read', 'explicit only'], 'open marks read', 'Does opening a chat mark it read?'), D('icon-size', ['24', '20'], 'nope')], tasks: [T('a')] }) + '\n```';
+  const r = parsePlan(withDecisions);
+  assert.ok(!r.error, r.error);
+  assert.deepEqual(r.decisions.map((d) => [d.key, d.default]), [['read-state', 'open marks read'], ['icon-size', '24']], 'a default that is not an option falls back to the first');
+  assert.deepEqual(parsePlan(block([T('a')])).decisions, [], 'no decisions: an empty list');
+  assert.match(parseDecisions([D('x', ['only one'], 'only one')]).error, /at least 2 options/);
+  assert.match(parseDecisions([D('Bad Key', ['a', 'b'], 'a')]).error, /lowercase/);
+  assert.match(parseDecisions([D('x', ['a', 'b'], 'a'), D('x', ['a', 'b'], 'a')]).error, /used twice/);
+  assert.match(parseDecisions('nope').error, /must be a list/);
+  const m1 = mergeDecisions([], r.decisions);
+  assert.deepEqual(m1.map((d) => [d.chosen, d.by]), [['open marks read', 'default'], ['24', 'default']]);
+  const chosen = m1.map((d) => (d.key === 'icon-size' ? { ...d, chosen: '20', by: 'founder' } : d));
+  const m2 = mergeDecisions(chosen, [D('icon-size', ['24', '20', '16'], '24'), D('new-one', ['x', 'y'], 'y')]);
+  assert.deepEqual(m2.map((d) => [d.key, d.chosen, d.by]), [['icon-size', '20', 'founder'], ['new-one', 'y', 'default'], ['read-state', 'open marks read', 'default']], 'a revision keeps made choices and never drops one');
+  const b = decisionsBrief(m2);
+  assert.match(b, /^EPIC DECISIONS \(settled for the whole epic: apply them, never ask about them again\)/);
+  assert.match(b, /icon-size\? -> 20 \(the founder chose this\)/); assert.match(b, /-> y \(default; the founder may still change it\)/);
+  assert.equal(decisionsBrief([]), '');
+  ok('questions first: a plan lists its decisions with defaults; revisions keep made choices; every task gets them');
+{
+  const ds = [{ key: 'read', question: 'Mark read on open?', options: ['open', 'explicit'], default: 'open', chosen: 'open', by: 'default' }];
+  const kids = [{ key: 'api', taskId: 'k1', state: 'merged' }, { key: 'ui', taskId: 'k2', state: 'active' }, { key: 'docs', taskId: 'k3', state: 'ended' }];
+  const c = changeDecision(ds, 'read', 'explicit', kids);
+  assert.deepEqual([c.decisions[0].chosen, c.decisions[0].by, c.was], ['explicit', 'founder', 'open']);
+  assert.deepEqual(c.tell, ['k2'], 'running tasks are told'); assert.deepEqual(c.merged, ['api'], 'merged ones go to the coordinator');
+  assert.equal(changeDecision(ds, 'read', 'open', kids).unchanged, true);
+  assert.match(changeDecision(ds, 'nope', 'open').error, /no decision/); assert.match(changeDecision(ds, 'read', 'maybe').error, /not an option/);
+  ok('changing an epic decision: the new choice, running tasks told, merged tasks flagged for follow-ups');
+}
 }
 
 console.log(`all ${n} passed`);

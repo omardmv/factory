@@ -20,7 +20,7 @@ import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine, decidedMessage, expandNumberAnswer, hasDecisionBlock } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
-import { parsePlan, mergePlan, progress, announcements, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
+import { mergeDecisions, decisionsBrief, changeDecision, parsePlan, mergePlan, progress, announcements, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia, upsertComment, mediaFiles } from './media.mjs';
 import { REPORT_MARK, buildReport, mappingFrom, reportSummary, openFindings } from './report.mjs';
@@ -642,7 +642,7 @@ function itemState(i) {
 function epicStatus(t) {
   const g = progress(t.plan, itemState);
   const blockedOn = Object.fromEntries(g.blocked.map((b) => [b.item.key, b.on]));
-  return [`${g.merged}/${g.total} merged${g.stalled ? '; nothing can move' : ''}.`, ...[...t.plan].sort((a, b) => a.wave - b.wave).map((i) => {
+  return [`${g.merged}/${g.total} merged${g.stalled ? '; nothing can move' : ''}.`, ...(t.epicDecisions?.length ? [decisionsBrief(t.epicDecisions).trim()] : []), ...[...t.plan].sort((a, b) => a.wave - b.wave).map((i) => {
     const k = i.taskId && existsSync(`${dir(i.taskId)}/task.json`) ? load(i.taskId) : null;
     const st = g.state[i.key];
     const parts = [`- ${i.key} (wave ${i.wave}): ${st}`];
@@ -664,7 +664,7 @@ function startReady(t) {
     const built = i.deps.map((d) => { const k = byKey[d].taskId ? load(byKey[d].taskId) : null; return `- ${byKey[d].title}${k?.pr ? ` (PR #${k.pr.number}, merged)` : ''}`; }).join('\n');
     const rk = i.researchKey && byKey[i.researchKey]?.taskId ? load(byKey[i.researchKey].taskId) : null;
     const handoff = i.researchKey ? `${researchHandoff({ doc: i.researchDoc, pr: rk?.pr, repo: t.repo })}\n\n` : '';
-    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}${handoff}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title, ...(i.type ? { type: i.type } : {}) });
+    const kid = createTask(t.project, `Part of epic ${t.id}, task "${i.key}" (wave ${i.wave}). The epic's goal, for context only (do just your task):\n${goal.slice(0, 2000)}\n\n${built ? `It builds on, already merged into ${t.base}:\n${built}\n\n` : ''}${handoff}${decisionsBrief(t.epicDecisions)}YOUR TASK:\n${i.task}${refsLine(i, t.repo)}`, true, { parent: t.id, batch: t.id, title: i.title, ...(i.type ? { type: i.type } : {}) });
     i.taskId = kid.id;
   }
   update(t.id, (x) => { copyIssueFields(t.plan, x.plan ?? []); x.plan = t.plan; x.children = [...new Set([...(x.children ?? []), ...t.plan.filter((i) => i.taskId).map((i) => i.taskId)])]; });
@@ -673,10 +673,40 @@ function startReady(t) {
   return progress(t.plan, itemState);
 }
 const openingEpic = new Set(); // programs whose epic issue is being opened: no task starts before it is done
+// the epic's decisions, posted once each with the default taken and one-press alternatives
+function announceDecisions(t, list) {
+  for (const d of list) {
+    const cur = (t.epicDecisions ?? []).find((x) => x.key === d.key) ?? { ...d, chosen: d.default };
+    const others = cur.options.filter((o) => o !== cur.chosen);
+    say(t.id, 'factory', `[factory] 📌 Epic decision (default taken, work goes on): ${cur.question}\nTaken: ${cur.chosen}${others.length ? `\nOther options: ${others.join(' · ')}` : ''}\nPress another option to change it for every task of the epic.`, { epicDecided: { key: cur.key, question: cur.question, options: cur.options, chosen: cur.chosen } });
+  }
+}
+// the founder changes an epic decision: future tasks get it in their brief, running ones are told,
+// merged ones are flagged to the coordinator for follow-ups
+function setEpicDecision(id, key, option) {
+  const t = load(id);
+  if (t.kind !== 'program') throw new Error('not an epic');
+  const children = (t.plan ?? []).filter((i) => i.taskId && existsSync(`${dir(i.taskId)}/task.json`)).map((i) => {
+    const k = load(i.taskId);
+    return { key: i.key, taskId: k.id, state: k.pr?.state === 'merged' || k.status === 'merged' ? 'merged' : ['stopped', 'done'].includes(k.status) ? 'ended' : 'active' };
+  });
+  const c = changeDecision(t.epicDecisions ?? [], key, option, children);
+  if (c.error) throw new Error(c.error);
+  if (c.unchanged) return t;
+  t.epicDecisions = c.decisions; save(t);
+  say(id, 'factory', `[factory] ✔️ The founder changed an epic decision: ${c.question} -> ${option} (was ${c.was}).`);
+  log('epic.decision', { task: id, key, option });
+  for (const kid of c.tell) post(kid, 'you', `Change of an epic decision from the founder: "${c.question}": use "${option}" instead of "${c.was}". If your task touches this, change what you built to follow it and log it; otherwise carry on.`);
+  if (c.merged.length) enqueue(id, `[factory] The founder changed an epic decision: "${c.question}" -> "${option}" (was "${c.was}"). These tasks already merged with the old choice: ${c.merged.join(', ')}. If any of them must change, add follow-up tasks for it: send the whole plan again (keep every key; tasks that started keep going). If nothing needs to change, say so in one line.`, 'plan', 'factory');
+  return load(id);
+}
 function approvePlan(t, text) {
   const r = parsePlan(text);
   if (r.error) { say(t.id, 'factory', `[factory] the plan can't start: ${r.error}. Asked the coordinator to fix it.`); enqueue(t.id, `[factory] Your plan block is invalid: ${r.error}. Send the corrected plan. ${PLAN_RULES}`, 'plan', 'person'); return; }
-  t.plan = r.tasks; t.phase = 'run'; t.status = 'running'; t.stallNotice = null; save(t);
+  t.plan = r.tasks; t.phase = 'run'; t.status = 'running'; t.stallNotice = null;
+  const fresh = (r.decisions ?? []).filter((d) => !(t.epicDecisions ?? []).some((x) => x.key === d.key));
+  t.epicDecisions = mergeDecisions(t.epicDecisions ?? [], r.decisions ?? []); save(t);
+  announceDecisions(t, fresh);
   const w = Math.max(...t.plan.map((i) => i.wave));
   say(t.id, 'factory', `[factory] plan approved: ${t.plan.length} tasks in ${w} wave${w === 1 ? '' : 's'}. Each starts as soon as what it depends on has merged.`);
   openingEpic.add(t.id);
@@ -725,7 +755,7 @@ function afterCoordinator(t, mode, from, last, decision) {
   if (o.revise) { // a revision while it runs: what has started keeps going
     const r = parsePlan(last), m = r.error ? r : mergePlan(t.plan, r.tasks);
     if (m.error) say(t.id, 'factory', `[factory] the revised plan was not applied: ${m.error}. The current plan keeps going.`);
-    else { t.epicDropped = [...(t.epicDropped ?? []), ...droppedWithIssues(t.plan, m.items)]; t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
+    else { const fresh = (r.decisions ?? []).filter((d) => !(t.epicDecisions ?? []).some((x) => x.key === d.key)); t.epicDecisions = mergeDecisions(t.epicDecisions ?? [], r.decisions ?? []); announceDecisions(t, fresh); t.epicDropped = [...(t.epicDropped ?? []), ...droppedWithIssues(t.plan, m.items)]; t.plan = m.items; t.stallNotice = null; t.finalCheck = false; say(t.id, 'factory', `[factory] plan revised: ${t.plan.length} tasks; started ones keep going.`); }
   }
   t.status = 'running'; save(t);
   if (!openingEpic.has(t.id)) { startReady(t); syncEpic(t.id); }
@@ -983,7 +1013,7 @@ const handler = async (req, res) => {
       const buf = readFileSync(f.path);
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': buf.length }); return res.end(buf);
     }
-    const m = url.pathname.match(/^\/tasks(?:\/([\w-]+))?(?:\/(messages|stop|pause))?$/);
+    const m = url.pathname.match(/^\/tasks(?:\/([\w-]+))?(?:\/(messages|stop|pause|decisions))?$/);
     if (!m) return send(404, { error: 'not found' });
     const [, id, sub] = m;
     if (!id && req.method === 'GET') return send(200, allTasks().map((t) => ({ ...t, running: running.has(t.id), lastActivity: running.has(t.id) ? activity(t.id, 1)[0] ?? null : null, lastAgent: lastJsonLine(`${dir(t.id)}/messages.jsonl`, (m) => ['agent', 'coordinator'].includes(m.from))?.text ?? '' })));
@@ -994,6 +1024,7 @@ const handler = async (req, res) => {
     }
     if (!existsSync(`${dir(id)}/task.json`)) return send(404, { error: 'no such task' });
     if (!sub && req.method === 'GET') return send(200, { ...load(id), running: running.has(id), messages: messages(id), activity: activity(id), decisions: decisions(id) });
+    if (sub === 'decisions' && req.method === 'POST') { const b = await body(req); return send(200, setEpicDecision(id, String(b.key ?? ''), String(b.option ?? ''))); }
     if (sub === 'messages' && req.method === 'POST') { const b = await body(req); const from = b.from === 'factory' ? 'factory' : 'you'; return send(200, post(id, from, from === 'you' ? withAttachments(String(b.text ?? '').trim(), `${dir(id)}/workspace`, b.attachments).trim() : String(b.text ?? '').trim())); }
     if (sub === 'stop' && req.method === 'POST') {
       dropQueued(id);

@@ -373,7 +373,7 @@ for my thing, just tell it to go". Default on; a project opts out with
 - The unasked check follows the same rule on auto-go: a question the agent
   answers with its own suggestion is its decision, not a stop.
 
-## 5g. Never block on the founder (planned)
+## 5g. Never block on the founder (built)
 
 **Why.** An audit of every task on 2026-11-07/08 found 19 stops. 9 were an
 agent asking the founder something mid-run (median wait 22 min, longest 68,
@@ -419,6 +419,25 @@ for irreversible actions. The decision log is how the human audits afterwards.
 
 Builds on: auto-go (5f), the unasked check, the decision log, the stuck doctor.
 
+As built:
+- `agents/unasked.mjs` classifies a question as `fact`, `reversible` (with the
+  agent's own pick) or `blocking`; an unknown kind or a reversible one with no
+  pick is blocking. On auto-go an explicit `DECISION NEEDED` block is classified
+  too. `agentRun` sends a fact back to be found out, takes a reversible call and
+  records it on the task (`decisions`), posted as "📌 Decided for you" with a
+  Slack button per other option; at most `MAX_AUTO_DECIDED` (3) per task, then a
+  question stops as before. A press sends the change to the task, or starts a
+  follow-up task when its work already merged.
+- Epics: the plan block carries `decisions` (`parseDecisions`, `mergeDecisions`,
+  `changeDecision`, `decisionsBrief` in `agents/plan.mjs`). On approval each is
+  posted with its default taken and buttons; every sub-task's brief starts with
+  the epic's decisions; `POST /tasks/:epic/decisions` changes one: running tasks
+  are told, merged ones are flagged to the coordinator for follow-ups, the
+  coordinator's live status lists them.
+- `expandNumberAnswer`: "2" becomes "2: <option>".
+- `brain/prompts/agent.md` and the auto-go prompt carry the three-step
+  classification. Not built: the stops-per-task metric (needs section 5).
+
 ## 6. Safety gates (never self-modified)
 
 Any change to these is `DECISION NEEDED` and waits for the founder, even
@@ -447,6 +466,6 @@ rule in `AGENTS.md` carry it.
 Done: (1) brain mounted into containers; (3) Slack adapter (`slack/`, alongside
 Telegram); (4) research step, inside epics; (5) loops per project; (7) remote
 factory MCP; (8) per-project agent images and knowledge; and the reliability
-work (5e); auto-go (5f). Next: never block on the founder (5g). Not done: (2) the auto-merge refusal for gate files; (4) a
+work (5e); auto-go (5f); never block on the founder (5g). Not done: (2) the auto-merge refusal for gate files; (4) a
 draft PR at once for every idea; (6) retro + metrics, then the replay
 benchmark (section 5 is still a plan).
