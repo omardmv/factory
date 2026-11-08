@@ -20,7 +20,7 @@ import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine } from './unasked.mjs';
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
-import { parsePlan, mergePlan, progress, announcements, MAX_PLAN_TASKS, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
+import { parsePlan, mergePlan, progress, announcements, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia, upsertComment, mediaFiles } from './media.mjs';
 import { REPORT_MARK, buildReport, mappingFrom, reportSummary, openFindings } from './report.mjs';
@@ -693,7 +693,6 @@ function afterCoordinator(t, mode, from, last, decision) {
   if (!openingEpic.has(t.id)) { startReady(t); syncEpic(t.id); }
   pump();
 }
-const SETTLED = ['ready for you', 'research review', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
 // say once: a task merged (one line), a wave fully merged (what was built, what starts next).
 // What was said is kept on the epic (mergedAnnounced, wavesAnnounced), so a restart repeats nothing.
 function announceProgress(t) {
