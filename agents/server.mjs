@@ -26,12 +26,12 @@ import { REPORT_MARK, buildReport, mappingFrom, reportSummary, openFindings } fr
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
 import { evidenceSection } from './evidence.mjs';
-import { loopDecision, openLoopTasks, isOpenLoop, loopTaskText, afterStart, afterRemind } from './loops.mjs';
+import { loopDecision, openLoopTasks, isOpenLoop, loopTaskText, afterStart, afterRemind, normalizeLoops } from './loops.mjs';
 import { createMcp } from './mcp.mjs';
 import { launchArgs } from './launch.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync, renameSync } from 'node:fs';
 
 const HOME = process.env.AGENTS_DIR ?? '/srv/factory/agents';
 const SECRETS = process.env.AGENTS_SECRETS ?? '/opt/factory/agents';
@@ -915,7 +915,10 @@ const handler = async (req, res) => {
     if (!authOk(req)) return send(401, { error: 'unauthorized' });
     if (url.pathname === '/digest' && req.method === 'GET') return send(200, await digest(Number(url.searchParams.get('hours') ?? 24)));
     // names and repos only: never the GitHub App ids or key files
-    if (url.pathname === '/projects' && req.method === 'GET') return send(200, Object.entries(PROJECTS).map(([name, p]) => ({ name, about: p.about ?? '', repo: p.repo, base: p.base, autoMerge: p.autoMerge ?? null })));
+    if (url.pathname === '/projects' && req.method === 'GET') return send(200, Object.entries(PROJECTS).map(([name, p]) => ({ name, about: p.about ?? '', repo: p.repo, base: p.base, autoMerge: p.autoMerge ?? null, loops: p.loops ?? null })));
+    // the one setting the person may change from Slack: a project's improvement loops (validated; saved with a backup; live at once)
+    const lm = url.pathname.match(/^\/projects\/([\w-]+)\/loops$/);
+    if (lm && req.method === 'POST') { const b = await body(req); return send(200, setLoops(lm[1], b.loops)); }
     if (url.pathname === '/notices' && req.method === 'GET') return send(200, readJson(LOOPS_FILE, {}).notices ?? []);
     if (url.pathname === '/notices/ack' && req.method === 'POST') { const b = await body(req); const f = readJson(LOOPS_FILE, {}); f.notices = (f.notices ?? []).filter((n) => !(b.ids ?? []).includes(n.id)); writeFileSync(LOOPS_FILE, JSON.stringify(f, null, 1)); return send(200, { ok: true }); }
     if (url.pathname === '/classify' && req.method === 'POST') { const b = await body(req); return send(200, await classify(String(b.text ?? ''))); }
@@ -1014,6 +1017,19 @@ async function doctorSweep() {
 }
 
 // ---------- improvement loops (decisions in loops.mjs): due loops start a normal task; reminders wait for the Slack bot ----------
+function setLoops(name, input) {
+  if (!Object.hasOwn(PROJECTS, name)) throw new Error(`unknown project ${name}`);
+  const loops = normalizeLoops(input);
+  const disk = JSON.parse(readFileSync(PROJECTS_FILE, 'utf8'));
+  if (!Object.hasOwn(disk, name)) throw new Error(`${name} is not in ${PROJECTS_FILE}`);
+  writeFileSync(`${PROJECTS_FILE}.bak`, JSON.stringify(disk, null, 2));
+  disk[name].loops = loops;
+  writeFileSync(`${PROJECTS_FILE}.tmp`, JSON.stringify(disk, null, 2)); renameSync(`${PROJECTS_FILE}.tmp`, PROJECTS_FILE);
+  PROJECTS[name].loops = loops; // live without a restart
+  const f = readJson(LOOPS_FILE, {}); if (f.notices?.length) { f.notices = f.notices.filter((n) => n.project !== name); writeFileSync(LOOPS_FILE, JSON.stringify(f, null, 2)); }
+  log('loops.set', { project: name, loops });
+  return { name, loops };
+}
 const LOOPS_FILE = `${HOME}/loops.json`; // { state: { <project>: { lastStarted, lastReminder } }, notices: [{ id, project, text, at }] }
 async function loopsTick(now = Date.now()) {
   const file = readJson(LOOPS_FILE, {}); file.state ??= {}; file.notices ??= [];

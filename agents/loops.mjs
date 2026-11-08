@@ -31,6 +31,23 @@ export function loopsConfig(project) {
   return { mode: Object.keys(kinds).length ? 'on' : 'off', kinds };
 }
 
+// a loops setting from outside (Slack buttons, the API): only known kinds and cadences.
+// false / 'off' / every kind off -> false (the person said no); otherwise { kind: cadence }
+export function normalizeLoops(input) {
+  if (input === false || input === 'off' || input === null) return false;
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('loops must be false or { kind: cadence }');
+  const out = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (!KINDS.includes(k)) throw new Error(`unknown loop "${k}": one of ${KINDS.join(', ')}`);
+    if (v === false || v === 'off' || v === null) continue;
+    const c = v === true || v === 'on' ? DEFAULT_CADENCE : v;
+    if (typeof c !== 'string' || !CADENCE_MS[c]) throw new Error(`unknown cadence "${v}" for ${k}: one of ${Object.keys(CADENCE_MS).join(', ')} or off`);
+    out[k] = c;
+  }
+  return Object.keys(out).length ? out : false;
+}
+export const RECOMMENDED_LOOPS = { security: 'weekly', performance: 'weekly', cleanup: 'biweekly', docs: 'monthly' };
+
 // state: { lastStarted: { kind: iso }, lastReminder: iso }; a kind never run is due at once
 export function dueKinds(config, state, now) {
   return Object.entries(config.kinds)
