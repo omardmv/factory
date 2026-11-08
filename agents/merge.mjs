@@ -40,10 +40,13 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
 
 // The founder approves each feature before it merges (project config "approval": true).
 // -> { action: 'merge' } | { action: 'preview' } (build the reviewed head's preview first) | { action: 'ask' } (post the ready-for-your-check message once per reviewed head) | { action: 'wait' }
-export function approvalGate(t, project) {
+// lastRun: the agent's last e2e run in its workspace ({ status, failed }); a failed one goes back to the agent
+// once per reviewed head before the founder is asked (then the founder is asked, with a warning)
+export function approvalGate(t, project, lastRun = null) {
   if (!project?.approval) return { action: 'merge' };
   if (t.approved && t.approved === t.reviewedSha) return { action: 'merge' };
   if (t.approvalAskedSha === t.reviewedSha) return { action: 'wait' };
+  if (lastRun?.status === 'failed' && t.e2eFixSha !== t.reviewedSha) return { action: 'fix-e2e' };
   // a project with previews: build the reviewed head's preview first, then ask (a failed build asks too)
   if (project.previews && t.previewFor !== t.reviewedSha) return { action: 'preview' };
   return { action: 'ask' };

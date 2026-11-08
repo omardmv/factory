@@ -59,6 +59,10 @@ for (const [name, p, rounds, want] of cases) {
   assert.equal(approvalGate(ready, { approval: true, previews: true }).action, 'preview', 'previews: build the preview first');
   assert.equal(approvalGate({ ...ready, previewFor: 'abc1234def' }, { approval: true, previews: true }).action, 'ask', 'preview of this head built (or failed): ask');
   assert.equal(approvalGate({ ...ready, previewFor: 'old0000' }, { approval: true, previews: true }).action, 'preview', 'a new head gets a new preview');
+  const red = { status: 'failed', failed: ['main action starts the search'], count: 1 };
+  assert.equal(approvalGate(ready, { approval: true }, red).action, 'fix-e2e', 'a red last run goes back to the agent first');
+  assert.equal(approvalGate({ ...ready, e2eFixSha: 'abc1234def' }, { approval: true }, red).action, 'ask', 'once per head: then the founder is asked (with a warning)');
+  assert.equal(approvalGate(ready, { approval: true }, { status: 'passed', failed: [], count: 0 }).action, 'ask');
   console.log('ok approval: asked once per reviewed head, merges only the head the founder approved, a new head asks again');
 }
 {

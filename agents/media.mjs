@@ -2,11 +2,12 @@
 // (not the agent) uploads the task's screenshots and videos (workspace/screens,
 // workspace/videos) to the repo's `factory-media` branch, never merged
 // anywhere. It posts no comment itself: the report does, once, at the end.
-import { readFileSync, readdirSync, lstatSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, lstatSync, statSync, existsSync } from 'node:fs';
 
 export const MEDIA_BRANCH = 'factory-media';
 const MEDIA_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'webm', 'mp4']);
-const MEDIA_MAX_BYTES = 15e6, MEDIA_MAX_FILES = 30;
+// a cap per kind: 36 screenshots once crowded out every video of a task (a single cap of 30, screenshots first)
+const MEDIA_MAX_BYTES = 15e6, MEDIA_MAX = { screens: 40, videos: 20 };
 export function mediaFiles(workspace) {
   const out = [];
   for (const sub of ['screens', 'videos']) {
@@ -24,7 +25,27 @@ export function mediaFiles(workspace) {
     } };
     walk(root, '', 0);
   }
-  return out.sort((a, b) => a.sub.localeCompare(b.sub) || a.rel.localeCompare(b.rel)).slice(0, MEDIA_MAX_FILES);
+  const sorted = out.sort((a, b) => a.sub.localeCompare(b.sub) || a.rel.localeCompare(b.rel));
+  return [...sorted.filter((x) => x.sub === 'videos').slice(0, MEDIA_MAX.videos), ...sorted.filter((x) => x.sub === 'screens').slice(0, MEDIA_MAX.screens)]
+    .sort((a, b) => a.sub.localeCompare(b.sub) || a.rel.localeCompare(b.rel));
+}
+
+// The agent's last e2e run, as Playwright left it in /workspace/videos: .last-run.json ({ status,
+// failedTests }) and, per failed test, an error-context.md naming it. -> { status, failed: [name], at } | null
+export function lastE2eRun(workspace) {
+  const root = `${workspace}/videos`, f = `${root}/.last-run.json`;
+  if (!existsSync(f)) return null;
+  let j; try { j = JSON.parse(readFileSync(f, 'utf8')); } catch { return null; }
+  const status = j?.status === 'passed' ? 'passed' : j?.status === 'failed' ? 'failed' : null;
+  if (!status) return null;
+  const failed = [];
+  if (status === 'failed') for (const d of readdirSync(root, { withFileTypes: true })) {
+    const ec = `${root}/${d.name}/error-context.md`;
+    if (!d.isDirectory() || !existsSync(ec)) continue;
+    const name = /^- Name:\s*(.+)$/m.exec(readFileSync(ec, 'utf8'))?.[1]?.trim();
+    failed.push((name ?? d.name).slice(0, 200));
+  }
+  return { status, failed: failed.slice(0, 10), count: Array.isArray(j.failedTests) ? j.failedTests.length : failed.length, at: new Date(statSync(f).mtimeMs).toISOString() };
 }
 // gh(token, url, method, payload) → JSON. Uploads what is new; returns the new `done` map and every
 // published file as an item (with its commit and path on the media branch), or null if there is no media.
