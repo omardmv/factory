@@ -375,5 +375,22 @@ await step('a factory message is shown whole: a stall names its stuck tasks on t
   const r = bot.render({ id: 'e1' }, { from: 'factory', text: '[factory] the epic is stuck: 0/17 merged, nothing can move.\n- Write the design doc: stuck (decision needed · https://g/pr/28)\n- Research: chat list: stuck (decision needed · https://g/pr/27)' });
   assert.match(r.text, /nothing can move/); assert.match(r.text, /Write the design doc: stuck/); assert.match(r.text, /Research: chat list: stuck/);
 });
+await step('"Decided for you" comes with a button per other option; pressing one tells the task, or starts a follow-up once merged', async () => {
+  const t = mk('shop', 'add the icon set', { phase: 'run', status: 'working', type: 'feature', title: 'icon set' });
+  t.decisions = [{ id: 'd1', question: 'Default icon size 24 or 20?', chosen: '24', options: ['24', '20', '16'] }];
+  t.messages.push({ from: 'factory', text: '[factory] 📌 Decided for you (reversible): Default icon size 24 or 20?\nTaken: 24\nOther options: 20 · 16', decided: t.decisions[0] });
+  let i = calls.length; await bot.pushUpdates();
+  const m = posted(i, bot.state.taskChannel[t.id]).find((c) => /Decided for you/.test(c.p.text));
+  const btns = m.p.blocks.find((b) => b.type === 'actions').elements;
+  assert.deepEqual(btns.map((b) => b.text.text), ['Use: 20', 'Use: 16'], 'no button for what was taken');
+  const press = (n, ts) => bot.onAction({ user: { id: 'U_ME' }, channel: { id: bot.state.taskChannel[t.id] }, message: { ts, text: m.p.text, blocks: m.p.blocks }, actions: [{ action_id: `decide_${n}`, value: btns[n].value }] });
+  await press(0, '90.0');
+  assert.match(t.messages.at(-1).text, /Change of decision from the founder: "Default icon size 24 or 20\?": use "20" instead of "24"/);
+  assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Changed to: 20/);
+  t.status = 'merged'; t.pr = { number: 9, state: 'merged' };
+  const before = Object.keys(tasks).length; await press(1, '90.1');
+  const f = Object.values(tasks).at(-1);
+  assert.equal(Object.keys(tasks).length, before + 1); assert.match(f.messages[0].text, /Follow-up to task .*PR #9, merged.*use "16" instead of "24"/);
+});
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);
