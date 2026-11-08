@@ -1,6 +1,6 @@
 // node agents/test-loops.mjs
 import assert from 'node:assert/strict';
-import { loopsConfig, dueKinds, loopDecision, openLoopTasks, afterStart, afterRemind, REMINDER_EVERY_MS, loopTaskText } from './loops.mjs';
+import { loopsConfig, dueKinds, loopDecision, openLoopTasks, afterStart, afterRemind, REMINDER_EVERY_MS, loopTaskText, normalizeLoops, RECOMMENDED_LOOPS } from './loops.mjs';
 
 let n = 0;
 const test = (name, f) => { f(); n++; console.log('ok', name); };
@@ -78,5 +78,15 @@ test('afterStart records the kind and keeps the rest', () => {
 test('task text names the kind, the project, and keeps to one small PR', () => {
   const t = loopTaskText('security', 'shop');
   assert.match(t, /security/); assert.match(t, /shop/); assert.match(t, /ONE small/);
+});
+test('a setting from Slack is checked: known kinds and cadences only; all off means no', () => {
+  assert.deepEqual(normalizeLoops({ security: 'weekly', docs: 'off', cleanup: true }), { security: 'weekly', cleanup: 'weekly' });
+  assert.equal(normalizeLoops(false), false); assert.equal(normalizeLoops('off'), false);
+  assert.equal(normalizeLoops({ docs: 'off', security: false }), false, 'every kind off is a no');
+  assert.throws(() => normalizeLoops({ bogus: 'weekly' }), /unknown loop "bogus"/);
+  assert.throws(() => normalizeLoops({ security: 'hourly' }), /unknown cadence "hourly"/);
+  assert.throws(() => normalizeLoops('weekly'), /loops must be/);
+  assert.equal(loopsConfig({ loops: normalizeLoops(RECOMMENDED_LOOPS) }).mode, 'on');
+  assert.equal(loopsConfig({ loops: normalizeLoops(false) }).mode, 'off', 'a saved no stops the reminders');
 });
 console.log(`${n} passed`);

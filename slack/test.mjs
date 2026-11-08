@@ -26,7 +26,7 @@ const slackSrv = await listen(async (req, res) => {
   res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out));
 });
 // ---- fake factory-agents
-const tasks = {}, media = {}; let tid = 0; const classifyCalls = []; const sentAttachments = [];
+const tasks = {}, media = {}, projLoops = {}, loopsSet = []; let notices = []; let tid = 0; const classifyCalls = []; const sentAttachments = [];
 const mk = (project, text, extra = {}) => { const id = `2611${String(++tid).padStart(2, '0')}-abc${tid}`; tasks[id] = { id, project, title: text.split('\n')[0], kind: 'change', phase: 'brief', status: 'briefing', messages: [{ from: 'you', text }], ...extra }; return tasks[id]; };
 const agentsSrv = await listen(async (req, res) => {
   const send = (o, c = 200) => { res.writeHead(c, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
@@ -36,7 +36,11 @@ const agentsSrv = await listen(async (req, res) => {
   const mm = u.pathname.match(/^\/tasks\/([\w-]+)\/media(?:\/(screens|videos)\/(.+))?$/);
   if (mm && !mm[2]) return send((media[mm[1]] ?? []).map(({ data, ...f }) => f));
   if (mm) { const f = (media[mm[1]] ?? []).find((x) => x.sub === mm[2] && x.rel === decodeURIComponent(mm[3])); res.writeHead(f ? 200 : 404); return res.end(f?.data ?? ''); }
-  if (u.pathname === '/projects') return send([{ name: 'factory', repo: 'o/factory', base: 'main' }, { name: 'shop', repo: 'o/shop', base: 'staging' }]);
+  if (u.pathname === '/projects') return send([{ name: 'factory', repo: 'o/factory', base: 'main', loops: projLoops.factory ?? null }, { name: 'shop', repo: 'o/shop', base: 'staging', loops: projLoops.shop ?? null }]);
+  const pl = u.pathname.match(/^\/projects\/([\w-]+)\/loops$/);
+  if (pl && req.method === 'POST') { loopsSet.push({ name: pl[1], loops: p.loops }); projLoops[pl[1]] = p.loops; return send({ name: pl[1], loops: p.loops }); }
+  if (u.pathname === '/notices' && req.method === 'GET') return send(notices);
+  if (u.pathname === '/notices/ack' && req.method === 'POST') { notices = notices.filter((x) => !(p.ids ?? []).includes(x.id)); return send({ ok: true }); }
   if (u.pathname === '/classify') {
     classifyCalls.push(p.text);
     const named = { type: /\bepic\b/i.test(p.text) ? 'epic' : /fix|fails|broken/i.test(p.text) ? 'fix' : 'feature', title: p.text.split('\n')[0].replace(/^\w+:\s*/, '').split(/\s+/).slice(0, 3).join(' ') };
@@ -329,6 +333,43 @@ await step('when the PR opens, a channel the bot made is renamed pr-<N>-<type>-<
   own.pr = { number: 62, state: 'open' }; own.messages.push({ from: 'agent', text: 'PR' });
   i = calls.length; await bot.pushUpdates();
   assert.equal(since(i).filter((c) => c.method === 'conversations.rename').length, 0, "the founder's channel is not renamed");
+});
+await step('a loops reminder comes as a panel: a dropdown per loop, Recommended and All off', async () => {
+  notices = [{ id: 'loops-shop-1', project: 'shop', text: 'shop has no improvement loops set.' }];
+  const i = calls.length; await bot.pushNotices();
+  const m = posted(i, 'D1').at(-1);
+  assert.match(m.p.text, /Improvement loops for shop: not set yet/);
+  const selects = m.p.blocks.filter((b) => b.accessory?.type === 'static_select');
+  assert.deepEqual(selects.map((b) => b.accessory.action_id), ['loops_kind_security', 'loops_kind_performance', 'loops_kind_cleanup', 'loops_kind_docs']);
+  assert.ok(selects.every((b) => b.accessory.initial_option.value.endsWith('|off')));
+  assert.ok(m.p.blocks.some((b) => b.type === 'actions' && b.elements.some((e) => e.action_id === 'loops_preset_recommended')));
+  assert.equal(notices.length, 0, 'acknowledged');
+});
+await step('a choice saves at once and the panel updates; Recommended sets all four; All off is a no', async () => {
+  const msg = { channel: { id: 'D1' }, message: { ts: '77.0' }, user: { id: 'U_ME' } };
+  await bot.onAction({ ...msg, actions: [{ action_id: 'loops_kind_security', selected_option: { value: 'shop|security|weekly' } }] });
+  assert.deepEqual(loopsSet.at(-1), { name: 'shop', loops: { security: 'weekly' } });
+  await bot.onAction({ ...msg, actions: [{ action_id: 'loops_kind_docs', selected_option: { value: 'shop|docs|monthly' } }] });
+  assert.deepEqual(loopsSet.at(-1).loops, { security: 'weekly', docs: 'monthly' }, 'the other loops are kept');
+  const up = calls.filter((c) => c.method === 'chat.update').at(-1);
+  assert.equal(up.p.ts, '77.0'); assert.match(up.p.text, /Security weekly · Docs monthly/);
+  await bot.onAction({ ...msg, actions: [{ action_id: 'loops_preset_recommended', value: 'shop|recommended' }] });
+  assert.deepEqual(loopsSet.at(-1).loops, { security: 'weekly', performance: 'weekly', cleanup: 'biweekly', docs: 'monthly' });
+  await bot.onAction({ ...msg, actions: [{ action_id: 'loops_preset_off', value: 'shop|off' }] });
+  assert.equal(loopsSet.at(-1).loops, false);
+  const n = loopsSet.length;
+  await bot.onAction({ ...msg, user: { id: 'U_X' }, actions: [{ action_id: 'loops_preset_off', value: 'shop|off' }] });
+  await bot.onAction({ ...msg, actions: [{ action_id: 'loops_preset_off', value: 'nope|off' }] });
+  assert.equal(loopsSet.length, n, 'strangers and unknown projects change nothing');
+});
+await step('/factory loops shows the panels (one project, or all)', async () => {
+  let i = calls.length;
+  let r = await bot.onCommand({ user_id: 'U_ME', channel_id: 'C_GENERAL', text: 'loops shop' });
+  assert.match(r.text, /Loops for shop/); assert.equal(posted(i, 'C_GENERAL').length, 1);
+  i = calls.length; r = await bot.onCommand({ user_id: 'U_ME', channel_id: 'C_GENERAL', text: 'loops' });
+  assert.equal(posted(i, 'C_GENERAL').length, 2);
+  r = await bot.onCommand({ user_id: 'U_ME', channel_id: 'C_GENERAL', text: 'loops nope' });
+  assert.match(r.text, /No project "nope"/);
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

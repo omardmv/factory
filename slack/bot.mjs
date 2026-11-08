@@ -272,7 +272,7 @@ const help = () => `*What I understand* (projects: ${Object.keys(PROJECTS).map((
 • or DM me: a plain message starts a task in a new channel (I work out the project from your words and ask if unsure; \`<project>:\` at the start picks it)
 • \`queue:\` + one task per line · \`bug:\` + what's wrong · \`epic:\` + a big goal: you talk it through with the coordinator, press Plan it (or write plan) and it plans every task with what it depends on, then press Go; unrelated tasks run in parallel (add the project, e.g. \`epic <project>:\`)
 • in a task's channel, everything you write goes to the agent; Go starts a brief or a plan; Plan it ends an epic discussion
-• \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`help\` anywhere`;
+• \`/factory pause\` · \`resume\` · \`stop\` in a task's channel; \`/factory status\` · \`tasks\` · \`digest\` · \`loops [project]\` · \`help\` anywhere`;
 
 // ---- what to start, once the project is known
 // kind: task | queue | bug | program; channel: the founder's own channel (task only)
@@ -401,6 +401,13 @@ export async function onCommand(p) {
     else await agents(`/tasks/${taskId}/${cmd}`, { method: 'POST' });
     return { response_type: 'in_channel', text: `${cmd === 'pause' ? '⏸ pausing' : cmd === 'stop' ? '⏹ stopped' : '▶️ resuming'} \`${taskId}\`` };
   }
+  if (cmd === 'loops') {
+    const want = (p.text ?? '').trim().toLowerCase().split(/\s+/)[1];
+    const names = want ? [want] : Object.keys(PROJECTS);
+    if (want && !PROJECTS[want]) return { text: `No project "${esc(want)}". Projects: ${Object.keys(PROJECTS).join(', ')}.` };
+    for (const n of names) await postLoopsPanel(p.channel_id, n);
+    return { text: `Loops for ${names.join(', ')} below: a choice saves at once.` };
+  }
   if (cmd === 'status') return { text: statusLine() };
   if (cmd === 'digest') { sendDigest(24).catch((e) => log('digest.error', { error: e.message })); return { text: 'The summary is on its way to our DM.' }; }
   if (cmd === 'tasks') {
@@ -413,6 +420,19 @@ export async function onCommand(p) {
 export async function onAction(p) {
   if (p.user?.id !== state.owner) return;
   const a = p.actions?.[0];
+  if (a?.action_id?.startsWith('loops_')) {
+    const [name, kind, cadence] = String(a.selected_option?.value ?? a.value ?? '').split('|');
+    if (!PROJECTS[name]) return;
+    let loops;
+    if (kind === 'recommended') loops = { ...RECOMMENDED };
+    else if (kind === 'off') loops = false;
+    else if (LOOP_KINDS.some(([k]) => k === kind)) { const cur = (await loopsOf(name)) || {}; loops = { ...(typeof cur === 'object' ? cur : {}), [kind]: cadence }; }
+    else return;
+    const r = await agents(`/projects/${name}/loops`, { method: 'POST', body: JSON.stringify({ loops }) });
+    log('loops.set', { project: name, loops: r.loops });
+    if (p.channel?.id && p.message?.ts) await slack('chat.update', { channel: p.channel.id, ts: p.message.ts, ...loopsPanel(name, r.loops) }).catch((e) => log('loops.update.error', { error: e.message }));
+    return;
+  }
   if (a?.action_id?.startsWith('pick_')) {
     const [key, project] = String(a.value ?? '').split('|');
     const job = state.pending[key];
@@ -452,13 +472,42 @@ export async function renameForPr(t) {
 }
 
 // project-level notices from the agents service (a project with no improvement loops set): one DM each, then acknowledged
+// ---- improvement loops as a panel: a dropdown per loop, Recommended / All off; a choice saves at once
+export const LOOP_KINDS = [['security', 'Security'], ['performance', 'Performance'], ['cleanup', 'Cleanup'], ['docs', 'Docs']];
+const CADENCES = [['off', 'off'], ['daily', 'daily'], ['weekly', 'weekly'], ['biweekly', 'every 2 weeks'], ['monthly', 'monthly']];
+const RECOMMENDED = { security: 'weekly', performance: 'weekly', cleanup: 'biweekly', docs: 'monthly' };
+const cadenceOf = (loops, kind) => { const c = loops?.[kind]; return c === true || c === 'on' ? 'weekly' : typeof c === 'string' && CADENCES.some(([v]) => v === c) ? c : 'off'; };
+export function loopsPanel(name, loops, intro = '') {
+  const set = loops && typeof loops === 'object' ? LOOP_KINDS.filter(([k]) => cadenceOf(loops, k) !== 'off') : [];
+  const now = loops === undefined || loops === null ? 'not set yet' : set.length ? set.map(([k, l]) => `${l} ${CADENCES.find(([v]) => v === cadenceOf(loops, k))[1]}`).join(' · ') : 'all off';
+  const opt = (kind, [v, l]) => ({ text: { type: 'plain_text', text: l }, value: `${name}|${kind}|${v}` });
+  return {
+    text: `Improvement loops for ${name}: ${now}`,
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: `${intro ? `${intro}\n\n` : ''}🔁 *Improvement loops for ${esc(name)}*: ${now}\nEach loop proposes at most one PR at a time, reviewed like any other. A choice here saves at once.` } },
+      ...LOOP_KINDS.map(([kind, label]) => ({ type: 'section', text: { type: 'mrkdwn', text: `*${label}*` }, accessory: { type: 'static_select', action_id: `loops_kind_${kind}`, initial_option: opt(kind, CADENCES.find(([v]) => v === cadenceOf(loops, kind))), options: CADENCES.map((c) => opt(kind, c)) } })),
+      { type: 'actions', elements: [
+        { type: 'button', style: 'primary', text: { type: 'plain_text', text: 'Recommended' }, action_id: 'loops_preset_recommended', value: `${name}|recommended` },
+        { type: 'button', text: { type: 'plain_text', text: 'All off' }, action_id: 'loops_preset_off', value: `${name}|off` },
+      ] },
+    ],
+  };
+}
+async function loopsOf(name) { return (await agents('/projects')).find((p) => p.name === name)?.loops ?? null; }
+async function postLoopsPanel(channel, name, intro = '') {
+  const panel = loopsPanel(name, await loopsOf(name), intro);
+  return slack('chat.postMessage', { channel, ...panel });
+}
+
 export async function pushNotices() {
   const ns = await agents('/notices');
   if (!ns.length || !state.dm) return;
   state.noticesSent ??= {};
   for (const n of ns) { // remembered before the ack: a failed ack is retried without sending the DM again
     if (state.noticesSent[n.id]) continue;
-    await dm(n.text); state.noticesSent[n.id] = true; persist();
+    if (n.project && PROJECTS[n.project] && state.dm) await postLoopsPanel(state.dm, n.project, `${esc(n.project)} has no improvement loops set yet. Pick them below, or press All off to say no (then I stop reminding you).`);
+    else await dm(n.text);
+    state.noticesSent[n.id] = true; persist();
   }
   await agents('/notices/ack', { method: 'POST', body: JSON.stringify({ ids: ns.map((n) => n.id) }) });
 }
