@@ -189,7 +189,9 @@ PR number, signed in; `init`, `runner`, `push`.
 
 Box (`factory-box`, runs from `/opt/factory/src`, pulled every 5 minutes):
 `up`, `e2e`, `down`, `reset`, `snapshot`, `snapshot-all` (nightly 03:00),
-`sync`, `runner-add`, `self-update`, `ls`. `self-update` restarts
+`sync`, `runner-add`, `self-update`, `status` (cron, every minute: writes
+`/srv/factory/state/status.json` for the dashboard), `agent-say <task-id>` (posts
+a `[factory]` message from stdin into a task), `ls`. `self-update` restarts
 `factory-agents` without blocking, and the service drains first.
 
 ## Agents
