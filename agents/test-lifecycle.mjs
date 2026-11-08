@@ -55,6 +55,12 @@ await test('no PR at all: nudged to carry on twice (keeping a review origin), th
   assert.equal((await run(task(), { mode: 'plan' }, none)).status, 'waiting for you', 'a brief is not nudged');
   assert.equal((await run(task(), { reply: 'DECISION NEEDED\nx' }, none)).status, 'decision needed', 'a question is not nudged');
 });
+await test('a research PR waits for the person, unless the factory is on auto-go (then the panel and merge as usual)', async () => {
+  const r = { ...task(), type: 'research' };
+  assert.equal(await status(r), 'research review');
+  assert.notEqual(await status(r, { autoGo: true }), 'research review');
+  assert.equal(await status(r, { autoGo: true }), 'waiting for checks');
+});
 await test('a turn that ends on a merged PR: the task is merged, not parked', async () => {
   const r = await run(task(), {}, deps({ findPr: async () => ({ number: 7, state: 'merged', head: 'x' }) }));
   assert.equal(r.status, 'merged'); assert.equal(r.waitingOn, undefined);

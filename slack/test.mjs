@@ -371,5 +371,9 @@ await step('/factory loops shows the panels (one project, or all)', async () => 
   r = await bot.onCommand({ user_id: 'U_ME', channel_id: 'C_GENERAL', text: 'loops nope' });
   assert.match(r.text, /No project "nope"/);
 });
+await step('a factory message is shown whole: a stall names its stuck tasks on the lines after the first', async () => {
+  const r = bot.render({ id: 'e1' }, { from: 'factory', text: '[factory] the epic is stuck: 0/17 merged, nothing can move.\n- Write the design doc: stuck (decision needed · https://g/pr/28)\n- Research: chat list: stuck (decision needed · https://g/pr/27)' });
+  assert.match(r.text, /nothing can move/); assert.match(r.text, /Write the design doc: stuck/); assert.match(r.text, /Research: chat list: stuck/);
+});
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

@@ -36,7 +36,7 @@ const reviewOrigin = (from, origin) => [from, origin].includes('review');
 //  { type: 'coordinator', decision, resetCrash } an epic's coordinator replied
 //  { type: 'status', status, pr, resetCrash }  the next status (pr: what was found, change tasks only)
 // deps: findPr(task) -> pr | null, hasChecks(task), hasQa(task)
-export async function afterAgentRun({ task, from, origin, mode, reply, unasked = false, maxCrashRetries = 2, maxNoPrNudges = 2 }, deps) {
+export async function afterAgentRun({ task, from, origin, mode, reply, unasked = false, maxCrashRetries = 2, maxNoPrNudges = 2, autoGo = false }, deps) {
   if (task.status === 'stopped') return { type: 'stopped' };
   if (task.status === 'pausing' && from !== 'pause') return { type: 'checkpoint' };
   const crashes = task.crashRetries ?? 0;
@@ -65,8 +65,9 @@ export async function afterAgentRun({ task, from, origin, mode, reply, unasked =
   // a turn after the PR merged (a late reply, a nudge) does not reopen anything: the task is merged
   else if (pr?.state === 'merged') status = 'merged';
   else if (!head) { status = 'waiting for you'; waitingOn = pr ? `your call: PR #${pr.number} is ${pr.state ?? 'not open'}, so there is nothing to review` : `your call: the agent ended ${maxNoPrNudges + 1} turns in a row without opening a PR or asking anything`; }
-  // a research task is a docs-only PR for discussion: no checks, QA or panel; it waits for the person's comments and merge
-  else if (task.type === 'research') { status = 'research review'; waitingOn = waitingOnFor(status); }
+  // a research task is a docs-only PR for discussion: no checks, QA or panel; it waits for the person's comments and merge.
+  // On auto-go it goes through the panel and merges like any other PR (the founder does not review docs by hand).
+  else if (task.type === 'research' && !autoGo) { status = 'research review'; waitingOn = waitingOnFor(status); }
   // an answer to review findings goes back to the panel even with no new commit:
   // the finding may have asked for evidence (a run, a PR comment), not code.
   // Bounded: every CHANGES verdict counts toward the round limit.
