@@ -438,14 +438,35 @@ As built:
 - `brain/prompts/agent.md` and the auto-go prompt carry the three-step
   classification. Not built: the stops-per-task metric (needs section 5).
 
+## 5h. The founder approves every feature (built)
+
+Founder 2026-11-08: "each feature/task should be ready for me to review with e2e
+screen recordings, preview for me to test and see, then approval and merge to
+staging". A project with `"approval": true` in its box config:
+
+- When a task passes review (and QA and its required checks), the factory does
+  not merge. It posts **"✅ Ready for your check"** in the task's channel: the PR
+  and its evidence report, the recordings and screenshots (already posted after
+  each turn), and the preview link when the project has previews, with an
+  **Approve & merge** button. Asked once per reviewed head (`approvalGate` in
+  `agents/merge.mjs`).
+- Approve (`POST /tasks/:id/approve`, `approveCheck`) merges exactly the head the
+  founder was shown; if the PR changed since, the press is refused and the new
+  head is asked about after its review. Changes: reply in the channel.
+- Inside an epic, a task waiting for approval counts as waiting, not stuck; its
+  dependents start after it merges.
+- Not built yet: per-PR previews for projects whose staging stack can't simply
+  be cloned (a Telegram bot and a tunnel must not run twice); see the plan in
+  the README's preview section.
+
 ## 6. Safety gates (never self-modified)
 
 Any change to these is `DECISION NEEDED` and waits for the founder, even
 inside the factory repo:
 
 - review panel, QA, and what counts as a pass
-- auto-merge targets and branch protection; production is never merged
-  by the factory
+- auto-merge targets, the per-project `approval` switch, and branch
+  protection; production is never merged by the factory
 - the round limit and spend caps
 - the replay benchmark: its tasks and how results are scored
 - agent isolation (container limits, network, firewall, runtime)

@@ -12,7 +12,7 @@ const body = async (req) => { const b = (await raw(req)).toString(); if (!b) ret
 // ---- fake Slack
 const calls = []; const channels = { C_GENERAL: { id: 'C_GENERAL', name: 'general' } }; let n = 0;
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 7)]);
-const fileAuth = [], uploads = {}, epicDecisionCalls = []; let noFilesWrite = false;
+const fileAuth = [], uploads = {}, epicDecisionCalls = [], approveCalls = []; let noFilesWrite = false;
 const slackSrv = await listen(async (req, res) => {
   // Slack's private file links: the image with the bot token; its sign-in page without files:read
   if (req.url.startsWith('/upload/')) { uploads[req.url.slice(8)] = await raw(req); res.writeHead(200); return res.end('OK'); }
@@ -50,6 +50,8 @@ const agentsSrv = await listen(async (req, res) => {
   if (u.pathname === '/batches' && req.method === 'POST') return send({ batch: 'b1', tasks: p.items.map((x) => mk(p.project, x.text, { phase: 'run', ...(x.type ? { type: x.type } : {}), ...(x.title ? { title: x.title } : {}) })) }, 201);
   if (u.pathname === '/tasks' && req.method === 'GET') return send(Object.values(tasks).map(({ messages, ...t }) => t));
   if (u.pathname === '/tasks' && req.method === 'POST') return send(mk(p.project, p.text, { ...(p.kind ? { kind: p.kind } : {}), ...(p.type ? { type: p.type } : {}), ...(p.title ? { title: p.title } : {}) }), 201);
+  const ap = u.pathname.match(/^\/tasks\/([\w-]+)\/approve$/);
+  if (ap && req.method === 'POST') { approveCalls.push({ id: ap[1], ...p }); return p.sha === 'stale' ? send({ error: 'the PR changed since you were asked' }, 409) : send(tasks[ap[1]]); }
   const dm2 = u.pathname.match(/^\/tasks\/([\w-]+)\/decisions$/);
   if (dm2 && req.method === 'POST') { epicDecisionCalls.push({ id: dm2[1], ...p }); return send(tasks[dm2[1]]); }
   const m = u.pathname.match(/^\/tasks\/([\w-]+)(?:\/(messages|stop|pause))?$/);
@@ -405,6 +407,20 @@ await step('an epic decision comes with buttons; pressing one changes it for the
   await bot.onAction({ user: { id: 'U_ME' }, channel: { id: m.p.channel }, message: { ts: '91.0', text: m.p.text, blocks: m.p.blocks }, actions: [{ action_id: 'edecide_0', value: btn[0].value }] });
   assert.deepEqual(epicDecisionCalls.at(-1), { id: e.id, key: 'read-state', option: 'Only an explicit action' });
   assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Changed to: Only an explicit action \(for every task of the epic\)/);
+});
+await step('ready for your check: an Approve & merge button; pressing it approves the head shown; a stale head is refused', async () => {
+  const t = mk('shop', 'crop screen', { phase: 'run', status: 'ready for you', type: 'feature', title: 'crop screen', pr: { number: 12, state: 'open', url: 'https://g/pr/12' } });
+  t.messages.push({ from: 'factory', text: '[factory] ✅ Ready for your check: PR #12 passed review and the checks at abc1234.', approve: { sha: 'abc1234def', pr: 12 } });
+  const i = calls.length; await bot.pushUpdates();
+  const m = since(i).find((c) => c.method === 'chat.postMessage' && /Ready for your check/.test(c.p.text));
+  const b = m.p.blocks.find((x) => x.type === 'actions').elements[0];
+  assert.deepEqual([b.text.text, b.action_id, b.style, b.value], ['Approve & merge', 'approve', 'primary', `${t.id}|abc1234def`]);
+  const press = (value, ts) => bot.onAction({ user: { id: 'U_ME' }, channel: { id: m.p.channel }, message: { ts, text: m.p.text, blocks: m.p.blocks }, actions: [{ action_id: 'approve', value }] });
+  await press(b.value, '92.0');
+  assert.deepEqual(approveCalls.at(-1), { id: t.id, sha: 'abc1234def' });
+  assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Approved by you at `abc1234`: merging/);
+  await press(`${t.id}|stale`, '92.1');
+  assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Not approved: the PR changed/);
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);
