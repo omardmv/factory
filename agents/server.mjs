@@ -298,7 +298,7 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   let asked = { asks: false };
   if (from !== 'pause' && mode !== 'plan' && r.last && !['stopped', 'pausing'].includes(load(id).status)) {
     const hold = { kill() {} }; running.set(id, hold);
-    try { asked = await checkUnasked(r.last, { ask: (p) => oneShot(p, UNASKED_TIMEOUT_MS), timeoutMs: UNASKED_TIMEOUT_MS, log }); }
+    try { asked = await checkUnasked(r.last, { ask: (p) => oneShot(p, UNASKED_TIMEOUT_MS), timeoutMs: UNASKED_TIMEOUT_MS, log, autoGo: autoGo(t) }); }
     finally { if (running.get(id) === hold) running.delete(id); }
   }
   const done = load(id);

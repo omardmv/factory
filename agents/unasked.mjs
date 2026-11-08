@@ -5,14 +5,14 @@
 
 export const hasDecisionBlock = (text) => /^\s*DECISION NEEDED\b/m.test(text ?? '');
 
-export function unaskedPrompt(reply) {
+export function unaskedPrompt(reply, { autoGo = false } = {}) {
   return `Below is the final message of an AI coding agent that worked unattended for a person.
 
 """
 ${String(reply).slice(-6000)}
 """
 
-Does this message ask the person to decide, choose, confirm or answer something that the agent did not settle itself (for example "Two things need your call", "should we...?", "which do you prefer", "needs a person to decide")? A plain report of what was done, with notes or decisions the agent already took, is NOT a question. A "what to look at" list for a reviewer is NOT a question. A question written for someone else (for example the reporter of a bug, in a triage reply) is NOT a question to the person.
+Does this message ask the person to decide, choose, confirm or answer something that the agent did not settle itself (for example "Two things need your call", "should we...?", "which do you prefer", "needs a person to decide")? A plain report of what was done, with notes or decisions the agent already took, is NOT a question. A "what to look at" list for a reviewer is NOT a question. A question written for someone else (for example the reporter of a bug, in a triage reply) is NOT a question to the person.${autoGo ? ' The person runs the factory on auto-go: an open question where the agent says what it suggests, recommends or will assume is the agent\'s own decision, NOT a question to the person. Answer true only when the agent cannot go on without the person: an architecture, design-taste, money or security choice it gives no recommendation for, or something only the person can do (grant a permission, create an account, provide a secret).' : ''}
 
 Answer with ONE line of JSON and nothing else: {"asks": true or false, "question": "<the question in one or two sentences>", "options": ["<each option the agent offered, short>"]}. Use "question": "" and "options": [] when asks is false.`;
 }
@@ -28,11 +28,11 @@ export function parseUnasked(out) {
 
 // ask(prompt) -> string (the model's answer). Fails open: any error, timeout or
 // unreadable answer means "no question found" and the factory continues as before.
-export async function checkUnasked(reply, { ask, timeoutMs = 60000, log = () => {} } = {}) {
+export async function checkUnasked(reply, { ask, timeoutMs = 60000, log = () => {}, autoGo = false } = {}) {
   if (!reply?.trim() || hasDecisionBlock(reply)) return { asks: false };
   let timer;
   try {
-    const out = await Promise.race([ask(unaskedPrompt(reply)), new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs); })]);
+    const out = await Promise.race([ask(unaskedPrompt(reply, { autoGo })), new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs); })]);
     const r = parseUnasked(out);
     if (!r) { log('unasked.unreadable', { out: String(out ?? '').slice(0, 200) }); return { asks: false }; }
     return r;
