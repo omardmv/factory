@@ -26,7 +26,7 @@ import { REPORT_MARK, buildReport, mappingFrom, reportSummary, openFindings } fr
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
 import { evidenceSection } from './evidence.mjs';
-import { loopDecision, openLoopTasks, loopTaskText, afterStart, afterRemind } from './loops.mjs';
+import { loopDecision, openLoopTasks, isOpenLoop, loopTaskText, afterStart, afterRemind } from './loops.mjs';
 import { createMcp } from './mcp.mjs';
 import { launchArgs } from './launch.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -996,8 +996,13 @@ async function doctorSweep() {
 
 // ---------- improvement loops (decisions in loops.mjs): due loops start a normal task; reminders wait for the Slack bot ----------
 const LOOPS_FILE = `${HOME}/loops.json`; // { state: { <project>: { lastStarted, lastReminder } }, notices: [{ id, project, text, at }] }
-function loopsTick(now = Date.now()) {
+async function loopsTick(now = Date.now()) {
   const file = readJson(LOOPS_FILE, {}); file.state ??= {}; file.notices ??= [];
+  // a loop PR merged or closed by hand frees the cap: refresh the PR state of open loop tasks
+  for (const t of allTasks().filter((x) => isOpenLoop(x) && x.pr)) {
+    const pr = await findPr(t);
+    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; if (pr.state === 'merged') x.status = 'merged'; });
+  }
   const tasks = allTasks();
   for (const [name, project] of Object.entries(PROJECTS)) {
     const st = file.state[name] ?? {};
@@ -1017,7 +1022,7 @@ function loopsTick(now = Date.now()) {
 const poll = () => drain.draining ? Promise.resolve() : intake().catch((e) => log('intake.failed', { error: e.message }))
   .then(() => retryMerges()).catch((e) => log('merge.failed', { error: e.message }))
   .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }))
-  .then(() => { try { loopsTick(); } catch (e) { log('loops.failed', { error: e.message }); } })
+  .then(() => loopsTick()).catch((e) => log('loops.failed', { error: e.message }))
   .then(() => { doctorSweep(); }); // in the background: a diagnosis takes a minute, the poll does not wait
 // ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
 const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);

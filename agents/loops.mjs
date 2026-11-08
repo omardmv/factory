@@ -40,7 +40,10 @@ export function dueKinds(config, state, now) {
     .map((d) => d.kind);
 }
 
-export const openLoopTasks = (tasks, project) => tasks.filter((t) => t.project === project && t.loop && !CLOSED.includes(t.status));
+// a PR merged or closed by hand frees the cap too, whatever the task's own status says
+export const PR_CLOSED = ['merged', 'closed'];
+export const isOpenLoop = (t) => !!t.loop && !CLOSED.includes(t.status) && !PR_CLOSED.includes(t.pr?.state);
+export const openLoopTasks = (tasks, project) => tasks.filter((t) => t.project === project && isOpenLoop(t));
 
 // project: its projects.json entry; state: its loop state; openLoops: its open loop tasks
 // -> { action: 'start', kind } | { action: 'wait', why: 'cap' | 'not due' | 'off' } | { action: 'remind', text } | { action: 'none' }
@@ -65,7 +68,7 @@ const ASK = {
   cleanup: 'Find one piece of tech debt (dead code, duplication, a stale flag or dependency) and remove it with no behaviour change; show the tests before and after.',
   docs: 'Find where the docs say something the code no longer does (README, setup steps, config, API) and correct them. Quote the code that proves each change.',
 };
-export const loopTaskText = (kind, name) => `IMPROVEMENT LOOP (${kind}) for ${name}. ${ASK[kind]}\nMake ONE small, proven change as a normal PR with a definition of done; it goes through review and QA like any task. If you find nothing worth a PR, say so with the evidence you looked at and open no PR. Anything bigger than one small PR: describe it in the PR body as a follow-up question for the person instead of doing it.`;
+export const loopTaskText = (kind, name) => `IMPROVEMENT LOOP (${kind}) for ${name}. ${ASK[kind]}\nMake ONE small, proven change as a normal PR with a definition of done; it goes through review and QA like any task. If you find nothing worth a PR, say so with the evidence you looked at, open no PR and end your turn: the task then finishes as done. Anything bigger than one small PR: describe it in the PR body as a follow-up question for the person instead of doing it.`;
 
 // the state after a decision was carried out
 export function afterStart(state, kind, now) {

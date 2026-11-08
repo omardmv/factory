@@ -49,6 +49,10 @@ test('cap: a due loop waits while one loop PR is open, starts once it closes', (
   assert.equal(d.action, 'wait'); assert.equal(d.why, 'cap'); assert.deepEqual(d.due, ['security']);
   assert.equal(loopDecision({ name: 'shop', project, state: {}, openLoops: [], now: T0 }).action, 'start');
 });
+test('a loop PR merged or closed by hand frees the cap, whatever the task status says', () => {
+  const tasks = ['merged', 'closed', 'open'].map((state, i) => ({ id: String(i), project: 'shop', loop: 'docs', status: 'ready for you', pr: { state } }));
+  assert.deepEqual(openLoopTasks(tasks, 'shop').map((t) => t.id), ['2']);
+});
 test('a stopped or done loop task does not hold the cap', () => {
   const tasks = ['stopped', 'done', 'merged'].map((status, i) => ({ id: String(i), project: 'shop', loop: 'docs', status }));
   assert.equal(openLoopTasks(tasks, 'shop').length, 0);

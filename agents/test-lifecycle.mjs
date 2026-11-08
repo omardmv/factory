@@ -35,6 +35,14 @@ await test('plan mode on a change: waits for the person', async () => {
 await test('DECISION NEEDED on a change', async () => {
   assert.equal(await status(task(), { reply: 'DECISION NEEDED\noptions' }), 'decision needed');
 });
+await test('improvement loop that found nothing: no PR and a reply finishes as done; a question still parks; a crash still retries', async () => {
+  const none = deps({ findPr: async () => null });
+  const r = await run(task({ loop: 'docs' }), {}, none);
+  assert.equal(r.type, 'status'); assert.equal(r.status, 'done');
+  assert.equal((await run(task({ loop: 'docs' }), { reply: 'DECISION NEEDED\nx' }, none)).status, 'decision needed');
+  assert.equal((await run(task({ loop: 'docs' }), { reply: '' }, none)).type, 'retry');
+  assert.equal((await run(task(), {}, none)).type, 'nudge'); // a normal change task is still nudged
+});
 await test('no PR at all: nudged to carry on twice (keeping a review origin), then waiting for you; a PR resets the count', async () => {
   const none = deps({ findPr: async () => null });
   const r1 = await run(task(), {}, none);

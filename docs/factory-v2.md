@@ -88,7 +88,11 @@ staging. Production stays a manual merge by the founder, always.
   findings go in the PR body as a question for the person.
 - **Cap:** at most one open loop task (one open loop PR) per project. A due
   loop waits while one is open; at most one loop starts per tick, the most
-  overdue first.
+  overdue first. A loop task stops holding the cap when its PR is merged or
+  closed (the scheduler refreshes the PR state, so a hand merge counts), when
+  it ends `done` (a loop that finds nothing opens no PR and finishes cleanly),
+  or when the person stops it. A loop parked on a question holds the cap until
+  answered or stopped.
 - **Unset vs off:** a project with no `loops` key gets a Slack DM reminder
   (the agents service queues it at `/notices`; the Slack bot posts and
   acknowledges it), at most once a week. An explicit off is never reminded.
