@@ -76,17 +76,28 @@ staging. Production stays a manual merge by the founder, always.
 ## 4. Improvement loops
 
 - Kinds: performance, security, cleanup / tech debt, docs drift.
-- **Per project, switched on by the founder** ("run security weekly on
-  shop"). Stored per project in `agents/projects.json`
-  (`loops: { security: "weekly", ... }`).
-- A project with no loops configured: the factory asks once in its
-  channel which loops to run and how often, and asks again if it stays
-  unset. Later the factory may propose a cadence from what the loops find
+- **Per project, switched on by the founder.** Stored per project in
+  `agents/projects.json`: `loops: { security: "weekly", docs: "monthly" }`.
+  Cadences: `daily`, `weekly`, `biweekly`, `monthly`; `true` means weekly.
+  `loops: false` (or `{}`) is an explicit off.
+- **Scheduler** (`agents/loops.mjs`, wired in `server.mjs`'s poll): a kind is
+  due when its cadence has passed since it last started (never run = due).
+  A due loop starts a normal pre-approved task marked `loop: <kind>`: it
+  makes one small, proven change as a PR and goes through review, QA and the
+  evidence report like any task. Nothing merges outside review. Bigger
+  findings go in the PR body as a question for the person.
+- **Cap:** at most one open loop task (one open loop PR) per project. A due
+  loop waits while one is open; at most one loop starts per tick, the most
+  overdue first.
+- **Unset vs off:** a project with no `loops` key gets a Slack DM reminder
+  (the agents service queues it at `/notices`; the Slack bot posts and
+  acknowledges it), at most once a week. An explicit off is never reminded.
+  Later the factory may propose a cadence from what the loops find
   (founder approves).
-- Each run is a report task: findings with evidence. Small, proven fixes
-  become `ready-for-agent` and flow through the normal path; anything
-  bigger becomes `ready-for-human` with the question.
-- A daily spend cap per project for loop work; past it, loops wait.
+- **State** lives under the agents state dir in `loops.json`: per project
+  `lastStarted` per kind and `lastReminder`, plus unsent notices.
+- Not built yet: the daily spend cap per project for loop work; past it,
+  loops would wait.
 
 ## 5. Learning from its own tasks
 

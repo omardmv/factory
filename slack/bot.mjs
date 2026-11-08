@@ -451,6 +451,14 @@ export async function renameForPr(t) {
   state.ownChannel[t.id] = name; persist();
 }
 
+// project-level notices from the agents service (a project with no improvement loops set): one DM each, then acknowledged
+export async function pushNotices() {
+  const ns = await agents('/notices');
+  if (!ns.length || !state.dm) return;
+  for (const n of ns) await dm(n.text);
+  await agents('/notices/ack', { method: 'POST', body: JSON.stringify({ ids: ns.map((n) => n.id) }) });
+}
+
 export async function pushUpdates() {
   if (!state.owner) return;
   taskList = await agents('/tasks');
@@ -555,6 +563,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   await prime();
   state.lastDigest ??= new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10); persist();
   setInterval(() => pushUpdates().catch((e) => log('push.error', { error: e.message })), PUSH_EVERY_MS);
+  setInterval(() => pushNotices().catch((e) => log('notices.error', { error: e.message })), 60000);
   setInterval(morning, 60000);
   setInterval(() => loadProjects(), 5 * 60000);
   log('started', { paired: !!state.owner });
