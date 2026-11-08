@@ -14,6 +14,7 @@
 // needs-triage) and in batches. The queue and running jobs survive a restart.
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
+import { tailLines, lastJsonLine } from './tail.mjs';
 import { mergeDecision } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
@@ -98,9 +99,7 @@ const say = (id, from, text, extra = {}) => appendFileSync(`${dir(id)}/messages.
 const messages = (id) => existsSync(`${dir(id)}/messages.jsonl`) ? readFileSync(`${dir(id)}/messages.jsonl`, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
 // the last few things the agent did (tool calls), newest last
 function activity(id, n = 8) {
-  const f = `${dir(id)}/activity.log`;
-  if (!existsSync(f)) return [];
-  return readFileSync(f, 'utf8').trim().split('\n').slice(-n).map((l) => {
+  return tailLines(`${dir(id)}/activity.log`, n).map((l) => {
     const [at, tool, ...rest] = l.split(' ');
     let detail = rest.join(' ');
     try { const i = JSON.parse(detail); detail = i.description ?? i.command ?? i.file_path ?? i.pattern ?? i.url ?? detail; } catch {}
@@ -926,7 +925,7 @@ const handler = async (req, res) => {
     const m = url.pathname.match(/^\/tasks(?:\/([\w-]+))?(?:\/(messages|stop|pause))?$/);
     if (!m) return send(404, { error: 'not found' });
     const [, id, sub] = m;
-    if (!id && req.method === 'GET') return send(200, allTasks().map((t) => ({ ...t, running: running.has(t.id), lastActivity: running.has(t.id) ? activity(t.id, 1)[0] ?? null : null, lastAgent: messages(t.id).filter((m) => ['agent', 'coordinator'].includes(m.from)).at(-1)?.text ?? '' })));
+    if (!id && req.method === 'GET') return send(200, allTasks().map((t) => ({ ...t, running: running.has(t.id), lastActivity: running.has(t.id) ? activity(t.id, 1)[0] ?? null : null, lastAgent: lastJsonLine(`${dir(t.id)}/messages.jsonl`, (m) => ['agent', 'coordinator'].includes(m.from))?.text ?? '' })));
     if (!id && req.method === 'POST') {
       const b = await body(req); const text = String(b.text ?? '').trim();
       if (b.kind === 'report') return send(201, createTask(b.project, text, true, { kind: 'report', title: `bug: ${text.split('\n')[0] || 'see the attached image'}`.slice(0, 90), attachments: b.attachments }));
