@@ -22,7 +22,7 @@ import { checkUnasked, decisionMessage, waitingOnLine, decidedMessage, expandNum
 import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
 import { mergeDecisions, decisionsBrief, changeDecision, parsePlan, mergePlan, progress, announcements, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
-import { publishMedia, upsertComment, mediaFiles } from './media.mjs';
+import { publishMedia, upsertComment, mediaFiles, lastE2eRun } from './media.mjs';
 import { REPORT_MARK, buildReport, mappingFrom, reportSummary, openFindings } from './report.mjs';
 import { withAttachments, MAX_BODY_BYTES } from './attachments.mjs';
 import { createDrain, startupPlan } from './drain.mjs';
@@ -150,11 +150,22 @@ async function gh(token, url, method = 'GET', payload) {
   if (!r.ok) throw new Error(`github ${url}: ${r.status} ${(await r.text()).slice(0, 200)}`);
   return r.json();
 }
+// local branches in a task's checkout, other than its own and the base
+function workspaceBranches(task) {
+  const repo = `${dir(task.id)}/workspace/repo`;
+  if (!existsSync(`${repo}/.git`)) return [];
+  const r = spawnSync('git', ['-c', 'safe.directory=*', '-C', repo, 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], { encoding: 'utf8', timeout: 10000 });
+  if (r.status !== 0) return [];
+  return r.stdout.split('\n').map((b) => b.trim()).filter((b) => b && b !== `agent/${task.id}` && b !== task.base && /^[\w./-]+$/.test(b)).slice(0, 10);
+}
 async function findPr(task) {
   try {
     const owner = task.repo.split('/')[0];
-    const prs = await gh(await githubToken(task.repo), `/repos/${task.repo}/pulls?state=all&head=${owner}:agent/${task.id}`);
-    const p = prs[0];
+    const token = await githubToken(task.repo);
+    let p = (await gh(token, `/repos/${task.repo}/pulls?state=all&head=${owner}:agent/${task.id}`))[0];
+    // an agent that pushed its PR from another branch (it happened: perf/lazy-screens): look at every
+    // branch in its workspace, so the PR is still reviewed and reaches the founder instead of being orphaned
+    if (!p) for (const b of workspaceBranches(task)) { p = (await gh(token, `/repos/${task.repo}/pulls?state=all&head=${owner}:${encodeURIComponent(b)}`))[0]; if (p) { log('pr.other_branch', { task: task.id, branch: b, pr: p.number }); break; } }
     return p ? { number: p.number, url: p.html_url, state: p.merged_at ? 'merged' : p.state, head: p.head.sha } : null;
   } catch (e) { log('pr.lookup_failed', { task: task.id, error: e.message }); return null; }
 }
@@ -612,7 +623,16 @@ async function autoMerge(id) {
   if (!p?.autoMerge || t.kind !== 'change' || t.verdict !== 'PASS' || !t.pr || t.status !== 'ready for you') return;
   if (t.qaVerdict === 'FAIL' && t.qaTestedSha === t.reviewedSha) return;
   // the founder checks the result and approves each feature before it merges (project "approval": true)
-  const gate = approvalGate(t, p);
+  const lastRun = lastE2eRun(`${dir(id)}/workspace`);
+  const gate = approvalGate(t, p, lastRun);
+  if (gate.action === 'fix-e2e') {
+    // the founder's time is for checking a result, not for finding a red test run: back to the agent first
+    update(id, (x) => { x.e2eFixSha = x.reviewedSha; x.status = 'working'; delete x.waitingOn; });
+    say(id, 'factory', `[factory] Not asking the founder yet: the agent's last e2e run failed (${lastRun.count} test${lastRun.count === 1 ? '' : 's'}: ${lastRun.failed.join('; ') || 'see /workspace/videos'}). Sent back to fix it.`);
+    log('approval.e2e_red', { task: id, failed: lastRun.failed });
+    enqueue(id, `[factory] Before the founder is asked to approve, your last e2e run (in /workspace/videos, ${lastRun.at}) shows a FAILURE: ${lastRun.failed.join('; ') || `${lastRun.count} failed test(s)`}. Read each failed test's error-context.md there. Re-run the whole e2e suite for your change on the current head with videos into /workspace/videos, fix the cause in the code (not by loosening a test; if a test is wrong, fix it and say why in the decision log), push, and reply with the real pass/fail counts.`, 'bypassPermissions', 'e2e');
+    return;
+  }
   if (gate.action === 'wait') return;
   if (gate.action === 'preview') {
     // build the preview of exactly the reviewed head first, then ask (a failed build still asks, with the reason)
@@ -623,7 +643,8 @@ async function autoMerge(id) {
     update(id, (x) => { x.approvalAskedSha = x.reviewedSha; x.waitingOn = 'your approval: check the result (recordings, preview) and press Approve & merge, or reply with what to change'; });
     const qa = t.qaVerdict === 'PASS' && t.qaTestedSha === t.reviewedSha ? ', QA' : '';
     const cur = load(id);
-    const links = [cur.previewUrl ? `Try it yourself (opens signed in as you): ${cur.previewUrl}` : cur.previewError ? `The preview could not be built: ${cur.previewError}` : '', t.pr?.url ? `PR: ${t.pr.url} (its "Evidence report" comment lists what was checked, with proof)` : '', p.previews ? '' : 'This project has no previews: the recordings and screenshots above show the result.'].filter(Boolean).join('\n');
+    const red = lastRun?.status === 'failed' ? `⚠️ The agent's last e2e run still fails (${lastRun.failed.join('; ') || `${lastRun.count} test(s)`}): check that before approving.` : '';
+    const links = [red, cur.previewUrl ? `Try it yourself (opens signed in as you): ${cur.previewUrl}` : cur.previewError ? `The preview could not be built: ${cur.previewError}` : '', t.pr?.url ? `PR: ${t.pr.url} (its "Evidence report" comment lists what was checked, with proof)` : '', p.previews ? '' : 'This project has no previews: the recordings and screenshots above show the result.'].filter(Boolean).join('\n');
     say(id, 'factory', `[factory] ✅ Ready for your check: PR #${t.pr.number} passed review${qa} and the checks at ${t.reviewedSha.slice(0, 7)}.\n${links}\nPress Approve & merge to merge it into ${p.autoMerge}, or reply here with what to change.`, { approve: { sha: t.reviewedSha, pr: t.pr.number }, ping: true });
     log('approval.asked', { task: id, pr: t.pr.number, sha: t.reviewedSha });
     publishReport(id, 'ready').catch((e) => log('report.failed', { task: id, error: e.message })); // refreshed: the links the founder will use now
@@ -683,6 +704,8 @@ async function autoMerge(id) {
 const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
 
 // ---------- the final evidence report, on the PR (agents/report.mjs) ----------
+// the agent's own last e2e run, as one line of the report (never hidden: a red run once reached the founder unseen)
+const e2eLine = (r) => !r ? null : r.status === 'passed' ? `✅ The agent's last e2e run in its workspace passed (${r.at.slice(11, 16)} UTC).` : `❌ The agent's last e2e run in its workspace FAILED (${r.count} test${r.count === 1 ? '' : 's'}${r.failed.length ? `: ${r.failed.join('; ')}` : ''}; ${r.at.slice(11, 16)} UTC).`;
 // One comment, edited in place: when the PR is ready (review PASS) or the round limit stops the loop.
 async function publishReport(id, outcome) {
   const t = load(id);
@@ -694,7 +717,7 @@ async function publishReport(id, outcome) {
   const last = (from) => msgs.findLast((x) => x.from === from)?.text;
   const checks = t.lastChecks ?? (t.greenSha ? { state: 'green', sha: t.greenSha } : null);
   const body = buildReport({ taskId: t.id, repo: t.repo, pr: t.pr.number, head: pr.head.sha, outcome, title: t.title, mapping: mappingFrom(msgs), items: m.items, checks,
-    taskText: msgs.find((x) => x.from === 'you')?.text, findings: outcome === 'stopped' ? openFindings(load(id), pr.head.sha, last) : {}, dashboard: DASHBOARD });
+    taskText: msgs.find((x) => x.from === 'you')?.text, findings: outcome === 'stopped' ? openFindings(load(id), pr.head.sha, last) : {}, dashboard: DASHBOARD, tests: e2eLine(lastE2eRun(`${dir(id)}/workspace`)) });
   const c = await upsertComment({ gh, token, repo: t.repo, pr: t.pr.number, mark: REPORT_MARK, body });
   update(id, (x) => { x.mediaPublished = m.done; x.reportComment = c.html_url; });
   say(id, 'factory', reportSummary({ outcome, pr: t.pr.number, prUrl: pr.html_url, reportUrl: c.html_url, mapping: mappingFrom(msgs), items: m.items }));
@@ -918,7 +941,7 @@ function createTask(project, text, auto, { attachments, ...extra } = {}) {
   else enqueue(id, `TASK ${id} in ${p.repo} (base ${p.base}).\n\n${text}\n\n${prTitleLine(t)}\n\nThis is the BRIEF. Read the code you need (and the repository's own rules: AGENTS.md, CLAUDE.md, .claude/skills, .agents/skills, if present). Reply with ONE message: your playbook, ${autoGo(t) ? 'your assumptions' : 'the questions you genuinely need answered (or "no questions")'}, your plan in a few lines, and the definition of done as checks anyone can run. Do not change any file.${autoGo(t) ? `\n\n${AUTO_GO_RULE}` : ''}`, 'plan', 'start');
   return t;
 }
-const runPrompt = (t, task, reply) => `${reply}\n\nNow RUN task ${t.id}: ${task}\n${prTitleLine(t)}\nYou are on branch agent/${t.id} in /workspace/repo (base ${t.base}). Work until your definition of done is met. Commit, push the branch, and open a PR into ${t.base} with \`gh pr create\` (title: the task in one line; body: Done / Decisions / Attention). ${hasChecks(t) ? 'Every push builds a preview and runs e2e; the results arrive here as [factory] messages. ' : ''}When it is done, an independent reviewer reads the PR; its findings arrive as [review] messages. Do not ask questions.`;
+const runPrompt = (t, task, reply) => `${reply}\n\nNow RUN task ${t.id}: ${task}\n${prTitleLine(t)}\nWork only on the branch agent/${t.id} and open your one PR from it: never create or push another branch.\nYou are on branch agent/${t.id} in /workspace/repo (base ${t.base}). Work until your definition of done is met. Commit, push the branch, and open a PR into ${t.base} with \`gh pr create\` (title: the task in one line; body: Done / Decisions / Attention). ${hasChecks(t) ? 'Every push builds a preview and runs e2e; the results arrive here as [factory] messages. ' : ''}When it is done, an independent reviewer reads the PR; its findings arrive as [review] messages. Do not ask questions.`;
 // a research task: the researcher writes docs/research/<slug>.md and opens a docs-only PR for discussion
 const researchSlug = (text) => /Write (docs\/research\/[\w.-]+\.md)/.exec(text)?.[1] ?? `docs/research/${researchSlugOf(text)}.md`;
 const researchSlugOf = (text) => (text.match(/Part of epic \S+, task "([\w-]+)"/)?.[1] ?? 'topic').replace(/-research$/, '');
