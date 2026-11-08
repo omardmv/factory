@@ -2,7 +2,7 @@
 // (not the agent) uploads the task's screenshots and videos (workspace/screens,
 // workspace/videos) to the repo's `factory-media` branch, never merged
 // anywhere. It posts no comment itself: the report does, once, at the end.
-import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, lstatSync, statSync } from 'node:fs';
 
 export const MEDIA_BRANCH = 'factory-media';
 const MEDIA_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'webm', 'mp4']);
@@ -11,7 +11,9 @@ export function mediaFiles(workspace) {
   const out = [];
   for (const sub of ['screens', 'videos']) {
     const root = `${workspace}/${sub}`;
-    if (!existsSync(root)) continue;
+    // the agent owns this folder: a symlink here would list (and publish) files outside the workspace
+    let top; try { top = lstatSync(root); } catch { continue; }
+    if (!top.isDirectory()) continue;
     const walk = (d, rel, depth) => { for (const f of readdirSync(d, { withFileTypes: true })) {
       if (f.name.startsWith('.') || f.isSymbolicLink()) continue;
       const r = rel ? `${rel}/${f.name}` : f.name;
