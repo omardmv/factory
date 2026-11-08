@@ -342,14 +342,18 @@ self_update() {
   if ! cmp -s "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service; then
     install -m 644 "$FACTORY_DIR/agents/factory-agents.service" /etc/systemd/system/factory-agents.service && systemctl daemon-reload && log "factory-agents unit installed"
   fi
-  # per-project agent images (brain/projects/<name>/agent.Dockerfile -> factory-agent-<name>:latest):
-  # built when the Dockerfile changed, or the image is missing; a failed build is logged and keeps the old image
-  local df pname
-  for df in $(ls "$FACTORY_DIR"/brain/projects/*/agent.Dockerfile 2>/dev/null); do
+  # per-project agent images (<PROJECTS_DIR>/<name>/agent.Dockerfile -> factory-agent-<name>:latest, on the box, not in the repo):
+  # built when the folder's content hash differs from the last build (stored beside it) or the image is missing;
+  # a failed build is logged and keeps the old image
+  local pdir="${PROJECTS_DIR:-/opt/factory/projects}" df pname h
+  for df in "$pdir"/*/agent.Dockerfile; do
+    [ -f "$df" ] || continue
     pname="$(basename "$(dirname "$df")")"
-    if printf '%s\n' "$changed" | grep -q "^brain/projects/$pname/" || ! docker image inspect "factory-agent-$pname:latest" >/dev/null 2>&1; then
+    h="$(sha256sum "$df" | cut -d' ' -f1)"
+    if [ "$(cat "$pdir/$pname/.image-hash" 2>/dev/null)" != "$h" ] || ! docker image inspect "factory-agent-$pname:latest" >/dev/null 2>&1; then
       log "agent image factory-agent-$pname: building"
-      docker build -q -f "$df" -t "factory-agent-$pname:latest" "$(dirname "$df")" >/dev/null && log "agent image factory-agent-$pname: built" || log "agent image factory-agent-$pname: BUILD FAILED (old image kept)"
+      if docker build -q -f "$df" -t "factory-agent-$pname:latest" "$pdir/$pname" >/dev/null; then echo "$h" > "$pdir/$pname/.image-hash"; log "agent image factory-agent-$pname: built"
+      else log "agent image factory-agent-$pname: BUILD FAILED (old image kept)"; fi
     fi
   done
   # restart = drain: the server finishes the running turns (up to 30 min) before it exits, so do not wait here

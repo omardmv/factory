@@ -73,6 +73,7 @@ const REVIEW_RULES = () => `${brain('prompts/review.md')}\n${BRAIN_NOTE}`;
 const RESEARCH_RULES = () => `${brain('prompts/research.md')}\n${BRAIN_NOTE}`;
 const QA_RULES = () => `${brain('prompts/qa.md')}\n${BRAIN_NOTE}`;
 const BRAIN_PLUGINS = () => { try { return JSON.parse(brain('claude/plugins.json')).plugins.filter((x) => /^[\w-]+$/.test(x)).join(','); } catch { return ''; } };
+const PROJECTS_DIR = process.env.PROJECTS_DIR ?? '/opt/factory/projects'; // per-project image + knowledge folders live on the box, not in the repo
 const BRAIN_MOUNTS = () => [`${BRAIN}/knowledge:/factory/brain/knowledge:ro`, `${BRAIN}/skills:/home/agent/.claude/skills:ro`];
 
 const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), event, ...f }));
@@ -233,7 +234,7 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
   for (const d of [workspace, claudeDir]) { mkdirSync(`${dir(id)}/${d}`, { recursive: true }); chownSync(`${dir(id)}/${d}`, 1001, 1001); }
   const t = load(id);
   const name = `fa-${id}-${Date.now().toString(36)}`;
-  const launch = launchArgs({ project: t.project, projects: PROJECTS, defaultImage: IMAGE, brainDir: BRAIN, exists: existsSync });
+  const launch = launchArgs({ project: t.project, projects: PROJECTS, defaultImage: IMAGE, projectsDir: PROJECTS_DIR, exists: existsSync });
   const args = ['run', '--rm', '--name', name, '--network', NETWORK,
     '--cpus', '4', '--memory', '8g', '--pids-limit', '2048', '--shm-size', '1g',
     '--security-opt', 'no-new-privileges:true', '--cap-drop', 'NET_RAW', '--cap-drop', 'MKNOD', '--cap-drop', 'SYS_CHROOT', '--cap-drop', 'AUDIT_WRITE', '--cap-drop', 'SETFCAP',
