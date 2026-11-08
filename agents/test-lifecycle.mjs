@@ -55,8 +55,13 @@ await test('no PR at all: nudged to carry on twice (keeping a review origin), th
   assert.equal((await run(task(), { mode: 'plan' }, none)).status, 'waiting for you', 'a brief is not nudged');
   assert.equal((await run(task(), { reply: 'DECISION NEEDED\nx' }, none)).status, 'decision needed', 'a question is not nudged');
 });
-await test('a PR that is merged or closed: waiting for you, never nudged', async () => {
-  assert.equal(await status(task(), {}, deps({ findPr: async () => ({ number: 7, state: 'merged', head: 'x' }) })), 'waiting for you');
+await test('a turn that ends on a merged PR: the task is merged, not parked', async () => {
+  const r = await run(task(), {}, deps({ findPr: async () => ({ number: 7, state: 'merged', head: 'x' }) }));
+  assert.equal(r.status, 'merged'); assert.equal(r.waitingOn, undefined);
+});
+await test('a PR that is closed: waiting for you, never nudged', async () => {
+  const r = await run(task(), {}, deps({ findPr: async () => ({ number: 7, state: 'closed', head: 'x' }) }));
+  assert.equal(r.status, 'waiting for you'); assert.match(r.waitingOn, /PR #7 is closed/);
 });
 await test('the PR found is returned; the old PR is kept when the lookup fails', async () => {
   assert.equal((await run(task())).pr.number, 7);
@@ -227,7 +232,7 @@ await test('checks report: ignored when not running a change', () => {
 
 // ---- unasked questions (agents/unasked.mjs): a plain-text ask counts as DECISION NEEDED ----
 import { checkUnasked } from './unasked.mjs';
-import { SAYRA, REPORT } from './test-unasked.mjs';
+import { SHOP_REPLY, REPORT } from './test-unasked.mjs';
 const reviewed = (o = {}) => task({ reviewedSha: 'bbb2222', verdict: 'CHANGES', ...o });
 await test('plain-text question: decision needed, never the panel', async () => {
   assert.equal(await status(task(), { unasked: true }), 'decision needed');
@@ -244,7 +249,7 @@ await test('answer to a caught question in a review round (origin kept), no comm
 });
 await test('stubbed turn: a reply ending in a plain-text question lands on decision needed, no panel run', async () => {
   const turn = async (reply, model) => { const a = await checkUnasked(reply, { ask: async () => model }); return status(task(), { reply, unasked: a.asks }, deps({ hasChecks: () => false })); };
-  assert.equal(await turn(SAYRA, '{"asks":true,"question":"purple or teal?","options":["purple","teal"]}'), 'decision needed');
+  assert.equal(await turn(SHOP_REPLY, '{"asks":true,"question":"purple or teal?","options":["purple","teal"]}'), 'decision needed');
   assert.equal(await turn(REPORT, '{"asks":false}'), 'reviewing');
 });
 
