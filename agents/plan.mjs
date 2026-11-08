@@ -19,7 +19,8 @@ End your reply with the whole plan as a fenced block exactly like:
 \`\`\`plan
 {"tasks": [{"key": "flag", "type": "feature", "title": "3 to 6 words naming the main thing", "task": "what to do, where, how done is checked", "depends_on": [], "research": false, "files": ["agents/plan.mjs"]}, {"key": "next-thing", "type": "refactor", "title": "...", "task": "...", "depends_on": ["flag"], "files": ["agents/plan.mjs", "agents/server.mjs"]}]}
 \`\`\`
-The type is one of: feature, fix, hotfix, refactor, perf, design, test, docs, ci, chore, research.`;
+The type is one of: feature, fix, hotfix, refactor, perf, design, test, docs, ci, chore, research.
+Put every product or preference call the epic needs (what is in scope, how something behaves for users, a visual or naming choice) at the top of the plan block, not inside tasks, as "decisions": [{"key": "chat-read-state", "question": "Does opening a chat mark it read?", "options": ["Opening marks it read", "Only an explicit action"], "default": "Opening marks it read"}], before "tasks". Each has 2 to 5 options and your recommended default. Work starts on the defaults at once; the founder can change any of them later with one press, and every task is given the decisions. A fact that running or reading something answers is not a decision: find it out. Tasks then never need to ask the founder.`;
 
 // Research step. A task is researched first when the coordinator marks it
 // ("research": true) or, with no mark, when its text matches the rule: it touches a
@@ -92,8 +93,56 @@ export function parsePlan(text) {
   if (w.error) return w;
   const clash = fileOverlap(out);
   if (clash) return { error: clash };
-  return { tasks: out.map((t) => ({ ...t, wave: w.wave[t.key] })) };
+  const decisions = parseDecisions(j?.decisions);
+  if (decisions.error) return decisions;
+  return { tasks: out.map((t) => ({ ...t, wave: w.wave[t.key] })), decisions };
 }
+
+// Questions first, without the wait (design 5g): the product and preference calls the epic
+// needs, each with options and the coordinator's default. Work starts on the defaults; the
+// founder can change any one with a button; every task gets the epic's decisions.
+export const MAX_DECISIONS = 12;
+export function parseDecisions(list) {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list)) return { error: '"decisions" must be a list' };
+  if (list.length > MAX_DECISIONS) return { error: `the plan has ${list.length} decisions; at most ${MAX_DECISIONS}` };
+  const out = [], seen = new Set();
+  for (const [i, d] of list.entries()) {
+    const key = String(d?.key ?? '').trim();
+    if (!KEY.test(key)) return { error: `decision ${i + 1}: key "${key}" must be lowercase letters, digits and dashes` };
+    if (seen.has(key)) return { error: `decision key "${key}" is used twice` };
+    seen.add(key);
+    const question = String(d?.question ?? '').trim().slice(0, 300);
+    const options = [...new Set((Array.isArray(d?.options) ? d.options : []).map((o) => String(o).trim().slice(0, 120)).filter(Boolean))].slice(0, 5);
+    if (!question || options.length < 2) return { error: `decision "${key}" needs a question and at least 2 options` };
+    const dflt = String(d?.default ?? '').trim();
+    out.push({ key, question, options, default: options.includes(dflt) ? dflt : options[0] });
+  }
+  return out;
+}
+// a revised plan keeps every choice already made; new decisions start on their default
+export function mergeDecisions(current = [], next = []) {
+  const by = new Map(current.map((d) => [d.key, d]));
+  const merged = next.map((d) => (by.has(d.key) ? { ...d, chosen: by.get(d.key).chosen, by: by.get(d.key).by } : { ...d, chosen: d.default, by: 'default' }));
+  for (const d of current) if (!next.some((x) => x.key === d.key)) merged.push(d); // never drop a made choice
+  return merged;
+}
+// the founder changes an epic decision -> the new list, what it was, and who must hear of it:
+// tasks still going are told; tasks already merged with the old choice go to the coordinator
+// children: [{ key, taskId, state: 'merged' | 'active' | 'ended' | 'pending' }]
+export function changeDecision(decisions = [], key, option, children = []) {
+  const d = decisions.find((x) => x.key === key);
+  if (!d) return { error: `no decision "${key}"` };
+  if (!d.options.includes(option)) return { error: `"${option}" is not an option of "${key}"` };
+  if (d.chosen === option) return { unchanged: true, decisions };
+  return {
+    decisions: decisions.map((x) => (x.key === key ? { ...x, chosen: option, by: 'founder' } : x)),
+    question: d.question, was: d.chosen,
+    tell: children.filter((c) => c.state === 'active').map((c) => c.taskId),
+    merged: children.filter((c) => c.state === 'merged').map((c) => c.key),
+  };
+}
+export const decisionsBrief = (ds = []) => ds.length ? `EPIC DECISIONS (settled for the whole epic: apply them, never ask about them again):\n${ds.map((d) => `- ${d.question} -> ${d.chosen}${d.by === 'founder' ? ' (the founder chose this)' : ' (default; the founder may still change it)'}`).join('\n')}\n\n` : '';
 
 // wave of each task = 1 + the latest wave among its dependencies; a cycle is an error
 export function waves(tasks) {

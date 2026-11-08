@@ -12,7 +12,7 @@ const body = async (req) => { const b = (await raw(req)).toString(); if (!b) ret
 // ---- fake Slack
 const calls = []; const channels = { C_GENERAL: { id: 'C_GENERAL', name: 'general' } }; let n = 0;
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 7)]);
-const fileAuth = [], uploads = {}; let noFilesWrite = false;
+const fileAuth = [], uploads = {}, epicDecisionCalls = []; let noFilesWrite = false;
 const slackSrv = await listen(async (req, res) => {
   // Slack's private file links: the image with the bot token; its sign-in page without files:read
   if (req.url.startsWith('/upload/')) { uploads[req.url.slice(8)] = await raw(req); res.writeHead(200); return res.end('OK'); }
@@ -50,6 +50,8 @@ const agentsSrv = await listen(async (req, res) => {
   if (u.pathname === '/batches' && req.method === 'POST') return send({ batch: 'b1', tasks: p.items.map((x) => mk(p.project, x.text, { phase: 'run', ...(x.type ? { type: x.type } : {}), ...(x.title ? { title: x.title } : {}) })) }, 201);
   if (u.pathname === '/tasks' && req.method === 'GET') return send(Object.values(tasks).map(({ messages, ...t }) => t));
   if (u.pathname === '/tasks' && req.method === 'POST') return send(mk(p.project, p.text, { ...(p.kind ? { kind: p.kind } : {}), ...(p.type ? { type: p.type } : {}), ...(p.title ? { title: p.title } : {}) }), 201);
+  const dm2 = u.pathname.match(/^\/tasks\/([\w-]+)\/decisions$/);
+  if (dm2 && req.method === 'POST') { epicDecisionCalls.push({ id: dm2[1], ...p }); return send(tasks[dm2[1]]); }
   const m = u.pathname.match(/^\/tasks\/([\w-]+)(?:\/(messages|stop|pause))?$/);
   if (m && !m[2]) return send(tasks[m[1]]);
   if (m?.[2] === 'messages') { tasks[m[1]].messages.push({ from: 'you', text: p.text }); if (/^go$/i.test(p.text)) tasks[m[1]].phase = 'run'; return send(tasks[m[1]]); }
@@ -391,6 +393,18 @@ await step('"Decided for you" comes with a button per other option; pressing one
   const before = Object.keys(tasks).length; await press(1, '90.1');
   const f = Object.values(tasks).at(-1);
   assert.equal(Object.keys(tasks).length, before + 1); assert.match(f.messages[0].text, /Follow-up to task .*PR #9, merged.*use "16" instead of "24"/);
+});
+await step('an epic decision comes with buttons; pressing one changes it for the whole epic', async () => {
+  const e = mk('shop', 'epic: chats', { kind: 'program', phase: 'run', status: 'running · 0/3 merged', plan: [], children: [] });
+  e.epicDecisions = [{ key: 'read-state', question: 'Does opening a chat mark it read?', options: ['Opening marks it read', 'Only an explicit action'], default: 'Opening marks it read', chosen: 'Opening marks it read', by: 'default' }];
+  e.messages.push({ from: 'factory', text: '[factory] 📌 Epic decision (default taken, work goes on): Does opening a chat mark it read?\nTaken: Opening marks it read', epicDecided: { key: 'read-state', question: e.epicDecisions[0].question, options: e.epicDecisions[0].options, chosen: 'Opening marks it read' } });
+  const i = calls.length; await bot.pushUpdates();
+  const m = since(i).find((c) => c.method === 'chat.postMessage' && /Epic decision/.test(c.p.text));
+  const btn = m.p.blocks.find((b) => b.type === 'actions').elements;
+  assert.deepEqual(btn.map((b) => [b.action_id, b.text.text]), [['edecide_0', 'Use: Only an explicit action']]);
+  await bot.onAction({ user: { id: 'U_ME' }, channel: { id: m.p.channel }, message: { ts: '91.0', text: m.p.text, blocks: m.p.blocks }, actions: [{ action_id: 'edecide_0', value: btn[0].value }] });
+  assert.deepEqual(epicDecisionCalls.at(-1), { id: e.id, key: 'read-state', option: 'Only an explicit action' });
+  assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Changed to: Only an explicit action \(for every task of the epic\)/);
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);
