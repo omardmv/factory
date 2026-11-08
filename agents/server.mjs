@@ -305,7 +305,7 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   if (r.sessionId && !done.sessionId) done.sessionId = r.sessionId;
   // cut off by a stop: the job stays on the task, so the next start picks it up again ("you were interrupted")
   if (r.cutOff) { save(done); log('run.cutoff', { task: id, code: r.code, signal: r.signal }); return 'keep-job'; }
-  const out = await afterAgentRun({ task: done, from, origin, mode, reply: r.last, unasked: asked.asks, maxCrashRetries: MAX_CRASH_RETRIES, maxNoPrNudges: MAX_NO_PR_NUDGES }, { findPr, hasChecks, hasQa });
+  const out = await afterAgentRun({ task: done, from, origin, mode, reply: r.last, unasked: asked.asks, maxCrashRetries: MAX_CRASH_RETRIES, maxNoPrNudges: MAX_NO_PR_NUDGES, autoGo: autoGo(done) }, { findPr, hasChecks, hasQa });
   if (out.type === 'stopped') { save(done); return pump(); }
   // pause: one more turn to leave a checkpoint, then rest
   if (out.type === 'checkpoint') {
@@ -617,6 +617,23 @@ function itemState(i) {
   if (STUCK_STATUSES.includes(k.status) || (k.status === 'ready for you' && !k.mergeWanted)) return 'stuck';
   return 'running';
 }
+// the epic as the factory sees it now, for the coordinator: every task's state, what a stuck one waits on, its last words
+function epicStatus(t) {
+  const g = progress(t.plan, itemState);
+  const blockedOn = Object.fromEntries(g.blocked.map((b) => [b.item.key, b.on]));
+  return [`${g.merged}/${g.total} merged${g.stalled ? '; nothing can move' : ''}.`, ...[...t.plan].sort((a, b) => a.wave - b.wave).map((i) => {
+    const k = i.taskId && existsSync(`${dir(i.taskId)}/task.json`) ? load(i.taskId) : null;
+    const st = g.state[i.key];
+    const parts = [`- ${i.key} (wave ${i.wave}): ${st}`];
+    if (k) parts.push(`task ${k.id} "${k.status}"`);
+    if (k?.pr) parts.push(`PR #${k.pr.number} ${k.pr.state ?? ''}`.trim());
+    if (k?.waitingOn) parts.push(`waiting on: ${k.waitingOn}`);
+    if (st === 'pending') parts.push(blockedOn[i.key] ? `blocked by ${blockedOn[i.key].join(', ')}` : `waits for ${i.deps.join(', ') || 'nothing'}`);
+    let line = parts.join(' · ');
+    if (k && ['stuck', 'failed'].includes(st)) { const last = messages(k.id).filter((m) => m.from !== 'you').at(-1); if (last) line += `\n    last from ${last.from}: ${last.text.replace(/\s+/g, ' ').slice(0, 500)}`; }
+    return line;
+  })].join('\n');
+}
 function startReady(t) {
   const g = progress(t.plan, itemState);
   if (!g.ready.length) return g;
@@ -789,7 +806,7 @@ function post(id, from, text) {
       const last = messages(id).filter((m) => m.from === 'coordinator').at(-1)?.text;
       if (/```plan/.test(last ?? '')) { approvePlan(t, last); return load(id); }
     }
-    enqueue(id, `The person replied: ${text}\n\n${t.phase === 'brief' ? `Revise the plan accordingly. ${PLAN_RULES}` : `Act on it. To change the plan, send the whole plan again: keep the keys of tasks that have started (they keep going whatever you write); tasks not started yet are replaced. ${PLAN_RULES} If the person only asked something, just answer, no plan block.`}`, 'plan', t.phase === 'brief' ? 'person' : 'next-phase');
+    enqueue(id, `The person replied: ${text}\n\n${t.phase === 'run' && t.plan?.length ? `LIVE STATUS OF THE EPIC (from the factory, right now; this is the truth, use it, do not guess):\n${epicStatus(t)}\n\n` : ''}${t.phase === 'brief' ? `Revise the plan accordingly. ${PLAN_RULES}` : `Act on it. To change the plan, send the whole plan again: keep the keys of tasks that have started (they keep going whatever you write); tasks not started yet are replaced. ${PLAN_RULES} If the person only asked something, just answer, no plan block.`}`, 'plan', t.phase === 'brief' ? 'person' : 'next-phase');
     return t;
   }
   if (t.phase === 'brief') { t.phase = 'run'; save(t); enqueue(id, runPrompt(t, messages(id)[0].text, `The person answered your brief: ${text}`), 'bypassPermissions', 'person'); }

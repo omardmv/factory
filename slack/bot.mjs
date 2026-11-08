@@ -175,7 +175,8 @@ export function render(t, m) {
   }
   // the watchdog's escalation: names the person, says exactly what is stuck and why, and what is waited on
   if (m.from === 'factory' && m.ping) return { text: `🚨 ${state.owner ? `<@${state.owner}> ` : ''}*Stuck*\n${mrkdwn(clip(m.text.replace(/^\[factory\]\s*(STUCK:\s*)?/, ''), 1200).text)}\n${links}` };
-  if (m.from === 'factory') return { text: `🏭 ${mrkdwn(clip(m.text.replace(/^\[factory\]\s*/, '').split('\n')[0], 400).text)}` };
+  // the whole message: a stall names the stuck tasks, the doctor's diagnosis spans lines
+  if (m.from === 'factory') { const b = clip(m.text.replace(/^\[factory\]\s*/, ''), 2500); return { text: `🏭 ${mrkdwn(b.text)}${b.cut ? `\n… <${taskLink(t.id)}|the rest>` : ''}` }; }
   const decision = /^\s*DECISION NEEDED\b/m.test(m.text);
   const body = clip(m.text, 3500);
   const triage = t.kind === 'report' && /^TRIAGE:\s*(\S+)\s+(\S+)\s*(\S*)/m.exec(m.text);
