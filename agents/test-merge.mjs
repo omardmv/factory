@@ -78,24 +78,31 @@ for (const [name, p, rounds, want] of cases) {
   assert.match(deployState(d, { version: null, now: t0 + 50 * min }).say, /did not say which version it runs/);
   console.log('ok deploy check: live when staging runs a version that includes the merge; one late notice after 45 min; then live, late');
 }
+{
+  const plain = [{ parents: ['a'] }, { parents: ['b'] }], joined = [{ parents: ['a'] }, { parents: ['b', 'c'] }];
+  assert.equal(mergeMethodFor('squash', plain), 'squash', 'ordinary PR keeps the project method');
+  assert.equal(mergeMethodFor('rebase', plain), 'rebase');
+  assert.equal(mergeMethodFor('squash', joined), 'merge', 'a PR with a merge commit lands as a merge commit');
+  assert.equal(mergeMethodFor('squash', []), 'squash', 'no commit list: project method');
+  assert.equal(mergeMethodFor(undefined, plain), 'merge', 'default is merge');
+  console.log('ok merge method: merge commits in the head force a merge commit, otherwise the project method');
+}
 console.log(`all ${cases.length} passed`);
 
 // sync PRs (another branch merged in, conflict resolution) land with a merge commit, never a squash
 {
   const sp = (o = {}) => ({ title: 'feat(x): a thing', base: { ref: 'staging' }, head: { ref: 'agent/1' }, ...o });
   const mc = (message, n = 2) => ({ parents: new Array(n).fill('p'), commit: { message } });
-  assert.equal(mergeMethodFor(sp(), [mc('add a', 1)], 'squash'), 'squash', 'an ordinary PR keeps the project method');
-  assert.equal(mergeMethodFor(sp(), [], undefined), 'merge', 'default is merge');
-  assert.equal(mergeMethodFor(sp(), [mc("Merge branch 'main' into staging")], 'squash'), 'merge', 'main merged in: merge commit');
-  assert.equal(mergeMethodFor(sp(), [mc('Sync main into staging (ours)')], 'squash'), 'merge', 'unrecognised merge commit: merge');
-  assert.equal(mergeMethodFor(sp(), [mc("Merge remote-tracking branch 'origin/staging' into agent/1")], 'squash'), 'squash', 'base brought into a feature branch: normal PR');
-  assert.equal(mergeMethodFor(sp({ title: 'chore: sync main into staging' }), [], 'squash'), 'merge', 'title says sync');
-  assert.equal(mergeMethodFor(sp({ title: 'fix: resolve conflicts on PR #78' }), [], 'squash'), 'merge', 'title says resolve conflicts');
+  assert.equal(mergeMethodFor('squash', [mc('add a', 1)], sp()), 'squash', 'an ordinary PR keeps the project method');
+  assert.equal(mergeMethodFor(undefined, [], sp()), 'merge', 'default is merge');
+  assert.equal(mergeMethodFor('squash', [mc("Merge branch 'main' into staging")], sp()), 'merge', 'main merged in: merge commit');
+  assert.equal(mergeMethodFor('squash', [mc('Sync main into staging (ours)')], sp()), 'merge', 'unrecognised merge commit: merge');
+  assert.equal(mergeMethodFor('squash', [], sp({ title: 'chore: sync main into staging' })), 'merge', 'title says sync');
+  assert.equal(mergeMethodFor('squash', [], sp({ title: 'fix: resolve conflicts on PR #78' })), 'merge', 'title says resolve conflicts');
   assert.equal(isSyncPr(sp({ head: { ref: 'sync/main-into-staging' } })), true, 'branch name says sync');
   assert.equal(isSyncPr(sp({ title: 'feat: async queue' })), false, 'async is not sync');
-  assert.equal(mergeMethodFor(sp({ title: 'fix conflicts on PR #78' }), [], 'squash'), 'merge', 'task wording: fix conflicts');
-  assert.equal(mergeMethodFor(sp({ body: 'This is a sync of main into staging' }), [], 'squash'), 'merge', 'body says sync');
-  assert.equal(mergeMethodFor(sp(), [mc('Merge pull request #12 from a/b')], 'squash'), 'squash', 'a merged PR is not a sync');
+  assert.equal(mergeMethodFor('squash', [], sp({ title: 'fix conflicts on PR #78' })), 'merge', 'task wording: fix conflicts');
+  assert.equal(mergeMethodFor('squash', [], sp({ body: 'This is a sync of main into staging' })), 'merge', 'body says sync');
   const n = (number, o) => ({ number, state: 'open', mergeable: true, mergeable_state: 'clean', ...o });
   assert.deepEqual(syncCheck([n(78)]), { ok: true, conflicting: [], unknown: [] });
   assert.deepEqual(syncCheck([n(78, { mergeable: false, mergeable_state: 'dirty' })]).conflicting, [78]);
@@ -108,7 +115,9 @@ console.log(`all ${cases.length} passed`);
   assert.equal(syncFollowUp({ ok: true, conflicting: [], unknown: [] }).action, 'done');
   assert.deepEqual(syncFollowUp({ ok: false, conflicting: [78], unknown: [] }, 0, 1), { action: 'resync', round: 1, prs: [78] }, 'still conflicting: sync again');
   assert.equal(syncFollowUp({ ok: false, conflicting: [78], unknown: [] }, 1, 1).action, 'surface', 'after the bound: the person');
-  assert.equal(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1).action, 'surface', 'unknown is surfaced, not synced');
+  assert.deepEqual(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1, 0), { action: 'recheck', tries: 1 }, 'unknown: look again later, no ping');
+  assert.equal(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1, 6, 6).action, 'surface', 'unknown after every re-check: the person');
+  assert.match(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1, 6, 6).why, /no follow-up sync was needed or started/);
   console.log('ok - follow-up sync is bounded');
 }
 

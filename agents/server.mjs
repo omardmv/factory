@@ -706,7 +706,7 @@ async function autoMerge(id) {
   const read = await readSyncCommits((page) => gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100&page=${page}`), pr);
   if (read.retry) { log('merge.commits_failed', { task: id, error: read.error }); return; } // the next poll retries
   const commits = read.commits;
-  const method = mergeMethodFor(pr, Array.isArray(commits) ? commits : [], p.mergeMethod);
+  const method = mergeMethodFor(p.mergeMethod, commits, pr);
   try {
     merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: method, commit_title: `${pr.title} (#${pr.number})` });
   } catch (e) {
@@ -732,8 +732,11 @@ async function verifyUnblocked(id, token, repo, branch) {
     if (r.ok || r.conflicting.length) break;
     await new Promise((res) => setTimeout(res, 5000));
   }
-  const f = syncFollowUp(r, load(id).syncRounds ?? 0, MAX_SYNC_ROUNDS);
-  if (f.action === 'done') { log('merge.verified', { task: id, branch }); return; }
+  const cur = load(id);
+  const f = syncFollowUp(r, cur.syncRounds ?? 0, MAX_SYNC_ROUNDS, cur.syncRechecks ?? 0);
+  if (f.action === 'done') { update(id, (x) => { delete x.syncVerify; delete x.syncRechecks; }); log('merge.verified', { task: id, branch }); return; }
+  if (f.action === 'recheck') { update(id, (x) => { x.syncVerify = { branch, repo }; x.syncRechecks = f.tries; }); log('merge.verify_later', { task: id, branch, tries: f.tries }); return; } // retryMerges looks again
+  update(id, (x) => { delete x.syncVerify; });
   if (f.action === 'resync') {
     // main moved again (or the sync missed a conflict): sync again, automatically, once
     update(id, (x) => { x.syncRounds = f.round; x.status = 'working'; x.mergeWanted = false; });
@@ -745,7 +748,9 @@ async function verifyUnblocked(id, token, repo, branch) {
   say(id, 'factory', `[factory] Merged into ${branch}, but ${f.why}: the follow-up sync did not settle it. This one needs you.`, { ping: true });
   log('merge.verify_conflict', { task: id, branch, ...r });
 }
-const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
+// a sync merge whose target PR GitHub could not judge yet: look again on the poll (no ping until it stays unknown)
+const retrySyncChecks = async () => { for (const t of allTasks().filter((x) => x.syncVerify)) { const token = await githubToken(t.syncVerify.repo); await verifyUnblocked(t.id, token, t.syncVerify.repo, t.syncVerify.branch).catch((e) => log('merge.verify_failed', { task: t.id, error: e.message })); } };
+const retryMerges = async () => { await retrySyncChecks(); for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
 
 // ---------- the final evidence report, on the PR (agents/report.mjs) ----------
 // the agent's own last e2e run, as one line of the report (never hidden: a red run once reached the founder unseen)
