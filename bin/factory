@@ -99,8 +99,8 @@ NEXT
       [ -n "$explicit_project" ] && { echo "$explicit_project"; return; }
       local repo
       repo="$(git remote get-url origin 2>/dev/null | sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##')"
-      local p; p="$(ssh vps cat /opt/factory/agents/projects.json | jq -r --arg r "$repo" 'to_entries[] | select(.value.repo | ascii_downcase == ($r | ascii_downcase)) | .key' | head -1)"
-      [ -n "$p" ] || { echo "no factory project for ${repo:-this directory}; pass -p <project> ($(ssh vps cat /opt/factory/agents/projects.json | jq -r 'keys | join(", ")'))" >&2; exit 2; }
+      local p; p="$(ssh -n vps cat /opt/factory/agents/projects.json | jq -r --arg r "$repo" 'to_entries[] | select(.value.repo | ascii_downcase == ($r | ascii_downcase)) | .key' | head -1)"
+      [ -n "$p" ] || { echo "no factory project for ${repo:-this directory}; pass -p <project> ($(ssh -n vps cat /opt/factory/agents/projects.json | jq -r 'keys | join(", ")'))" >&2; exit 2; }
       echo "$p"
     }
     text_arg() { if [ $# -gt 0 ]; then printf '%s' "$*"; else cat; fi; }
