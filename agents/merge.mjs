@@ -44,22 +44,37 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
 // commits: the PR's commits as GitHub lists them ({ parents: [...] }).
 const SYNC_TITLE = /\b(sync(s|ed|ing)?|(resolv(e|es|ed|ing)|fix(es|ed|ing)?)\b.*\bconflicts?|conflicts?\b.*\bresol)/i;
 const joinsBranches = (commits = []) => commits.some((c) => (c.parents?.length ?? 0) > 1);
-// A PR that exists to sync: its title, body or branch name says so, or it merges in a branch that is not its own base.
-// (A feature PR that merged its own base in, as the factory's conflict prompt asks, is not a sync: it must not
-// start a follow-up sync of an unrelated target PR.) Used for the post-merge check.
+// Title or branch name that says "sync" / "resolve conflicts". Loose: it only decides the merge METHOD (a merge commit
+// is harmless when nothing was merged in). The body is not read: it mentions "sync" in unrelated PRs.
+const wordsOf = (pr) => [String(pr.title ?? ''), String(pr.head?.ref ?? '').replace(/[-_/]+/g, ' ')];
+const saysSync = (pr = {}) => wordsOf(pr).some((w) => SYNC_TITLE.test(w));
+// Stricter: a title or branch that says what is synced into what ("sync main into staging"). "feat: sync settings" is
+// a feature that happens to say sync, so on its own it proves nothing.
+const startsSync = (pr = {}) => wordsOf(pr).some((w) => /^(?:\w+(?:\([^)]*\))?!?:\s*)?(?:sync\b.*\b(?:into|with|from)\b|merge\b.*\binto\b|resolv\w*\b.*\bconflicts?)/i.test(w.trim().replace(/\s+/g, ' ')));
+// Where a merge commit's other parent came from, from git's message ("Merge branch 'x'", "Merge remote-tracking branch
+// 'origin/x' into y", "Merge origin/x", "Merge x into y"); null when the message is not recognised.
+function mergedFrom(msg) {
+  const m = /^Merge (?:remote-tracking )?(?:branch(?:es)? )?(?:'([^']+)'|"([^"]+)"|([^\s'"]+))/.exec(msg);
+  return m ? (m[1] ?? m[2] ?? m[3]) : null;
+}
+// A PR that syncs: it merges in a branch that is not its own base (main into staging). A merge commit is the evidence;
+// a title alone is not (a feature "feat: sync settings"), and a feature PR that merged its own base in, as the factory's
+// conflict prompt asks, is not a sync either: it must not start a follow-up sync of an unrelated target PR.
+// A merge commit whose message names no branch counts only when the title or branch name says what is synced into what.
+// Used for the post-merge check.
 export function isSyncPr(pr = {}, commits = []) {
-  if (SYNC_TITLE.test(String(pr.title ?? '')) || SYNC_TITLE.test(String(pr.body ?? '').slice(0, 2000)) || SYNC_TITLE.test(String(pr.head?.ref ?? '').replace(/[-_/]+/g, ' '))) return true;
   const base = String(pr.base?.ref ?? '');
   return commits.some((c) => {
     const msg = String(c.commit?.message ?? '');
     if ((c.parents?.length ?? 0) < 2 || /^Merge pull request #\d+/.test(msg)) return false;
-    const from = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(msg)?.[1];
-    return !from || (from !== base && from !== `origin/${base}`);
+    const from = mergedFrom(msg);
+    if (from === null) return startsSync(pr) || /^(?:Sync|Resolve)\b/i.test(msg);
+    return from !== base && from !== `origin/${base}` && from !== `refs/remotes/origin/${base}`;
   });
 }
 // The merge method: any merge commit in the head means a merge commit (a squash would drop the merged-in parent).
 export function mergeMethodFor(projectMethod, commits = [], pr = null) {
-  return joinsBranches(commits) || (pr && isSyncPr(pr, commits)) ? 'merge' : projectMethod ?? 'merge';
+  return joinsBranches(commits) || (pr && saysSync(pr)) ? 'merge' : projectMethod ?? 'merge';
 }
 // After a sync PR lands: the open PRs from the target branch into somewhere else (staging -> main) must now merge cleanly.
 // prs: GitHub PRs fetched after the merge. -> { ok, conflicting: [numbers], unknown: [numbers] }
