@@ -38,6 +38,16 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
   return { action: 'merge' };
 }
 
+// How to merge a PR. A PR whose head contains merge commits exists to bring one branch into another
+// (a conflict resolution, a branch sync): squash or rebase would drop the merged-in branch as a parent
+// and the branches would stay apart, so it merges with a merge commit. Any other PR uses the project's method.
+// commits: the PR's commits as GitHub lists them ({ parents: [...] }).
+export function mergeMethodFor(projectMethod, commits = []) {
+  const method = projectMethod ?? 'merge';
+  const joins = commits.some((c) => (c.parents?.length ?? 0) > 1);
+  return joins ? 'merge' : method;
+}
+
 // The founder approves each feature before it merges (project config "approval": true).
 // -> { action: 'merge' } | { action: 'preview' } (build the reviewed head's preview first) | { action: 'ask' } (post the ready-for-your-check message once per reviewed head) | { action: 'wait' }
 // lastRun: the agent's last e2e run in its workspace ({ status, failed }); a failed one goes back to the agent
