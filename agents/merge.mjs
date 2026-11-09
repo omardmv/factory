@@ -64,6 +64,14 @@ export function syncCheck(prs = []) {
   const unknown = open.filter((p) => !conflicting.includes(p.number) && (p.mergeable === null || p.mergeable === undefined)).map((p) => p.number);
   return { ok: !conflicting.length && !unknown.length, conflicting, unknown };
 }
+// A PR from the target branch still conflicts after a sync landed: sync again (bounded), then surface it.
+// -> { action: 'done' } | { action: 'resync', round, prs } | { action: 'surface', why }
+export function syncFollowUp(check, rounds = 0, maxRounds = 1) {
+  if (check.ok) return { action: 'done' };
+  if (!check.conflicting.length) return { action: 'surface', why: `GitHub has not said whether ${check.unknown.map((n) => `#${n}`).join(', ')} merges cleanly` };
+  if (rounds >= maxRounds) return { action: 'surface', why: `${check.conflicting.map((n) => `#${n}`).join(', ')} still conflicts after ${maxRounds} follow-up sync${maxRounds === 1 ? '' : 's'}` };
+  return { action: 'resync', round: rounds + 1, prs: check.conflicting };
+}
 
 // The founder approves each feature before it merges (project config "approval": true).
 // -> { action: 'merge' } | { action: 'preview' } (build the reviewed head's preview first) | { action: 'ask' } (post the ready-for-your-check message once per reviewed head) | { action: 'wait' }

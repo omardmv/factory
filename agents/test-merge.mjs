@@ -1,6 +1,6 @@
 // node agents/test-merge.mjs
 import assert from 'node:assert/strict';
-import { mergeMethodFor, isSyncPr, syncCheck, mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
+import { syncFollowUp, mergeMethodFor, isSyncPr, syncCheck, mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
 const t = { reviewedSha: 'abc1234def' };
 const pr = (o = {}) => ({ state: 'open', merged_at: null, base: { ref: 'staging' }, head: { sha: 'abc1234def' }, mergeable: true, mergeable_state: 'clean', ...o });
 const cases = [
@@ -102,4 +102,12 @@ console.log(`all ${cases.length} passed`);
   assert.deepEqual(syncCheck([n(78, { mergeable: null })]).unknown, [78]);
   assert.equal(syncCheck([]).ok, true);
   console.log('ok - sync PRs merge with a merge commit; target PR checked');
+}
+
+{
+  assert.equal(syncFollowUp({ ok: true, conflicting: [], unknown: [] }).action, 'done');
+  assert.deepEqual(syncFollowUp({ ok: false, conflicting: [78], unknown: [] }, 0, 1), { action: 'resync', round: 1, prs: [78] }, 'still conflicting: sync again');
+  assert.equal(syncFollowUp({ ok: false, conflicting: [78], unknown: [] }, 1, 1).action, 'surface', 'after the bound: the person');
+  assert.equal(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1).action, 'surface', 'unknown is surfaced, not synced');
+  console.log('ok - follow-up sync is bounded');
 }

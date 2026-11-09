@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
-import { mergeMethodFor, isSyncPr, syncCheck, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
+import { mergeMethodFor, isSyncPr, syncCheck, syncFollowUp, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { addAgentJob, takeJobs } from './queue.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
@@ -545,6 +545,7 @@ Other reviewers look at this PR from other angles at the same time; stay on your
 // required checks) still applies. Refused merges retry on the next polls,
 // then go back to the person.
 const MERGE_TRIES = 10;
+const MAX_SYNC_ROUNDS = 1;
 const MAX_CONFLICT_ROUNDS = Number(process.env.MAX_CONFLICT_ROUNDS ?? 3);
 const MAX_CHECK_ROUNDS = Number(process.env.MAX_CHECK_ROUNDS ?? 3);
 const REQUIRED_CHECKS_WAIT_MIN = Number(process.env.REQUIRED_CHECKS_WAIT_MIN ?? 45);
@@ -729,8 +730,17 @@ async function verifyUnblocked(id, token, repo, branch) {
     if (r.ok || r.conflicting.length) break;
     await new Promise((res) => setTimeout(res, 5000));
   }
-  if (!r.conflicting.length && !r.unknown.length) { log('merge.verified', { task: id, branch }); return; }
-  say(id, 'factory', r.conflicting.length ? `[factory] Merged, but PR${r.conflicting.length > 1 ? 's' : ''} ${r.conflicting.map((n) => `#${n}`).join(', ')} from ${branch} still conflict${r.conflicting.length > 1 ? '' : 's'}. Another sync is needed.` : `[factory] Merged; GitHub has not yet said whether PR${r.unknown.length > 1 ? 's' : ''} ${r.unknown.map((n) => `#${n}`).join(', ')} from ${branch} merge${r.unknown.length > 1 ? '' : 's'} cleanly.`);
+  const f = syncFollowUp(r, load(id).syncRounds ?? 0, MAX_SYNC_ROUNDS);
+  if (f.action === 'done') { log('merge.verified', { task: id, branch }); return; }
+  if (f.action === 'resync') {
+    // main moved again (or the sync missed a conflict): sync again, automatically, once
+    update(id, (x) => { x.syncRounds = f.round; x.status = 'working'; x.mergeWanted = false; });
+    say(id, 'factory', `[factory] Merged, but ${f.prs.map((n) => `#${n}`).join(', ')} from ${branch} still conflicts. Starting a follow-up sync (round ${f.round} of ${MAX_SYNC_ROUNDS}).`);
+    enqueue(id, `[factory] Your sync PR merged into ${branch}, but ${f.prs.map((n) => `#${n}`).join(', ')} still conflicts with its base (the base moved, or the first sync missed it). Start from fresh \`origin/${branch}\` and the base of that PR, merge the base in with a real merge (\`git merge origin/<base>\`, resolving every conflict), put "sync" in the PR title, push and open a new PR into ${branch}. Never rebase, squash or force-push, and never hand the merge to the person: the factory merges it with a merge commit.`, 'bypassPermissions', 'conflict');
+    log('merge.resync', { task: id, branch, ...r, round: f.round });
+    return;
+  }
+  say(id, 'factory', `[factory] Merged into ${branch}, but ${f.why}: the follow-up sync did not settle it. This one needs you.`, { ping: true });
   log('merge.verify_conflict', { task: id, branch, ...r });
 }
 const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
