@@ -154,12 +154,45 @@ async function readForm(req) {
 }
 const fromUs = (req) => (req.headers.origin ?? '') === SELF;
 
+// ---- the API for the desktop terminal (omardmv/terminal): what this page shows, as JSON, with the agents token
+// (the same bearer the agents API takes) instead of a session cookie. It reaches us through its own SSH tunnel to the
+// loopback port. Anything nginx forwards (it sets X-Forwarded-Proto) is from outside and gets nothing here.
+const bearerOk = (req) => { const h = req.headers.authorization ?? ''; return h.startsWith('Bearer ') && safeEq(h, `Bearer ${secret('agents-token')}`); };
+const facts = () => readJson(`${STATE}/status.json`) ?? {};
+async function overview() {
+  const f = facts();
+  const all = [];
+  for (const p of PROJECTS) for (const v of await previews(p)) all.push({ ...v, project: p.name, repo: p.repo, prUrl: `https://github.com/${p.repo}/pull/${v.pr}` });
+  const services = f.services ?? {};
+  const okWord = (s) => ['active', 'running', 'healthy'].includes(s);
+  return {
+    at: f.at ?? null, stale: !f.at || Date.now() - new Date(f.at) > 5 * 60000, healthy: healthy(),
+    unhealthy: [...Object.entries(services).filter(([, s]) => !okWord(s)).map(([k]) => k), ...(f.runners ?? []).filter((r) => r.active !== 'active').map((r) => r.name)],
+    facts: f, previews: all, links: LINKS,
+  };
+}
+async function api(req, url, send) {
+  const json = (code, obj) => send(code, JSON.stringify(obj), { 'content-type': 'application/json' });
+  if (req.headers['x-forwarded-proto'] || !bearerOk(req)) return json(req.headers['x-forwarded-proto'] ? 404 : 401, { error: 'not here' });
+  if (url.pathname === '/api/overview' && req.method === 'GET') return json(200, await overview());
+  if (url.pathname === '/api/redeploy' && req.method === 'POST') {
+    let b = ''; for await (const c of req) { b += c; if (b.length > 10000) break; }
+    const { project, pr } = JSON.parse(b || '{}');
+    const p = PROJECTS.find((x) => x.name === project);
+    if (!p || !Number.isInteger(pr) || pr <= 0) return json(400, { error: 'project and pr, please' });
+    await coolify(`/deploy?uuid=${p.app}&pr=${pr}`, { method: 'POST' });
+    return json(200, { ok: true });
+  }
+  return json(404, { error: 'not found' });
+}
+
 createServer(async (req, res) => {
   const url = new URL(req.url, SELF);
   const send = (code, body, headers = {}) => { res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...headers }); res.end(body); };
   try {
     if (url.pathname === '/auth') return send(validSession(req) ? 204 : 401, '');
     if (url.pathname === '/healthz') return send(200, 'ok');
+    if (url.pathname.startsWith('/api/')) return await api(req, url, send);
     if (url.pathname === '/login' && req.method === 'GET') return send(200, loginPage(url.searchParams.get('next') ?? SELF));
     if (url.pathname === '/login' && req.method === 'POST') {
       const f = await readForm(req);
