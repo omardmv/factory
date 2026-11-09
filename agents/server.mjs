@@ -701,8 +701,8 @@ async function autoMerge(id) {
   try {
     // a PR that carries merge commits joins branches: it must land as a merge commit, whatever the project's method
     let commits = [];
-    try { for (let page = 1; page <= 3; page++) { const r = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100&page=${page}`); commits.push(...r); if (r.length < 100) break; } }
-    catch (e) { log('merge.commits_failed', { task: id, error: e.message }); }
+    // no try/catch here: if the list can't be read, the outer catch counts a try and the next poll retries, rather than merging with the wrong method
+    for (let page = 1; page <= 3; page++) { const r = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100&page=${page}`); commits.push(...r); if (r.length < 100) break; }
     const method = mergeMethodFor(p.mergeMethod, commits);
     if (method !== (p.mergeMethod ?? 'merge')) log('merge.method', { task: id, pr: pr.number, method, projectMethod: p.mergeMethod });
     merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: method, commit_title: `${pr.title} (#${pr.number})` });
