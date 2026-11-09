@@ -16,7 +16,7 @@
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
 import * as syncWire from './syncwire.mjs';
-import { baseBuildConfig, runBaseBuild } from './basebuild.mjs';
+import { baseBuildConfig, baseBuildApplies, runBaseBuild } from './basebuild.mjs';
 import { readSyncCommits, mergeMethodFor, isSyncPr, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { addAgentJob, takeJobs } from './queue.mjs';
@@ -719,12 +719,13 @@ const baseDeps = () => ({
   githubToken, gh,
   exec: (cmd, args, o) => new Promise((res) => {
     const [c, a] = o.user ? ['runuser', ['-u', o.user, '--', cmd, ...args]] : [cmd, args];
-    const ch = spawn(c, a, { cwd: o.cwd, env: o.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const ch = spawn(c, a, { cwd: o.cwd, env: o.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true }); // own process group, so a timeout kills what the script started too
+    let done = false; const finish = (r) => { if (done) return; done = true; clearTimeout(timer); res(r); };
     let out = ''; const add = (b) => { out = (out + b).slice(-20000); };
     ch.stdout.on('data', add); ch.stderr.on('data', add);
-    const timer = setTimeout(() => { ch.kill('SIGKILL'); add('\n[timed out]'); }, o.timeoutMs);
-    ch.on('error', (e) => { clearTimeout(timer); res({ status: 127, out: e.message }); });
-    ch.on('close', (code) => { clearTimeout(timer); res({ status: code ?? 1, out }); });
+    const timer = setTimeout(() => { add('\n[timed out]'); try { process.kill(-ch.pid, 'SIGKILL'); } catch { ch.kill('SIGKILL'); } finish({ status: 124, out }); }, o.timeoutMs);
+    ch.on('error', (e) => finish({ status: 127, out: e.message }));
+    ch.on('close', (code) => finish({ status: code ?? 1, out }));
   }),
   exists: existsSync, mkdir: (p) => mkdirSync(p, { recursive: true }),
   loadState: (n) => readJson(`${HOME}/basebuild/${n}.json`, {}),
@@ -734,7 +735,7 @@ const baseDeps = () => ({
 });
 function baseBuild(name, { id, reason }) {
   const p = PROJECTS[name], cfg = baseBuildConfig(p);
-  if (!cfg || (reason === 'merge' && cfg.branch !== p.autoMerge)) return;
+  if (!baseBuildApplies(p, cfg, reason)) return;
   runBaseBuild(baseDeps(), name, p, cfg, { reason })
     .then((r) => { if (r.text && id) say(id, 'factory', r.text); }) // no ping: the founder does not wait on it
     .catch((e) => log('basebuild.crashed', { project: name, error: e.message }));

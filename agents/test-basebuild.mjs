@@ -1,6 +1,6 @@
 // node agents/test-basebuild.mjs
 import assert from 'node:assert/strict';
-import { baseBuildConfig, baseBuildDecision, runBaseBuild } from './basebuild.mjs';
+import { baseBuildConfig, baseBuildApplies, baseBuildDecision, runBaseBuild } from './basebuild.mjs';
 
 // config
 assert.equal(baseBuildConfig({}), null);
@@ -75,8 +75,25 @@ const mk = (over = {}) => {
   await new Promise((r) => setTimeout(r, 10));
   const second = await runBaseBuild(d, 'shop', p, cfg, { reason: 'merge' });
   assert.equal(second.ran, false); assert.equal(second.why, 'already running');
-  release(); await first;
+  release(); const r1 = await first;
+  assert.equal(r1.ran, true); assert.match(r1.text, /ran OK/); // the first result survives the coalesced rerun
   assert.equal(calls.exec.filter((c) => c[0] === 'bash').length, 1); // same sha, so the rerun decided "already done"
   assert.equal(st.v.ok, true);
 }
+{ // user: chown + HOME from passwd
+  const ucfg = baseBuildConfig({ baseBuild: { branch: 'staging', checkout: '/srv/x', user: 'dock' } });
+  const { d, calls } = mk({ exec: (cmd) => (cmd === 'getent' ? { status: 0, out: 'dock:x:1:1::/home/dock:/bin/sh\n' } : { status: 0, out: '' }) });
+  await runBaseBuild(d, 'shop', p, ucfg);
+  assert.ok(calls.exec.some((c) => c[0] === 'chown' && c[1].includes('dock')));
+  assert.equal(calls.exec.at(-1)[2].env.HOME, '/home/dock'); assert.equal(calls.exec.at(-1)[2].user, 'dock');
+}
+{ // retry after failure runs once retryMin passed
+  const { d, calls } = mk({ state: { sha: 'abcdef1234', ok: false, at: '2026-01-01T00:00:00Z' } });
+  assert.equal((await runBaseBuild(d, 'shop', p, cfg)).ran, true); assert.ok(calls.exec.some((c) => c[0] === 'bash'));
+}
+// merge hook only for the deploy branch
+assert.equal(baseBuildApplies({ autoMerge: 'staging' }, cfg, 'merge'), true);
+assert.equal(baseBuildApplies({ autoMerge: 'main' }, cfg, 'merge'), false);
+assert.equal(baseBuildApplies({ autoMerge: 'main' }, cfg, 'tick'), true);
+assert.equal(baseBuildApplies({}, null, 'tick'), false);
 console.log('ok - basebuild');

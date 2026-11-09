@@ -129,10 +129,10 @@ Telegram at 08:00 Tashkent (`/digest` any time).
 
 **Prebuilt base image** (`baseBuild` in the project's config: `{ "branch", "checkout", "script"?, "user"?, "timeoutMin"?, "retryMin"? }`):
 if the repo has `scripts/ensure-base.sh`, the factory fetches `branch` with its GitHub App token into the factory-owned `checkout`
-(read-only token via git env, never handed to the script) and runs the script on the box, after each merge into that branch
+(the token goes to git via env only, never to the script) and runs the script on the box, after each merge into that branch
 and every 10 minutes (`BASE_BUILD_EVERY_S`) for a head it has not handled yet or a failed run (retry after `retryMin`, default 15).
 It runs detached, so it never blocks a merge; the result is said in the merging task's chat (no ping) or logged
-(`basebuild.*`). `user` runs the script via `runuser` as that user (needs docker access); default is the service's user.
+(`basebuild.*`). `user` runs the script via `runuser` as that user (needs docker access; the factory chowns the checkout to it and sets its `HOME`); default is the service's user.
 State: `<agents dir>/basebuild/<project>.json`. Logic: `agents/basebuild.mjs`.
 
 **Auto-merge** (`autoMerge` in the project's config): when the whole panel
