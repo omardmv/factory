@@ -38,6 +38,33 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
   return { action: 'merge' };
 }
 
+// How to merge: a PR that brings another branch in (main merged into staging, a conflict resolution) must
+// land with a merge commit. A squash drops the other parent, so the PR it was meant to unblock (staging -> main)
+// stays CONFLICTING. Everything else uses the project's configured method (default 'merge').
+// commits: the PR's commits as GitHub lists them ({ parents: [...], commit: { message } }).
+const SYNC_TITLE = /\b(sync(s|ed|ing)?|resolv(e|es|ed|ing)\b.*\bconflicts?|conflicts?\b.*\bresol)/i;
+export function isSyncPr(pr, commits = []) {
+  if (SYNC_TITLE.test(String(pr.title ?? '')) || SYNC_TITLE.test(String(pr.head?.ref ?? '').replace(/[-_/]+/g, ' '))) return true;
+  // a merge commit that is not just "bring the PR's own base up to date" is another branch brought in
+  const base = String(pr.base?.ref ?? '');
+  return commits.some((c) => {
+    if ((c.parents?.length ?? 0) < 2) return false;
+    const from = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(String(c.commit?.message ?? ''))?.[1];
+    return !from || (from !== base && from !== `origin/${base}`);
+  });
+}
+export function mergeMethodFor(pr, commits = [], configured = 'merge') {
+  return isSyncPr(pr, commits) ? 'merge' : configured || 'merge';
+}
+// After a sync PR lands: the open PRs from the target branch into somewhere else (staging -> main) must now merge cleanly.
+// prs: GitHub PRs fetched after the merge. -> { ok, conflicting: [numbers], unknown: [numbers] }
+export function syncCheck(prs = []) {
+  const open = prs.filter((p) => p.state === 'open');
+  const conflicting = open.filter((p) => p.mergeable === false || p.mergeable_state === 'dirty').map((p) => p.number);
+  const unknown = open.filter((p) => !conflicting.includes(p.number) && (p.mergeable === null || p.mergeable === undefined)).map((p) => p.number);
+  return { ok: !conflicting.length && !unknown.length, conflicting, unknown };
+}
+
 // The founder approves each feature before it merges (project config "approval": true).
 // -> { action: 'merge' } | { action: 'preview' } (build the reviewed head's preview first) | { action: 'ask' } (post the ready-for-your-check message once per reviewed head) | { action: 'wait' }
 // lastRun: the agent's last e2e run in its workspace ({ status, failed }); a failed one goes back to the agent

@@ -1,6 +1,6 @@
 // node agents/test-merge.mjs
 import assert from 'node:assert/strict';
-import { mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
+import { mergeMethodFor, isSyncPr, syncCheck, mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
 const t = { reviewedSha: 'abc1234def' };
 const pr = (o = {}) => ({ state: 'open', merged_at: null, base: { ref: 'staging' }, head: { sha: 'abc1234def' }, mergeable: true, mergeable_state: 'clean', ...o });
 const cases = [
@@ -79,3 +79,24 @@ for (const [name, p, rounds, want] of cases) {
   console.log('ok deploy check: live when staging runs a version that includes the merge; one late notice after 45 min; then live, late');
 }
 console.log(`all ${cases.length} passed`);
+
+// sync PRs (another branch merged in, conflict resolution) land with a merge commit, never a squash
+{
+  const sp = (o = {}) => ({ title: 'feat(x): a thing', base: { ref: 'staging' }, head: { ref: 'agent/1' }, ...o });
+  const mc = (message, n = 2) => ({ parents: new Array(n).fill('p'), commit: { message } });
+  assert.equal(mergeMethodFor(sp(), [mc('add a', 1)], 'squash'), 'squash', 'an ordinary PR keeps the project method');
+  assert.equal(mergeMethodFor(sp(), [], undefined), 'merge', 'default is merge');
+  assert.equal(mergeMethodFor(sp(), [mc("Merge branch 'main' into staging")], 'squash'), 'merge', 'main merged in: merge commit');
+  assert.equal(mergeMethodFor(sp(), [mc('Sync main into staging (ours)')], 'squash'), 'merge', 'unrecognised merge commit: merge');
+  assert.equal(mergeMethodFor(sp(), [mc("Merge remote-tracking branch 'origin/staging' into agent/1")], 'squash'), 'squash', 'base brought into a feature branch: normal PR');
+  assert.equal(mergeMethodFor(sp({ title: 'chore: sync main into staging' }), [], 'squash'), 'merge', 'title says sync');
+  assert.equal(mergeMethodFor(sp({ title: 'fix: resolve conflicts on PR #78' }), [], 'squash'), 'merge', 'title says resolve conflicts');
+  assert.equal(isSyncPr(sp({ head: { ref: 'sync/main-into-staging' } })), true, 'branch name says sync');
+  assert.equal(isSyncPr(sp({ title: 'feat: async queue' })), false, 'async is not sync');
+  const n = (number, o) => ({ number, state: 'open', mergeable: true, mergeable_state: 'clean', ...o });
+  assert.deepEqual(syncCheck([n(78)]), { ok: true, conflicting: [], unknown: [] });
+  assert.deepEqual(syncCheck([n(78, { mergeable: false, mergeable_state: 'dirty' })]).conflicting, [78]);
+  assert.deepEqual(syncCheck([n(78, { mergeable: null })]).unknown, [78]);
+  assert.equal(syncCheck([]).ok, true);
+  console.log('ok - sync PRs merge with a merge commit; target PR checked');
+}

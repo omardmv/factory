@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
-import { mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
+import { mergeMethodFor, isSyncPr, syncCheck, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { addAgentJob, takeJobs } from './queue.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
@@ -698,8 +698,11 @@ async function autoMerge(id) {
     return;
   }
   let merged;
+  // a PR that brings a branch in (main into staging, conflict resolution) is merged with a merge commit, never squashed
+  const commits = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100`).catch(() => []);
+  const method = mergeMethodFor(pr, Array.isArray(commits) ? commits : [], p.mergeMethod);
   try {
-    merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: p.mergeMethod ?? 'merge', commit_title: `${pr.title} (#${pr.number})` });
+    merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: method, commit_title: `${pr.title} (#${pr.number})` });
   } catch (e) {
     const x = update(id, (x) => { x.mergeTries = (x.mergeTries ?? 0) + 1; });
     log('merge.retry', { task: id, tries: x.mergeTries, error: e.message });
@@ -710,7 +713,22 @@ async function autoMerge(id) {
   const watch = p.deployCheck?.url && merged?.sha ? { sha: merged.sha, at: new Date().toISOString(), state: 'waiting' } : null;
   update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; if (watch) x.deploy = watch; });
   say(id, 'factory', `[factory] 🚀 merged into ${p.autoMerge} (PR #${pr.number}, reviewed head ${t.reviewedSha.slice(0, 7)}). ${watch ? `The factory tells you here when ${p.autoMerge} runs it.` : p.autoMerge === 'dev' ? 'Staging deploys it now; production still waits for your sign-off.' : 'The server pulls it within 5 minutes.'}`);
-  log('merge.done', { task: id, pr: pr.number, into: p.autoMerge });
+  log('merge.done', { task: id, pr: pr.number, into: p.autoMerge, method });
+  if (isSyncPr(pr, Array.isArray(commits) ? commits : [])) verifyUnblocked(id, token, t.repo, p.autoMerge).catch((e) => log('merge.verify_failed', { task: id, error: e.message }));
+}
+// After a sync merge: the open PRs from the branch just merged into (staging -> main) must now be mergeable. Said, not asked.
+async function verifyUnblocked(id, token, repo, branch) {
+  const owner = repo.split('/')[0];
+  let r;
+  for (let i = 0; i < 6; i++) { // GitHub computes mergeability lazily
+    const list = await gh(token, `/repos/${repo}/pulls?state=open&head=${owner}:${branch}&per_page=20`);
+    r = syncCheck(await Promise.all(list.map((x) => gh(token, `/repos/${repo}/pulls/${x.number}`))));
+    if (r.ok || r.conflicting.length) break;
+    await new Promise((res) => setTimeout(res, 5000));
+  }
+  if (!r.conflicting.length && !r.unknown.length) { log('merge.verified', { task: id, branch }); return; }
+  say(id, 'factory', r.conflicting.length ? `[factory] Merged, but PR${r.conflicting.length > 1 ? 's' : ''} ${r.conflicting.map((n) => `#${n}`).join(', ')} from ${branch} still conflict${r.conflicting.length > 1 ? '' : 's'}. Another sync is needed.` : `[factory] Merged; GitHub has not yet said whether PR${r.unknown.length > 1 ? 's' : ''} ${r.unknown.map((n) => `#${n}`).join(', ')} from ${branch} merge${r.unknown.length > 1 ? '' : 's'} cleanly.`);
+  log('merge.verify_conflict', { task: id, branch, ...r });
 }
 const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
 
