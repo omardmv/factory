@@ -1,6 +1,6 @@
 // node agents/test-merge.mjs
 import assert from 'node:assert/strict';
-import { syncFollowUp, mergeMethodFor, isSyncPr, syncCheck, mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
+import { readSyncCommits, syncFollowUp, mergeMethodFor, isSyncPr, syncCheck, mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
 const t = { reviewedSha: 'abc1234def' };
 const pr = (o = {}) => ({ state: 'open', merged_at: null, base: { ref: 'staging' }, head: { sha: 'abc1234def' }, mergeable: true, mergeable_state: 'clean', ...o });
 const cases = [
@@ -110,4 +110,24 @@ console.log(`all ${cases.length} passed`);
   assert.equal(syncFollowUp({ ok: false, conflicting: [78], unknown: [] }, 1, 1).action, 'surface', 'after the bound: the person');
   assert.equal(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1).action, 'surface', 'unknown is surfaced, not synced');
   console.log('ok - follow-up sync is bounded');
+}
+
+// a failed read of the PR's commits is a retry, never a blind merge; the newest page is read
+{
+  const pages = [];
+  let r = await readSyncCommits(async (p) => { pages.push(p); return [{ parents: [1, 2] }]; }, { commits: 230 });
+  assert.deepEqual(pages, [3], 'last page of 230 commits'); assert.equal(r.commits.length, 1);
+  pages.length = 0; await readSyncCommits(async (p) => { pages.push(p); return []; }, { commits: 1000 }); assert.deepEqual(pages, [3], 'capped at 250 commits (page 3)');
+  pages.length = 0; await readSyncCommits(async (p) => { pages.push(p); return []; }, {}); assert.deepEqual(pages, [1]);
+  r = await readSyncCommits(async () => { throw new Error('502'); }, { commits: 3 });
+  assert.equal(r.retry, true); assert.equal(r.commits, undefined); assert.match(r.error, /502/);
+  console.log('ok - failed commit read retries');
+}
+{
+  // the cap: round 1 resyncs, round 2 (SYNC rounds used) surfaces to the person
+  const c = { ok: false, conflicting: [78], unknown: [] };
+  assert.equal(syncFollowUp(c, 0, 1).action, 'resync');
+  const s2 = syncFollowUp(c, 1, 1); assert.equal(s2.action, 'surface'); assert.match(s2.why, /after 1 follow-up sync/);
+  assert.equal(syncFollowUp(c, 2, 1).action, 'surface', 'never loops');
+  console.log('ok - follow-up sync capped at 1');
 }

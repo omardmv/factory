@@ -35,6 +35,10 @@ const reviewOrigin = (from, origin) => [from, origin].includes('review');
 //  { type: 'retry', retry, from }              the turn died without a reply: carry on (bounded)
 //  { type: 'coordinator', decision, resetCrash } an epic's coordinator replied
 //  { type: 'status', status, pr, resetCrash }  the next status (pr: what was found, change tasks only)
+// Several PRs can belong to one task (a sync that merged, then a follow-up sync): the one still open is the one in play.
+// prs: GitHub PRs ({ merged_at, state, updated_at }), newest first. -> the PR to follow, or undefined
+export const pickPr = (prs = []) => prs.find((p) => p.state === 'open') ?? prs[0];
+
 // deps: findPr(task) -> pr | null, hasChecks(task), hasQa(task)
 export async function afterAgentRun({ task, from, origin, mode, reply, unasked = false, maxCrashRetries = 2, maxNoPrNudges = 2, autoGo = false }, deps) {
   if (task.status === 'stopped') return { type: 'stopped' };

@@ -64,11 +64,19 @@ export function syncCheck(prs = []) {
   const unknown = open.filter((p) => !conflicting.includes(p.number) && (p.mergeable === null || p.mergeable === undefined)).map((p) => p.number);
   return { ok: !conflicting.length && !unknown.length, conflicting, unknown };
 }
+// The PR's newest commits (a merge commit sits at the end): the last page GitHub serves (it lists at most 250).
+// A failed read is a retry, never a merge decided blind. fetch(page) -> commits.
+export async function readSyncCommits(fetchPage, pr) {
+  const page = Math.min(3, Math.max(1, Math.ceil((pr.commits ?? 1) / 100)));
+  try { const c = await fetchPage(page); return { commits: Array.isArray(c) ? c : [] }; }
+  catch (e) { return { retry: true, error: String(e.message ?? e) }; }
+}
+
 // A PR from the target branch still conflicts after a sync landed: sync again (bounded), then surface it.
 // -> { action: 'done' } | { action: 'resync', round, prs } | { action: 'surface', why }
 export function syncFollowUp(check, rounds = 0, maxRounds = 1) {
   if (check.ok) return { action: 'done' };
-  if (!check.conflicting.length) return { action: 'surface', why: `GitHub has not said whether ${check.unknown.map((n) => `#${n}`).join(', ')} merges cleanly` };
+  if (!check.conflicting.length) return { action: 'surface', why: `GitHub has not said whether ${check.unknown.map((n) => `#${n}`).join(', ')} merges cleanly (no follow-up sync ran; check it)` };
   if (rounds >= maxRounds) return { action: 'surface', why: `${check.conflicting.map((n) => `#${n}`).join(', ')} still conflicts after ${maxRounds} follow-up sync${maxRounds === 1 ? '' : 's'}` };
   return { action: 'resync', round: rounds + 1, prs: check.conflicting };
 }
