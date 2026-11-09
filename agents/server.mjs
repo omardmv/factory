@@ -16,6 +16,7 @@
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
 import * as syncWire from './syncwire.mjs';
+import { baseBuildConfig, baseBuildApplies, runBaseBuild } from './basebuild.mjs';
 import { readSyncCommits, mergeMethodFor, isSyncPr, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { addAgentJob, takeJobs } from './queue.mjs';
@@ -709,8 +710,37 @@ async function autoMerge(id) {
   update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; if (watch) x.deploy = watch; });
   say(id, 'factory', `[factory] 🚀 merged into ${p.autoMerge} (PR #${pr.number}, reviewed head ${t.reviewedSha.slice(0, 7)}). ${watch ? `The factory tells you here when ${p.autoMerge} runs it.` : p.autoMerge === 'dev' ? 'Staging deploys it now; production still waits for your sign-off.' : 'The server pulls it within 5 minutes.'}`);
   log('merge.done', { task: id, pr: pr.number, into: p.autoMerge, method });
+  baseBuild(t.project, { id, reason: 'merge' }); // detached: never blocks the merge
   if (isSyncPr(pr, Array.isArray(commits) ? commits : [])) verifyUnblocked(id, token, t.repo, p.autoMerge).catch((e) => log('merge.verify_failed', { task: id, error: e.message }));
 }
+// Prebuilt base image (projects.json "baseBuild", see basebuild.mjs): after a merge into the deploy branch and on a tick, run the
+// repo's ensure-base script from a factory-owned checkout. Result goes to the merging task's chat (no ping) or the log; never awaited by a merge.
+const baseDeps = () => ({
+  githubToken, gh,
+  exec: (cmd, args, o) => new Promise((res) => {
+    const [c, a] = o.user ? ['runuser', ['-u', o.user, '--', cmd, ...args]] : [cmd, args];
+    const ch = spawn(c, a, { cwd: o.cwd, env: o.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true }); // own process group, so a timeout kills what the script started too
+    let done = false; const finish = (r) => { if (done) return; done = true; clearTimeout(timer); res(r); };
+    let out = ''; const add = (b) => { out = (out + b).slice(-20000); };
+    ch.stdout.on('data', add); ch.stderr.on('data', add);
+    const timer = setTimeout(() => { add('\n[timed out]'); try { process.kill(-ch.pid, 'SIGKILL'); } catch { ch.kill('SIGKILL'); } finish({ status: 124, out }); }, o.timeoutMs);
+    ch.on('error', (e) => finish({ status: 127, out: e.message }));
+    ch.on('close', (code) => finish({ status: code ?? 1, out }));
+  }),
+  exists: existsSync, mkdir: (p) => mkdirSync(p, { recursive: true }),
+  loadState: (n) => readJson(`${HOME}/basebuild/${n}.json`, {}),
+  saveState: (n, s) => { mkdirSync(`${HOME}/basebuild`, { recursive: true }); writeFileSync(`${HOME}/basebuild/${n}.json`, JSON.stringify(s)); },
+  log, now: () => Date.now(),
+  baseEnv: () => ({ PATH: process.env.PATH, HOME: process.env.HOME ?? '/root', LANG: 'C.UTF-8' }),
+});
+function baseBuild(name, { id, reason }) {
+  const p = PROJECTS[name], cfg = baseBuildConfig(p);
+  if (!baseBuildApplies(p, cfg, reason)) return;
+  runBaseBuild(baseDeps(), name, p, cfg, { reason })
+    .then((r) => { if (r.text && id) say(id, 'factory', r.text); }) // no ping: the founder does not wait on it
+    .catch((e) => log('basebuild.crashed', { project: name, error: e.message }));
+}
+const baseBuildTick = () => { for (const name of Object.keys(PROJECTS)) baseBuild(name, { reason: 'tick' }); };
 // After a sync merge: the open PRs from the branch just merged into (staging -> main) must now be mergeable. Said, not asked.
 const syncDeps = () => ({ gh, load, update, say, enqueue, log, maxRounds: MAX_SYNC_ROUNDS, sleep: (ms) => new Promise((res) => setTimeout(res, ms)), tasks: allTasks, githubToken });
 const verifyUnblocked = (id, token, repo, branch) => syncWire.verifyUnblocked(syncDeps(), id, token, repo, branch);
@@ -1313,5 +1343,7 @@ function watchdog(now = Date.now()) {
 }
 setInterval(() => { try { watchdog(); } catch (e) { log('watchdog.failed', { error: e.message }); } }, WATCHDOG_EVERY_S * 1000);
 
+setTimeout(baseBuildTick, 60000);
+setInterval(baseBuildTick, Number(process.env.BASE_BUILD_EVERY_S ?? 600) * 1000); // a failed run retries; a missed merge is caught
 setTimeout(poll, 15000);
 setInterval(poll, POLL_EVERY_S * 1000);
