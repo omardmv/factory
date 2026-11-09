@@ -103,6 +103,12 @@ console.log(`all ${cases.length} passed`);
   assert.equal(isSyncPr(sp({ title: 'feat: async queue' })), false, 'async is not sync');
   assert.equal(mergeMethodFor('squash', [], sp({ title: 'fix conflicts on PR #78' })), 'merge', 'task wording: fix conflicts');
   assert.equal(mergeMethodFor('squash', [], sp({ body: 'This is a sync of main into staging' })), 'merge', 'body says sync');
+  // a feature PR that merged its own base in (the factory's conflict prompt) joins branches, but is not a sync
+  const own = [mc("Merge remote-tracking branch 'origin/staging' into agent/1")];
+  assert.equal(isSyncPr(sp(), own), false, 'own base merged in: not a sync');
+  assert.equal(mergeMethodFor('squash', own, sp()), 'merge', 'but it still lands as a merge commit');
+  assert.equal(isSyncPr(sp(), [mc("Merge branch 'main' into staging")]), true, 'main merged into staging: a sync');
+  assert.equal(isSyncPr(sp(), [mc('Merge pull request #12 from a/b')]), false, 'a merged PR is not a sync');
   const n = (number, o) => ({ number, state: 'open', mergeable: true, mergeable_state: 'clean', ...o });
   assert.deepEqual(syncCheck([n(78)]), { ok: true, conflicting: [], unknown: [] });
   assert.deepEqual(syncCheck([n(78, { mergeable: false, mergeable_state: 'dirty' })]).conflicting, [78]);

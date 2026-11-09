@@ -745,7 +745,7 @@ async function verifyUnblocked(id, token, repo, branch) {
     log('merge.resync', { task: id, branch, ...r, round: f.round });
     return;
   }
-  say(id, 'factory', `[factory] Merged into ${branch}, but ${f.why}: the follow-up sync did not settle it. This one needs you.`, { ping: true });
+  say(id, 'factory', `[factory] Merged into ${branch}, but ${f.why}. This one needs you.`, { ping: true });
   log('merge.verify_conflict', { task: id, branch, ...r });
 }
 // a sync merge whose target PR GitHub could not judge yet: look again on the poll (no ping until it stays unknown)

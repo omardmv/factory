@@ -44,12 +44,22 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
 // commits: the PR's commits as GitHub lists them ({ parents: [...] }).
 const SYNC_TITLE = /\b(sync(s|ed|ing)?|(resolv(e|es|ed|ing)|fix(es|ed|ing)?)\b.*\bconflicts?|conflicts?\b.*\bresol)/i;
 const joinsBranches = (commits = []) => commits.some((c) => (c.parents?.length ?? 0) > 1);
-// pr (optional): the GitHub PR, whose title, body or branch name may say it is a sync
+// A PR that exists to sync: its title, body or branch name says so, or it merges in a branch that is not its own base.
+// (A feature PR that merged its own base in, as the factory's conflict prompt asks, is not a sync: it must not
+// start a follow-up sync of an unrelated target PR.) Used for the post-merge check.
 export function isSyncPr(pr = {}, commits = []) {
-  return SYNC_TITLE.test(String(pr.title ?? '')) || SYNC_TITLE.test(String(pr.body ?? '').slice(0, 2000)) || SYNC_TITLE.test(String(pr.head?.ref ?? '').replace(/[-_/]+/g, ' ')) || joinsBranches(commits);
+  if (SYNC_TITLE.test(String(pr.title ?? '')) || SYNC_TITLE.test(String(pr.body ?? '').slice(0, 2000)) || SYNC_TITLE.test(String(pr.head?.ref ?? '').replace(/[-_/]+/g, ' '))) return true;
+  const base = String(pr.base?.ref ?? '');
+  return commits.some((c) => {
+    const msg = String(c.commit?.message ?? '');
+    if ((c.parents?.length ?? 0) < 2 || /^Merge pull request #\d+/.test(msg)) return false;
+    const from = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(msg)?.[1];
+    return !from || (from !== base && from !== `origin/${base}`);
+  });
 }
+// The merge method: any merge commit in the head means a merge commit (a squash would drop the merged-in parent).
 export function mergeMethodFor(projectMethod, commits = [], pr = null) {
-  return isSyncPr(pr ?? {}, commits) ? 'merge' : projectMethod ?? 'merge';
+  return joinsBranches(commits) || (pr && isSyncPr(pr, commits)) ? 'merge' : projectMethod ?? 'merge';
 }
 // After a sync PR lands: the open PRs from the target branch into somewhere else (staging -> main) must now merge cleanly.
 // prs: GitHub PRs fetched after the merge. -> { ok, conflicting: [numbers], unknown: [numbers] }
