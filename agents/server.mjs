@@ -739,7 +739,7 @@ async function verifyUnblocked(id, token, repo, branch) {
   update(id, (x) => { delete x.syncVerify; });
   if (f.action === 'resync') {
     // main moved again (or the sync missed a conflict): sync again, automatically, once
-    update(id, (x) => { x.syncRounds = f.round; x.status = 'working'; x.mergeWanted = false; });
+    update(id, (x) => { x.syncRounds = f.round; x.status = 'working'; x.mergeWanted = false; x.pr = { ...x.pr, state: 'open' }; }); // working again: not shown as merged (findPr refreshes it)
     say(id, 'factory', `[factory] Merged, but ${f.prs.map((n) => `#${n}`).join(', ')} from ${branch} still conflicts. Starting a follow-up sync (round ${f.round} of ${MAX_SYNC_ROUNDS}).`);
     enqueue(id, `[factory] Your sync PR merged into ${branch}, but ${f.prs.map((n) => `#${n}`).join(', ')} still conflicts with its base (the base moved, or the first sync missed it). Work on your own branch \`agent/${id}\` (reset it to \`origin/${branch}\`; the old head is already merged, so a plain push works, no force): merge the base in with a real merge (\`git merge origin/<base>\`, resolving every conflict), put "sync" in the PR title, push \`agent/${id}\` and open a new PR into ${branch}. Never rebase, squash or force-push, and never hand the merge to the person: the factory merges it with a merge commit.`, 'bypassPermissions', 'conflict');
     log('merge.resync', { task: id, branch, ...r, round: f.round });
