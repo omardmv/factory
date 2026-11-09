@@ -38,7 +38,7 @@ const unknown = (url) => url.includes('/pulls?') ? [{ number: 78 }] : { number: 
   const tasks = { a: { id: 'a', status: 'merged', mergeWanted: true, pr: { number: 70, state: 'merged' }, syncVerify: {} } };
   const { d, calls } = mk(tasks, { gh: conflicting });
   await verifyUnblocked(d, 'a', 'tok', 'o/shop', 'staging');
-  assert.equal(tasks.a.status, 'working'); assert.equal(tasks.a.pr.state, 'open'); assert.equal(tasks.a.pr.number, 70);
+  assert.equal(tasks.a.status, 'working'); assert.equal(tasks.a.pr, null, 'the merged PR is no longer the task PR');
   assert.equal(tasks.a.resyncFrom, 70); assert.equal(tasks.a.syncRounds, 1); assert.equal(tasks.a.syncVerify, undefined);
   assert.equal(calls.enq.length, 1); assert.match(calls.enq[0][1], /agent\/a/); assert.equal(calls.enq[0][3], 'conflict');
   console.log('ok - verifyUnblocked: a conflict starts one follow-up sync and the task is working again');
