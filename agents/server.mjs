@@ -15,7 +15,8 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
-import { readSyncCommits, mergeMethodFor, isSyncPr, syncCheck, syncFollowUp, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
+import * as syncWire from './syncwire.mjs';
+import { readSyncCommits, mergeMethodFor, isSyncPr, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { addAgentJob, takeJobs } from './queue.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
@@ -162,19 +163,7 @@ function workspaceBranches(task) {
   if (r.status !== 0) return [];
   return r.stdout.split('\n').map((b) => b.trim()).filter((b) => b && b !== `agent/${task.id}` && b !== task.base && /^[\w./-]+$/.test(b)).slice(0, 10);
 }
-async function findPr(task) {
-  try {
-    const owner = task.repo.split('/')[0];
-    const token = await githubToken(task.repo);
-    let p = pickPr(await gh(token, `/repos/${task.repo}/pulls?state=all&sort=created&direction=desc&head=${owner}:agent/${task.id}`));
-    // the first PR merged: a follow-up (sync) PR from another branch of the workspace is the one in play
-    if (p?.merged_at) for (const b of workspaceBranches(task)) { const o = pickPr(await gh(token, `/repos/${task.repo}/pulls?state=open&head=${owner}:${encodeURIComponent(b)}`)); if (o) { p = o; log('pr.followup', { task: task.id, branch: b, pr: o.number }); break; } }
-    // an agent that pushed its PR from another branch (it happened: perf/lazy-screens): look at every
-    // branch in its workspace, so the PR is still reviewed and reaches the founder instead of being orphaned
-    if (!p) for (const b of workspaceBranches(task)) { p = (await gh(token, `/repos/${task.repo}/pulls?state=all&head=${owner}:${encodeURIComponent(b)}`))[0]; if (p) { log('pr.other_branch', { task: task.id, branch: b, pr: p.number }); break; } }
-    return p ? { number: p.number, url: p.html_url, state: p.merged_at ? 'merged' : p.state, head: p.head.sha } : null;
-  } catch (e) { log('pr.lookup_failed', { task: task.id, error: e.message }); return null; }
-}
+const findPr = (task) => syncWire.findPr({ githubToken, gh, workspaceBranches, pickPr, log }, task);
 // projects whose PRs get a preview + e2e report back ([factory] ✅/❌); the rest are reviewed as soon as the PR exists
 const hasChecks = (t) => PROJECTS[t.project]?.checks === 'preview';
 // projects whose green PRs are also tested by the independent QA tester before review
@@ -379,7 +368,7 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     log('unasked.caught', { task: id, question: asked.question });
   } else done.waitingOn = out.waitingOn;
   if (out.type === 'coordinator') { save(done); return afterCoordinator(done, mode, from, r.last, out.decision); }
-  if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
+  if (out.pr !== undefined && done.kind === 'change') { done.pr = out.pr; syncWire.settleResync(done); }
   // auto-go: a brief with no question for the person starts the run at once
   if (out.status === 'waiting for you' && mode === 'plan' && done.kind === 'change' && done.phase === 'brief' && !out.decision && !asked.asks && autoGo(done)) {
     done.phase = 'run'; done.status = 'queued'; delete done.waitingOn; save(done);
@@ -723,33 +712,10 @@ async function autoMerge(id) {
   if (isSyncPr(pr, Array.isArray(commits) ? commits : [])) verifyUnblocked(id, token, t.repo, p.autoMerge).catch((e) => log('merge.verify_failed', { task: id, error: e.message }));
 }
 // After a sync merge: the open PRs from the branch just merged into (staging -> main) must now be mergeable. Said, not asked.
-async function verifyUnblocked(id, token, repo, branch) {
-  const owner = repo.split('/')[0];
-  let r;
-  for (let i = 0; i < 6; i++) { // GitHub computes mergeability lazily
-    const list = await gh(token, `/repos/${repo}/pulls?state=open&head=${owner}:${branch}&per_page=20`);
-    r = syncCheck(await Promise.all(list.map((x) => gh(token, `/repos/${repo}/pulls/${x.number}`))));
-    if (r.ok || r.conflicting.length) break;
-    await new Promise((res) => setTimeout(res, 5000));
-  }
-  const cur = load(id);
-  const f = syncFollowUp(r, cur.syncRounds ?? 0, MAX_SYNC_ROUNDS, cur.syncRechecks ?? 0);
-  if (f.action === 'done') { update(id, (x) => { delete x.syncVerify; delete x.syncRechecks; }); log('merge.verified', { task: id, branch }); return; }
-  if (f.action === 'recheck') { update(id, (x) => { x.syncVerify = { branch, repo }; x.syncRechecks = f.tries; }); log('merge.verify_later', { task: id, branch, tries: f.tries }); return; } // retryMerges looks again
-  update(id, (x) => { delete x.syncVerify; });
-  if (f.action === 'resync') {
-    // main moved again (or the sync missed a conflict): sync again, automatically, once
-    update(id, (x) => { x.syncRounds = f.round; x.status = 'working'; x.mergeWanted = false; x.pr = { ...x.pr, state: 'open' }; }); // working again: not shown as merged (findPr refreshes it)
-    say(id, 'factory', `[factory] Merged, but ${f.prs.map((n) => `#${n}`).join(', ')} from ${branch} still conflicts. Starting a follow-up sync (round ${f.round} of ${MAX_SYNC_ROUNDS}).`);
-    enqueue(id, `[factory] Your sync PR merged into ${branch}, but ${f.prs.map((n) => `#${n}`).join(', ')} still conflicts with its base (the base moved, or the first sync missed it). Work on your own branch \`agent/${id}\` (reset it to \`origin/${branch}\`; the old head is already merged, so a plain push works, no force): merge the base in with a real merge (\`git merge origin/<base>\`, resolving every conflict), put "sync" in the PR title, push \`agent/${id}\` and open a new PR into ${branch}. Never rebase, squash or force-push, and never hand the merge to the person: the factory merges it with a merge commit.`, 'bypassPermissions', 'conflict');
-    log('merge.resync', { task: id, branch, ...r, round: f.round });
-    return;
-  }
-  say(id, 'factory', `[factory] Merged into ${branch}, but ${f.why}. This one needs you.`, { ping: true });
-  log('merge.verify_conflict', { task: id, branch, ...r });
-}
+const syncDeps = () => ({ gh, load, update, say, enqueue, log, maxRounds: MAX_SYNC_ROUNDS, sleep: (ms) => new Promise((res) => setTimeout(res, ms)), tasks: allTasks, githubToken });
+const verifyUnblocked = (id, token, repo, branch) => syncWire.verifyUnblocked(syncDeps(), id, token, repo, branch);
 // a sync merge whose target PR GitHub could not judge yet: look again on the poll (no ping until it stays unknown)
-const retrySyncChecks = async () => { for (const t of allTasks().filter((x) => x.syncVerify)) { const token = await githubToken(t.syncVerify.repo); await verifyUnblocked(t.id, token, t.syncVerify.repo, t.syncVerify.branch).catch((e) => log('merge.verify_failed', { task: t.id, error: e.message })); } };
+const retrySyncChecks = () => syncWire.retrySyncChecks(syncDeps());
 const retryMerges = async () => { await retrySyncChecks(); for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
 
 // ---------- the final evidence report, on the PR (agents/report.mjs) ----------
@@ -951,7 +917,7 @@ async function watchPrograms() {
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
     for (const i of t.plan.filter((i) => i.taskId)) { // PR states can change on GitHub (merged, closed by hand)
       const k = load(i.taskId);
-      if (k.pr?.state !== 'merged') { const pr = await findPr(k); if (pr && pr.state !== k.pr?.state) { k.pr = pr; if (pr.state === 'merged') k.status = 'merged'; save(k); } }
+      if (k.pr?.state !== 'merged') { const pr = await findPr(k); if (pr && pr.state !== k.pr?.state) { k.pr = pr; syncWire.settleResync(k); if (pr.state === 'merged') k.status = 'merged'; save(k); } }
     }
     if (openingEpic.has(t.id)) continue;
     announceProgress(t);
@@ -1297,7 +1263,7 @@ async function loopsTick(now = Date.now()) {
   // a loop PR merged or closed by hand frees the cap: refresh the PR state of open loop tasks
   for (const t of allTasks().filter((x) => isOpenLoop(x) && x.pr)) {
     const pr = await findPr(t);
-    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; if (pr.state === 'merged') x.status = 'merged'; });
+    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; syncWire.settleResync(x); if (pr.state === 'merged') x.status = 'merged'; });
   }
   const tasks = allTasks();
   for (const [name, project] of Object.entries(PROJECTS)) {
