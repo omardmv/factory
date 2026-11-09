@@ -191,7 +191,9 @@ Telegram and the dashboard: `task [--auto]`, `report`, `program`, `batch`,
 to the agents API on the box's loopback; the token stays on the box). The
 `factory-drive` skill (`skills/`, linked into `~/.claude/skills`) makes a
 Claude Code session on the laptop an operator console: it hands every task
-to the factory and relays the agents, instead of coding itself.
+to the factory and relays the agents, instead of coding itself, and when
+everything it started has ended it closes itself with `bin/claude-done`
+(kills its own claude and shell after a few seconds; resumable).
 
 Box (`factory-box`, runs from `/opt/factory/src`, pulled every 5 minutes):
 `up`, `e2e`, `down`, `reset`, `snapshot`, `snapshot-all` (nightly 03:00),

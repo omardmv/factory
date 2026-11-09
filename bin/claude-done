@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# claude-done - end the Claude Code session this runs in, once its work is
+# finished: a few seconds later (so the last message is saved) the claude
+# process and the shell that started it get SIGTERM/SIGHUP, which closes the
+# tab or screen window. The conversation stays on disk and can be resumed.
+#
+#   claude-done [seconds]      (default 3)
+set -euo pipefail
+delay="${1:-3}"
+pid=$$ claude=""
+while [ "$pid" -gt 1 ]; do
+  case "$(ps -o comm= -p "$pid" 2>/dev/null)" in */claude|claude) claude="$pid"; break ;; esac
+  pid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+done
+[ -n "$claude" ] || { echo "not inside a claude session" >&2; exit 1; }
+shell="$(ps -o ppid= -p "$claude" | tr -d ' ')"
+case "$(ps -o comm= -p "$shell" 2>/dev/null)" in *sh) ;; *) shell="" ;; esac
+nohup sh -c "sleep $delay; kill -TERM $claude 2>/dev/null; sleep 2; kill -0 $claude 2>/dev/null && kill -KILL $claude; ${shell:+kill -HUP $shell 2>/dev/null}" >/dev/null 2>&1 &
+echo "session closes in ${delay}s"

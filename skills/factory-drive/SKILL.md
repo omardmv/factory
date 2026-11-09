@@ -31,7 +31,10 @@ and carry the person's answers back.
   `stopped`, report it in one line and start no more waits. If a task's
   work is done (PR merged or closed) but it still shows as running or
   waiting, `factory stop` it. Stop your own background waits (TaskStop) for
-  tasks that ended. Leave nothing running.
+  tasks that ended. Leave nothing running. When every task this session
+  started has ended and nothing waits on the person, write the final one-line
+  report, then run `claude-done` as the last tool call: the session closes
+  itself (still resumable from the sidebar).
 - Don't poll for the sake of it: start `factory wait` in the background and
   get on with the conversation.
 
