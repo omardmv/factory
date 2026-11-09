@@ -116,6 +116,8 @@ console.log(`all ${cases.length} passed`);
   assert.equal(isSyncPr(sp({ title: 'feat: sync settings' }), [mc('Updated the branch')]), false, 'unnamed merge, title only mid-sentence');
   assert.equal(isSyncPr(sp({ title: 'chore: sync main into staging' }), [mc('Updated the branch')]), true, 'unnamed merge, title starts with sync');
   assert.equal(isSyncPr(sp({ body: 'a sync of main' }), [mc('Updated the branch')]), false, 'body is not read');
+  assert.equal(isSyncPr(sp(), [mc("Merge commit 'abc1234' into agent/1")]), false, 'merge of a commit: no branch, not a sync');
+  assert.equal(isSyncPr(sp(), [mc("Merge tag 'v1.2' into agent/1")]), false, 'merge of a tag: not a sync');
   assert.equal(isSyncPr(sp(), [mc('Merge origin/main')]), true, 'non-default message naming another branch');
   assert.equal(isSyncPr(sp({ title: 'sync main into staging' }), []), false, 'no merge commit: nothing was merged in');
   const n = (number, o) => ({ number, state: 'open', mergeable: true, mergeable_state: 'clean', ...o });

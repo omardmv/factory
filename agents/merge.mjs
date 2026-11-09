@@ -66,7 +66,8 @@ export function isSyncPr(pr = {}, commits = []) {
   const base = String(pr.base?.ref ?? '');
   return commits.some((c) => {
     const msg = String(c.commit?.message ?? '');
-    if ((c.parents?.length ?? 0) < 2 || /^Merge pull request #\d+/.test(msg)) return false;
+    // a merged PR, or a merge of one commit or tag (no branch name to compare with): not a sync
+    if ((c.parents?.length ?? 0) < 2 || /^Merge (?:pull request #\d+|(?:commit|tag) ')/.test(msg)) return false;
     const from = mergedFrom(msg);
     if (from === null) return startsSync(pr) || /^(?:Sync|Resolve)\b/i.test(msg);
     return from !== base && from !== `origin/${base}` && from !== `refs/remotes/origin/${base}`;

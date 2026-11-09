@@ -44,6 +44,12 @@ export async function retrySyncChecks(d) {
   }
 }
 
+// The new PR is the task's PR now: the resync marker has done its job. Mutates and returns the task.
+export function settleResync(task) {
+  if (task.resyncFrom != null && task.pr && task.pr.number !== task.resyncFrom) delete task.resyncFrom;
+  return task;
+}
+
 // The PR lookup. d: { githubToken(repo), gh(token, url), workspaceBranches(task), pickPr(list), log }
 export async function findPr(d, task) {
   try {

@@ -110,3 +110,10 @@ const task = { id: 'a', repo: 'o/shop' };
   assert.equal(await findPr(d, task), null); assert.equal(logs[0][0], 'pr.lookup_failed');
   console.log('ok - findPr: a failed lookup is null and logged');
 }
+{ // settleResync: cleared once the new PR is the task's PR
+  const { settleResync } = await import('./syncwire.mjs');
+  assert.equal(settleResync({ pr: null, resyncFrom: 5 }).resyncFrom, 5, 'no new PR yet: kept');
+  assert.equal(settleResync({ pr: { number: 5 }, resyncFrom: 5 }).resyncFrom, 5, 'still the merged one: kept');
+  assert.equal(settleResync({ pr: { number: 12 }, resyncFrom: 5 }).resyncFrom, undefined, 'new PR found: cleared');
+  console.log('ok - settleResync: the marker goes once the new PR is found');
+}

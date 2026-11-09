@@ -368,7 +368,7 @@ async function agentRun({ id, prompt, mode, from, origin }) {
     log('unasked.caught', { task: id, question: asked.question });
   } else done.waitingOn = out.waitingOn;
   if (out.type === 'coordinator') { save(done); return afterCoordinator(done, mode, from, r.last, out.decision); }
-  if (out.pr !== undefined && done.kind === 'change') done.pr = out.pr;
+  if (out.pr !== undefined && done.kind === 'change') { done.pr = out.pr; syncWire.settleResync(done); }
   // auto-go: a brief with no question for the person starts the run at once
   if (out.status === 'waiting for you' && mode === 'plan' && done.kind === 'change' && done.phase === 'brief' && !out.decision && !asked.asks && autoGo(done)) {
     done.phase = 'run'; done.status = 'queued'; delete done.waitingOn; save(done);
@@ -917,7 +917,7 @@ async function watchPrograms() {
     if (running.has(t.id) || queue.some((j) => j.id === t.id)) continue;
     for (const i of t.plan.filter((i) => i.taskId)) { // PR states can change on GitHub (merged, closed by hand)
       const k = load(i.taskId);
-      if (k.pr?.state !== 'merged') { const pr = await findPr(k); if (pr && pr.state !== k.pr?.state) { k.pr = pr; if (pr.state === 'merged') k.status = 'merged'; save(k); } }
+      if (k.pr?.state !== 'merged') { const pr = await findPr(k); if (pr && pr.state !== k.pr?.state) { k.pr = pr; syncWire.settleResync(k); if (pr.state === 'merged') k.status = 'merged'; save(k); } }
     }
     if (openingEpic.has(t.id)) continue;
     announceProgress(t);
@@ -1263,7 +1263,7 @@ async function loopsTick(now = Date.now()) {
   // a loop PR merged or closed by hand frees the cap: refresh the PR state of open loop tasks
   for (const t of allTasks().filter((x) => isOpenLoop(x) && x.pr)) {
     const pr = await findPr(t);
-    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; if (pr.state === 'merged') x.status = 'merged'; });
+    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; syncWire.settleResync(x); if (pr.state === 'merged') x.status = 'merged'; });
   }
   const tasks = allTasks();
   for (const [name, project] of Object.entries(PROJECTS)) {
