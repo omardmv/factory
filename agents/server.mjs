@@ -699,7 +699,10 @@ async function autoMerge(id) {
   }
   let merged;
   // a PR that brings a branch in (main into staging, conflict resolution) is merged with a merge commit, never squashed
-  const commits = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100`).catch(() => []);
+  // the newest commits are on the last page (a merge commit sits at the end); a failed read retries, never merges blind
+  let commits;
+  try { commits = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100&page=${Math.max(1, Math.ceil((pr.commits ?? 1) / 100))}`); }
+  catch (e) { log('merge.commits_failed', { task: id, error: e.message }); return; } // the next poll retries
   const method = mergeMethodFor(pr, Array.isArray(commits) ? commits : [], p.mergeMethod);
   try {
     merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: method, commit_title: `${pr.title} (#${pr.number})` });

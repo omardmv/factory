@@ -42,13 +42,13 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
 // land with a merge commit. A squash drops the other parent, so the PR it was meant to unblock (staging -> main)
 // stays CONFLICTING. Everything else uses the project's configured method (default 'merge').
 // commits: the PR's commits as GitHub lists them ({ parents: [...], commit: { message } }).
-const SYNC_TITLE = /\b(sync(s|ed|ing)?|resolv(e|es|ed|ing)\b.*\bconflicts?|conflicts?\b.*\bresol)/i;
+const SYNC_TITLE = /\b(sync(s|ed|ing)?|(resolv(e|es|ed|ing)|fix(es|ed|ing)?)\b.*\bconflicts?|conflicts?\b.*\bresol)/i;
 export function isSyncPr(pr, commits = []) {
-  if (SYNC_TITLE.test(String(pr.title ?? '')) || SYNC_TITLE.test(String(pr.head?.ref ?? '').replace(/[-_/]+/g, ' '))) return true;
+  if (SYNC_TITLE.test(String(pr.title ?? '')) || SYNC_TITLE.test(String(pr.body ?? '').slice(0, 2000)) || SYNC_TITLE.test(String(pr.head?.ref ?? '').replace(/[-_/]+/g, ' '))) return true;
   // a merge commit that is not just "bring the PR's own base up to date" is another branch brought in
   const base = String(pr.base?.ref ?? '');
   return commits.some((c) => {
-    if ((c.parents?.length ?? 0) < 2) return false;
+    if ((c.parents?.length ?? 0) < 2 || /^Merge pull request #\d+/.test(String(c.commit?.message ?? ''))) return false;
     const from = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(String(c.commit?.message ?? ''))?.[1];
     return !from || (from !== base && from !== `origin/${base}`);
   });
