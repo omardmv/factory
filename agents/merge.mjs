@@ -38,14 +38,53 @@ export function mergeDecision(pr, t, into, conflictRounds = 0, maxConflictRounds
   return { action: 'merge' };
 }
 
-// How to merge a PR. A PR whose head contains merge commits exists to bring one branch into another
-// (a conflict resolution, a branch sync): squash or rebase would drop the merged-in branch as a parent
-// and the branches would stay apart, so it merges with a merge commit. Any other PR uses the project's method.
+// How to merge: a PR that brings another branch in (main merged into staging, a conflict resolution) must
+// land with a merge commit. A squash drops the other parent, so the PR it was meant to unblock (staging -> main)
+// stays CONFLICTING. Everything else uses the project's method (default 'merge').
 // commits: the PR's commits as GitHub lists them ({ parents: [...] }).
-export function mergeMethodFor(projectMethod, commits = []) {
-  const method = projectMethod ?? 'merge';
-  const joins = commits.some((c) => (c.parents?.length ?? 0) > 1);
-  return joins ? 'merge' : method;
+const SYNC_TITLE = /\b(sync(s|ed|ing)?|(resolv(e|es|ed|ing)|fix(es|ed|ing)?)\b.*\bconflicts?|conflicts?\b.*\bresol)/i;
+const joinsBranches = (commits = []) => commits.some((c) => (c.parents?.length ?? 0) > 1);
+// A PR that exists to sync: its title, body or branch name says so, or it merges in a branch that is not its own base.
+// (A feature PR that merged its own base in, as the factory's conflict prompt asks, is not a sync: it must not
+// start a follow-up sync of an unrelated target PR.) Used for the post-merge check.
+export function isSyncPr(pr = {}, commits = []) {
+  if (SYNC_TITLE.test(String(pr.title ?? '')) || SYNC_TITLE.test(String(pr.body ?? '').slice(0, 2000)) || SYNC_TITLE.test(String(pr.head?.ref ?? '').replace(/[-_/]+/g, ' '))) return true;
+  const base = String(pr.base?.ref ?? '');
+  return commits.some((c) => {
+    const msg = String(c.commit?.message ?? '');
+    if ((c.parents?.length ?? 0) < 2 || /^Merge pull request #\d+/.test(msg)) return false;
+    const from = /^Merge (?:remote-tracking )?branch '([^']+)'/.exec(msg)?.[1];
+    return !from || (from !== base && from !== `origin/${base}`);
+  });
+}
+// The merge method: any merge commit in the head means a merge commit (a squash would drop the merged-in parent).
+export function mergeMethodFor(projectMethod, commits = [], pr = null) {
+  return joinsBranches(commits) || (pr && isSyncPr(pr, commits)) ? 'merge' : projectMethod ?? 'merge';
+}
+// After a sync PR lands: the open PRs from the target branch into somewhere else (staging -> main) must now merge cleanly.
+// prs: GitHub PRs fetched after the merge. -> { ok, conflicting: [numbers], unknown: [numbers] }
+export function syncCheck(prs = []) {
+  const open = prs.filter((p) => p.state === 'open');
+  const conflicting = open.filter((p) => p.mergeable === false || p.mergeable_state === 'dirty').map((p) => p.number);
+  const unknown = open.filter((p) => !conflicting.includes(p.number) && (p.mergeable === null || p.mergeable === undefined)).map((p) => p.number);
+  return { ok: !conflicting.length && !unknown.length, conflicting, unknown };
+}
+// The PR's newest commits (a merge commit sits at the end): the last page GitHub serves (it lists at most 250).
+// A failed read is a retry, never a merge decided blind. fetch(page) -> commits.
+export async function readSyncCommits(fetchPage, pr) {
+  const page = Math.min(3, Math.max(1, Math.ceil((pr.commits ?? 1) / 100)));
+  try { const c = await fetchPage(page); return { commits: Array.isArray(c) ? c : [] }; }
+  catch (e) { return { retry: true, error: String(e.message ?? e) }; }
+}
+
+// A PR from the target branch still conflicts after a sync landed: sync again (bounded), then surface it.
+// -> { action: 'done' } | { action: 'recheck', tries } | { action: 'resync', round, prs } | { action: 'surface', why }
+export function syncFollowUp(check, rounds = 0, maxRounds = 1, rechecks = 0, maxRechecks = 6) {
+  if (check.ok) return { action: 'done' };
+  if (!check.conflicting.length) return rechecks < maxRechecks ? { action: 'recheck', tries: rechecks + 1 } // GitHub is still computing: look again on a later poll
+    : { action: 'surface', why: `GitHub still has not said whether ${check.unknown.map((n) => `#${n}`).join(', ')} merges cleanly after ${maxRechecks} later checks (no follow-up sync was needed or started; check it)` };
+  if (rounds >= maxRounds) return { action: 'surface', why: `${check.conflicting.map((n) => `#${n}`).join(', ')} still conflicts after ${maxRounds} follow-up sync${maxRounds === 1 ? '' : 's'}` };
+  return { action: 'resync', round: rounds + 1, prs: check.conflicting };
 }
 
 // The founder approves each feature before it merges (project config "approval": true).

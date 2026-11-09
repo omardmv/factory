@@ -15,12 +15,12 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
-import { mergeDecision, approvalGate, approveCheck, deployState, mergeMethodFor } from './merge.mjs';
+import { readSyncCommits, mergeMethodFor, isSyncPr, syncCheck, syncFollowUp, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { addAgentJob, takeJobs } from './queue.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
 import { checkUnasked, decisionMessage, waitingOnLine, decidedMessage, expandNumberAnswer, hasDecisionBlock } from './unasked.mjs';
-import { parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
+import { pickPr, parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, noPrNudgePrompt, afterCoordinator as coordinatorNext, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
 import { mergeDecisions, decisionsBrief, changeDecision, parsePlan, mergePlan, progress, announcements, PLAN_RULES, talkReply, isGoCommand } from './plan.mjs';
 import { openEpicIssue, refsLine, copyIssueFields, saveIssueFields, syncEpicIfChanged as syncEpicIssue, droppedWithIssues } from './epic-issue.mjs';
 import { publishMedia, upsertComment, mediaFiles, lastE2eRun } from './media.mjs';
@@ -166,7 +166,9 @@ async function findPr(task) {
   try {
     const owner = task.repo.split('/')[0];
     const token = await githubToken(task.repo);
-    let p = (await gh(token, `/repos/${task.repo}/pulls?state=all&head=${owner}:agent/${task.id}`))[0];
+    let p = pickPr(await gh(token, `/repos/${task.repo}/pulls?state=all&sort=created&direction=desc&head=${owner}:agent/${task.id}`));
+    // the first PR merged: a follow-up (sync) PR from another branch of the workspace is the one in play
+    if (p?.merged_at) for (const b of workspaceBranches(task)) { const o = pickPr(await gh(token, `/repos/${task.repo}/pulls?state=open&head=${owner}:${encodeURIComponent(b)}`)); if (o) { p = o; log('pr.followup', { task: task.id, branch: b, pr: o.number }); break; } }
     // an agent that pushed its PR from another branch (it happened: perf/lazy-screens): look at every
     // branch in its workspace, so the PR is still reviewed and reaches the founder instead of being orphaned
     if (!p) for (const b of workspaceBranches(task)) { p = (await gh(token, `/repos/${task.repo}/pulls?state=all&head=${owner}:${encodeURIComponent(b)}`))[0]; if (p) { log('pr.other_branch', { task: task.id, branch: b, pr: p.number }); break; } }
@@ -545,6 +547,7 @@ Other reviewers look at this PR from other angles at the same time; stay on your
 // required checks) still applies. Refused merges retry on the next polls,
 // then go back to the person.
 const MERGE_TRIES = 10;
+const MAX_SYNC_ROUNDS = 1;
 const MAX_CONFLICT_ROUNDS = Number(process.env.MAX_CONFLICT_ROUNDS ?? 3);
 const MAX_CHECK_ROUNDS = Number(process.env.MAX_CHECK_ROUNDS ?? 3);
 const REQUIRED_CHECKS_WAIT_MIN = Number(process.env.REQUIRED_CHECKS_WAIT_MIN ?? 45);
@@ -698,13 +701,13 @@ async function autoMerge(id) {
     return;
   }
   let merged;
+  // a PR that brings a branch in (main into staging, conflict resolution) is merged with a merge commit, never squashed
+  // the newest commits are on the last page (a merge commit sits at the end); a failed read retries, never merges blind
+  const read = await readSyncCommits((page) => gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100&page=${page}`), pr);
+  if (read.retry) { log('merge.commits_failed', { task: id, error: read.error }); return; } // the next poll retries
+  const commits = read.commits;
+  const method = mergeMethodFor(p.mergeMethod, commits, pr);
   try {
-    // a PR that carries merge commits joins branches: it must land as a merge commit, whatever the project's method
-    let commits = [];
-    // no try/catch here: if the list can't be read, the outer catch counts a try and the next poll retries, rather than merging with the wrong method
-    for (let page = 1; page <= 3; page++) { const r = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100&page=${page}`); commits.push(...r); if (r.length < 100) break; }
-    const method = mergeMethodFor(p.mergeMethod, commits);
-    if (method !== (p.mergeMethod ?? 'merge')) log('merge.method', { task: id, pr: pr.number, method, projectMethod: p.mergeMethod });
     merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: method, commit_title: `${pr.title} (#${pr.number})` });
   } catch (e) {
     const x = update(id, (x) => { x.mergeTries = (x.mergeTries ?? 0) + 1; });
@@ -716,9 +719,38 @@ async function autoMerge(id) {
   const watch = p.deployCheck?.url && merged?.sha ? { sha: merged.sha, at: new Date().toISOString(), state: 'waiting' } : null;
   update(id, (x) => { x.pr = { ...x.pr, state: 'merged' }; x.status = 'merged'; x.mergeWanted = false; if (watch) x.deploy = watch; });
   say(id, 'factory', `[factory] 🚀 merged into ${p.autoMerge} (PR #${pr.number}, reviewed head ${t.reviewedSha.slice(0, 7)}). ${watch ? `The factory tells you here when ${p.autoMerge} runs it.` : p.autoMerge === 'dev' ? 'Staging deploys it now; production still waits for your sign-off.' : 'The server pulls it within 5 minutes.'}`);
-  log('merge.done', { task: id, pr: pr.number, into: p.autoMerge });
+  log('merge.done', { task: id, pr: pr.number, into: p.autoMerge, method });
+  if (isSyncPr(pr, Array.isArray(commits) ? commits : [])) verifyUnblocked(id, token, t.repo, p.autoMerge).catch((e) => log('merge.verify_failed', { task: id, error: e.message }));
 }
-const retryMerges = async () => { for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
+// After a sync merge: the open PRs from the branch just merged into (staging -> main) must now be mergeable. Said, not asked.
+async function verifyUnblocked(id, token, repo, branch) {
+  const owner = repo.split('/')[0];
+  let r;
+  for (let i = 0; i < 6; i++) { // GitHub computes mergeability lazily
+    const list = await gh(token, `/repos/${repo}/pulls?state=open&head=${owner}:${branch}&per_page=20`);
+    r = syncCheck(await Promise.all(list.map((x) => gh(token, `/repos/${repo}/pulls/${x.number}`))));
+    if (r.ok || r.conflicting.length) break;
+    await new Promise((res) => setTimeout(res, 5000));
+  }
+  const cur = load(id);
+  const f = syncFollowUp(r, cur.syncRounds ?? 0, MAX_SYNC_ROUNDS, cur.syncRechecks ?? 0);
+  if (f.action === 'done') { update(id, (x) => { delete x.syncVerify; delete x.syncRechecks; }); log('merge.verified', { task: id, branch }); return; }
+  if (f.action === 'recheck') { update(id, (x) => { x.syncVerify = { branch, repo }; x.syncRechecks = f.tries; }); log('merge.verify_later', { task: id, branch, tries: f.tries }); return; } // retryMerges looks again
+  update(id, (x) => { delete x.syncVerify; });
+  if (f.action === 'resync') {
+    // main moved again (or the sync missed a conflict): sync again, automatically, once
+    update(id, (x) => { x.syncRounds = f.round; x.status = 'working'; x.mergeWanted = false; x.pr = { ...x.pr, state: 'open' }; }); // working again: not shown as merged (findPr refreshes it)
+    say(id, 'factory', `[factory] Merged, but ${f.prs.map((n) => `#${n}`).join(', ')} from ${branch} still conflicts. Starting a follow-up sync (round ${f.round} of ${MAX_SYNC_ROUNDS}).`);
+    enqueue(id, `[factory] Your sync PR merged into ${branch}, but ${f.prs.map((n) => `#${n}`).join(', ')} still conflicts with its base (the base moved, or the first sync missed it). Work on your own branch \`agent/${id}\` (reset it to \`origin/${branch}\`; the old head is already merged, so a plain push works, no force): merge the base in with a real merge (\`git merge origin/<base>\`, resolving every conflict), put "sync" in the PR title, push \`agent/${id}\` and open a new PR into ${branch}. Never rebase, squash or force-push, and never hand the merge to the person: the factory merges it with a merge commit.`, 'bypassPermissions', 'conflict');
+    log('merge.resync', { task: id, branch, ...r, round: f.round });
+    return;
+  }
+  say(id, 'factory', `[factory] Merged into ${branch}, but ${f.why}. This one needs you.`, { ping: true });
+  log('merge.verify_conflict', { task: id, branch, ...r });
+}
+// a sync merge whose target PR GitHub could not judge yet: look again on the poll (no ping until it stays unknown)
+const retrySyncChecks = async () => { for (const t of allTasks().filter((x) => x.syncVerify)) { const token = await githubToken(t.syncVerify.repo); await verifyUnblocked(t.id, token, t.syncVerify.repo, t.syncVerify.branch).catch((e) => log('merge.verify_failed', { task: t.id, error: e.message })); } };
+const retryMerges = async () => { await retrySyncChecks(); for (const t of allTasks().filter((x) => x.mergeWanted && x.status === 'ready for you')) await autoMerge(t.id).catch((e) => log('merge.failed', { task: t.id, error: e.message })); };
 
 // ---------- the final evidence report, on the PR (agents/report.mjs) ----------
 // the agent's own last e2e run, as one line of the report (never hidden: a red run once reached the founder unseen)

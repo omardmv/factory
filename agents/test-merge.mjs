@@ -1,6 +1,6 @@
 // node agents/test-merge.mjs
 import assert from 'node:assert/strict';
-import { mergeDecision, requiredChecks, approvalGate, approveCheck, deployState, mergeMethodFor } from './merge.mjs';
+import { readSyncCommits, syncFollowUp, mergeMethodFor, isSyncPr, syncCheck, mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
 const t = { reviewedSha: 'abc1234def' };
 const pr = (o = {}) => ({ state: 'open', merged_at: null, base: { ref: 'staging' }, head: { sha: 'abc1234def' }, mergeable: true, mergeable_state: 'clean', ...o });
 const cases = [
@@ -88,3 +88,61 @@ for (const [name, p, rounds, want] of cases) {
   console.log('ok merge method: merge commits in the head force a merge commit, otherwise the project method');
 }
 console.log(`all ${cases.length} passed`);
+
+// sync PRs (another branch merged in, conflict resolution) land with a merge commit, never a squash
+{
+  const sp = (o = {}) => ({ title: 'feat(x): a thing', base: { ref: 'staging' }, head: { ref: 'agent/1' }, ...o });
+  const mc = (message, n = 2) => ({ parents: new Array(n).fill('p'), commit: { message } });
+  assert.equal(mergeMethodFor('squash', [mc('add a', 1)], sp()), 'squash', 'an ordinary PR keeps the project method');
+  assert.equal(mergeMethodFor(undefined, [], sp()), 'merge', 'default is merge');
+  assert.equal(mergeMethodFor('squash', [mc("Merge branch 'main' into staging")], sp()), 'merge', 'main merged in: merge commit');
+  assert.equal(mergeMethodFor('squash', [mc('Sync main into staging (ours)')], sp()), 'merge', 'unrecognised merge commit: merge');
+  assert.equal(mergeMethodFor('squash', [], sp({ title: 'chore: sync main into staging' })), 'merge', 'title says sync');
+  assert.equal(mergeMethodFor('squash', [], sp({ title: 'fix: resolve conflicts on PR #78' })), 'merge', 'title says resolve conflicts');
+  assert.equal(isSyncPr(sp({ head: { ref: 'sync/main-into-staging' } })), true, 'branch name says sync');
+  assert.equal(isSyncPr(sp({ title: 'feat: async queue' })), false, 'async is not sync');
+  assert.equal(mergeMethodFor('squash', [], sp({ title: 'fix conflicts on PR #78' })), 'merge', 'task wording: fix conflicts');
+  assert.equal(mergeMethodFor('squash', [], sp({ body: 'This is a sync of main into staging' })), 'merge', 'body says sync');
+  // a feature PR that merged its own base in (the factory's conflict prompt) joins branches, but is not a sync
+  const own = [mc("Merge remote-tracking branch 'origin/staging' into agent/1")];
+  assert.equal(isSyncPr(sp(), own), false, 'own base merged in: not a sync');
+  assert.equal(mergeMethodFor('squash', own, sp()), 'merge', 'but it still lands as a merge commit');
+  assert.equal(isSyncPr(sp(), [mc("Merge branch 'main' into staging")]), true, 'main merged into staging: a sync');
+  assert.equal(isSyncPr(sp(), [mc('Merge pull request #12 from a/b')]), false, 'a merged PR is not a sync');
+  const n = (number, o) => ({ number, state: 'open', mergeable: true, mergeable_state: 'clean', ...o });
+  assert.deepEqual(syncCheck([n(78)]), { ok: true, conflicting: [], unknown: [] });
+  assert.deepEqual(syncCheck([n(78, { mergeable: false, mergeable_state: 'dirty' })]).conflicting, [78]);
+  assert.deepEqual(syncCheck([n(78, { mergeable: null })]).unknown, [78]);
+  assert.equal(syncCheck([]).ok, true);
+  console.log('ok - sync PRs merge with a merge commit; target PR checked');
+}
+
+{
+  assert.equal(syncFollowUp({ ok: true, conflicting: [], unknown: [] }).action, 'done');
+  assert.deepEqual(syncFollowUp({ ok: false, conflicting: [78], unknown: [] }, 0, 1), { action: 'resync', round: 1, prs: [78] }, 'still conflicting: sync again');
+  assert.equal(syncFollowUp({ ok: false, conflicting: [78], unknown: [] }, 1, 1).action, 'surface', 'after the bound: the person');
+  assert.deepEqual(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1, 0), { action: 'recheck', tries: 1 }, 'unknown: look again later, no ping');
+  assert.equal(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1, 6, 6).action, 'surface', 'unknown after every re-check: the person');
+  assert.match(syncFollowUp({ ok: false, conflicting: [], unknown: [78] }, 0, 1, 6, 6).why, /no follow-up sync was needed or started/);
+  console.log('ok - follow-up sync is bounded');
+}
+
+// a failed read of the PR's commits is a retry, never a blind merge; the newest page is read
+{
+  const pages = [];
+  let r = await readSyncCommits(async (p) => { pages.push(p); return [{ parents: [1, 2] }]; }, { commits: 230 });
+  assert.deepEqual(pages, [3], 'last page of 230 commits'); assert.equal(r.commits.length, 1);
+  pages.length = 0; await readSyncCommits(async (p) => { pages.push(p); return []; }, { commits: 1000 }); assert.deepEqual(pages, [3], 'capped at 250 commits (page 3)');
+  pages.length = 0; await readSyncCommits(async (p) => { pages.push(p); return []; }, {}); assert.deepEqual(pages, [1]);
+  r = await readSyncCommits(async () => { throw new Error('502'); }, { commits: 3 });
+  assert.equal(r.retry, true); assert.equal(r.commits, undefined); assert.match(r.error, /502/);
+  console.log('ok - failed commit read retries');
+}
+{
+  // the cap: round 1 resyncs, round 2 (SYNC rounds used) surfaces to the person
+  const c = { ok: false, conflicting: [78], unknown: [] };
+  assert.equal(syncFollowUp(c, 0, 1).action, 'resync');
+  const s2 = syncFollowUp(c, 1, 1); assert.equal(s2.action, 'surface'); assert.match(s2.why, /after 1 follow-up sync/);
+  assert.equal(syncFollowUp(c, 2, 1).action, 'surface', 'never loops');
+  console.log('ok - follow-up sync capped at 1');
+}

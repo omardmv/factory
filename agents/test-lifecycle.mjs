@@ -1,6 +1,6 @@
 // node agents/test-lifecycle.mjs
 import assert from 'node:assert/strict';
-import { PARKED, isParked, waitingOnFor, parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
+import { pickPr, PARKED, isParked, waitingOnFor, parkReason, verdictOf, qaVerdictOf, afterAgentRun, crashRetryPrompt, afterCoordinator, pickupJob, afterQa, panelVerdict, afterReview, afterFactoryReport, researchHandoff, STUCK_STATUSES } from './lifecycle.mjs';
 
 let n = 0;
 const test = async (name, f) => { await f(); n++; console.log('ok', name); };
@@ -332,6 +332,16 @@ await test('research handoff names the document and where the comments are', () 
 
 await test('CI reports are ignored for a research task', () => {
   assert.equal(afterFactoryReport({ task: { phase: 'run', kind: 'change', type: 'research', status: 'research review', factoryRounds: 0 }, text: '❌ checks failed', maxRounds: 3 }).action, 'ignore');
+});
+
+await test('a follow-up sync PR: the open PR is followed, the merged one is not, and it goes to review', async () => {
+  assert.equal(pickPr([{ number: 81, state: 'closed', merged_at: 'x' }, { number: 82, state: 'open' }]).number, 82);
+  assert.equal(pickPr([{ number: 81, state: 'closed', merged_at: 'x' }]).number, 81, 'only merged: that one');
+  assert.equal(pickPr([]), undefined);
+  const t = task({ pr: { number: 81, state: 'merged', head: 'old' }, reviewedSha: 'old', verdict: 'PASS', greenSha: 'old' });
+  const r = await run(t, {}, deps({ findPr: async () => ({ number: 82, state: 'open', head: 'new2222' }), hasChecks: () => false }));
+  assert.equal(r.status, 'reviewing');
+  assert.equal(r.pr.number, 82);
 });
 
 console.log(`${n} groups passed`);
