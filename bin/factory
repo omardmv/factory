@@ -11,6 +11,19 @@
 #   factory runner <project> [count]             more self-hosted runners on the VPS for its repo
 #   factory push                                 push this factory repo (the box pulls it in <=5 min)
 #
+# Hand work to the factory's agents (the box's agents API, over ssh vps);
+# the project is -p, else the one whose repo is this checkout's origin:
+#   factory task [--auto] <text>                 a change (brief first; --auto skips it)
+#   factory report <text>                        a bug report: triage, reproduce, file the issue
+#   factory program <goal>                       a coordinator plans phases of changes
+#   factory batch < items.txt                    one task per line, no briefs
+#   factory tasks [--all]                        open tasks (--all: every task)
+#   factory show <id> [n]                        status, PR, the last n messages (8)
+#   factory reply <id> <text>                    answer the agent ("go", a decision, a steer)
+#   factory wait <id> [seconds]                  block until it says something new or needs you
+#   factory stop|pause <id>                      stop it, or leave a checkpoint to resume
+#   factory digest [hours]                       the morning summary, now
+#
 # <target> is `staging` or a PR number (`458`, `pr458`). Project: -p <name>
 # or FACTORY_PROJECT (required for environment commands). API paths are relative to the
 # project's API root (`/me`, `/threads`), page paths to the app root (`/`,
@@ -20,6 +33,7 @@ set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
 project="${FACTORY_PROJECT:-}"
 if [ "${1:-}" = "-p" ]; then project="$2"; shift 2; fi
+explicit_project="$project"
 
 # commands that are not about a running environment
 case "${1:-}" in
@@ -69,6 +83,78 @@ NEXT
     exit 0 ;;
   push)
     git -C "$FACTORY_DIR" push -q && echo "pushed; the box pulls within 5 minutes (or: ssh vps factory-box self-update)"
+    exit 0 ;;
+  task|report|program|batch|tasks|show|reply|stop|pause|wait|digest)
+    cmd="$1"; shift
+    # the agents API listens on the box's loopback; its token is read there and never leaves the box
+    agents() { # METHOD PATH [JSON]
+      local out code
+      out="$(printf '%s' "${3:-}" | ssh vps "curl -s -w '\n%{http_code}' -X $1 -H \"authorization: Bearer \$(cat /opt/factory/agents/api-token)\" -H content-type:application/json --data-binary @- 'http://127.0.0.1:19300$2'")"
+      code="${out##*$'\n'}"; out="${out%$'\n'*}"
+      [[ "$code" == 2* ]] || { echo "agents API $1 $2: HTTP $code $out" >&2; exit 1; }
+      printf '%s\n' "$out"
+    }
+    # the project: -p, else the one whose repo is this checkout's origin
+    target_project() {
+      [ -n "$explicit_project" ] && { echo "$explicit_project"; return; }
+      local repo
+      repo="$(git remote get-url origin 2>/dev/null | sed -E 's#^(git@[^:]+:|https?://[^/]+/)##; s#\.git$##')"
+      local p; p="$(ssh vps cat /opt/factory/agents/projects.json | jq -r --arg r "$repo" 'to_entries[] | select(.value.repo | ascii_downcase == ($r | ascii_downcase)) | .key' | head -1)"
+      [ -n "$p" ] || { echo "no factory project for ${repo:-this directory}; pass -p <project> ($(ssh vps cat /opt/factory/agents/projects.json | jq -r 'keys | join(", ")'))" >&2; exit 2; }
+      echo "$p"
+    }
+    text_arg() { if [ $# -gt 0 ]; then printf '%s' "$*"; else cat; fi; }
+    task_id() { [[ "${1:-}" =~ ^[0-9]{6}-[0-9a-f]{6}$ ]] || { echo "usage: factory $cmd <task id> ..." >&2; exit 2; }; }
+    created() { jq -r '"\(.id)  \(.project)  \(.kind)  \(.status)  \(.title)"'; }
+    case "$cmd" in
+      task)
+        auto=false; [ "${1:-}" = --auto ] && { auto=true; shift; }
+        p="$(target_project)"; text="$(text_arg "$@")"; [ -n "$text" ] || { echo "usage: factory task [--auto] <text>" >&2; exit 2; }
+        agents POST /tasks "$(jq -n --arg p "$p" --arg t "$text" --argjson a "$auto" '{project: $p, text: $t, auto: $a}')" | created ;;
+      report)
+        p="$(target_project)"; text="$(text_arg "$@")"; [ -n "$text" ] || { echo "usage: factory report <text>" >&2; exit 2; }
+        agents POST /tasks "$(jq -n --arg p "$p" --arg t "$text" '{project: $p, text: $t, kind: "report"}')" | created ;;
+      program)
+        p="$(target_project)"; text="$(text_arg "$@")"; [ -n "$text" ] || { echo "usage: factory program <goal>" >&2; exit 2; }
+        agents POST /programs "$(jq -n --arg p "$p" --arg g "$text" '{project: $p, goal: $g}')" | created ;;
+      batch)
+        p="$(target_project)"
+        agents POST /batches "$(jq -Rn --arg p "$p" '{project: $p, items: [inputs | select(length > 0)]}')" \
+          | jq -r '"batch \(.batch)", (.tasks[] | "\(.id)  \(.status)  \(.title)")' ;;
+      tasks)
+        filter='select(.status != "done" and .status != "stopped" and .status != "merged")'; [ "${1:-}" = --all ] && filter='.'
+        agents GET /tasks | jq -r "sort_by(.updatedAt) | .[] | $filter"' | "\(.id)  \(.project)  \(.kind)  \(.status)\(if .running then " (running)" else "" end)\(if .pr then "  PR #\(.pr.number)" else "" end)  \(.title | gsub("[\r\n]"; " "))"' ;;
+      show)
+        task_id "${1:-}"; n="${2:-8}"
+        agents GET "/tasks/$1" | jq -r --argjson n "$n" '
+          "\(.id)  \(.project)  \(.kind)  \(.status)\(if .running then " (running)" else "" end)",
+          "title: \(.title | gsub("[\r\n]"; " "))",
+          (if .pr then "PR: \(.pr.url) (\(.pr.state))" else empty end),
+          (if .verdict then "review: \(.verdict) after \(.reviews) round(s)" else empty end),
+          "cost: $\(.costUsd // 0 | . * 100 | round / 100)",
+          (if (.activity | length) > 0 then "last tool: \(.activity[-1].tool) \(.activity[-1].detail | .[0:160])" else empty end),
+          "", (.messages[-$n:][] | "--- \(.from) \(.at)\n\(.text)\n")' ;;
+      reply)
+        task_id "${1:-}"; id="$1"; shift; text="$(text_arg "$@")"; [ -n "$text" ] || { echo "usage: factory reply <id> <text>" >&2; exit 2; }
+        agents POST "/tasks/$id/messages" "$(jq -n --arg t "$text" '{text: $t}')" >/dev/null && echo "sent to $id" ;;
+      stop|pause)
+        task_id "${1:-}"; agents POST "/tasks/$1/$cmd" | jq -r '"\(.id)  \(.status)"' ;;
+      digest)
+        agents GET "/digest?hours=${1:-24}" | jq . ;;
+      wait)
+        # until the task says something new or needs the person; prints what was said
+        task_id "${1:-}"; id="$1"; every="${2:-30}"
+        t="$(agents GET "/tasks/$id")"; seen="$(jq '.messages | length' <<<"$t")"; was="$(jq -r .status <<<"$t")"
+        while :; do
+          sleep "$every"
+          t="$(agents GET "/tasks/$id")" || continue
+          if [ "$(jq '.messages | length' <<<"$t")" -gt "$seen" ] \
+            || jq -e --arg was "$was" '.status != $was and (.status | test("^(decision needed|waiting for you|ready for you|done|merged|stopped|paused)$"))' <<<"$t" >/dev/null; then
+            jq -r --argjson s "$seen" '"\(.id)  \(.status)\(if .pr then "  PR \(.pr.url)" else "" end)", "", (.messages[$s:][] | "--- \(.from) \(.at)\n\(.text)\n")' <<<"$t"
+            exit 0
+          fi
+        done ;;
+    esac
     exit 0 ;;
 esac
 

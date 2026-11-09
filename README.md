@@ -185,7 +185,13 @@ Design and what is still only planned: [docs/factory-v2.md](docs/factory-v2.md).
 ## Commands
 
 Laptop (`bin/factory`): `url`, `login`, `api`, `shot` against `staging` or a
-PR number, signed in; `init`, `runner`, `push`.
+PR number, signed in; `init`, `runner`, `push`; and the agents, like
+Telegram and the dashboard: `task [--auto]`, `report`, `program`, `batch`,
+`tasks`, `show`, `reply`, `wait`, `stop`, `pause`, `digest` (over `ssh vps`
+to the agents API on the box's loopback; the token stays on the box). The
+`factory-drive` skill (`skills/`, linked into `~/.claude/skills`) makes a
+Claude Code session on the laptop an operator console: it hands every task
+to the factory and relays the agents, instead of coding itself.
 
 Box (`factory-box`, runs from `/opt/factory/src`, pulled every 5 minutes):
 `up`, `e2e`, `down`, `reset`, `snapshot`, `snapshot-all` (nightly 03:00),
