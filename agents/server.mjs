@@ -15,7 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
-import { mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
+import { mergeDecision, approvalGate, approveCheck, deployState, mergeMethodFor } from './merge.mjs';
 import { watchdogDecision, statusClock, jobStarted } from './watchdog.mjs';
 import { addAgentJob, takeJobs } from './queue.mjs';
 import { needsDoctor, doctorPrompt, parseDiagnosis, doctorMessage } from './doctor.mjs';
@@ -699,7 +699,13 @@ async function autoMerge(id) {
   }
   let merged;
   try {
-    merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: p.mergeMethod ?? 'merge', commit_title: `${pr.title} (#${pr.number})` });
+    // a PR that carries merge commits joins branches: it must land as a merge commit, whatever the project's method
+    let commits = [];
+    // no try/catch here: if the list can't be read, the outer catch counts a try and the next poll retries, rather than merging with the wrong method
+    for (let page = 1; page <= 3; page++) { const r = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/commits?per_page=100&page=${page}`); commits.push(...r); if (r.length < 100) break; }
+    const method = mergeMethodFor(p.mergeMethod, commits);
+    if (method !== (p.mergeMethod ?? 'merge')) log('merge.method', { task: id, pr: pr.number, method, projectMethod: p.mergeMethod });
+    merged = await gh(token, `/repos/${t.repo}/pulls/${pr.number}/merge`, 'PUT', { sha: t.reviewedSha, merge_method: method, commit_title: `${pr.title} (#${pr.number})` });
   } catch (e) {
     const x = update(id, (x) => { x.mergeTries = (x.mergeTries ?? 0) + 1; });
     log('merge.retry', { task: id, tries: x.mergeTries, error: e.message });

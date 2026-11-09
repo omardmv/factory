@@ -1,6 +1,6 @@
 // node agents/test-merge.mjs
 import assert from 'node:assert/strict';
-import { mergeDecision, requiredChecks, approvalGate, approveCheck, deployState } from './merge.mjs';
+import { mergeDecision, requiredChecks, approvalGate, approveCheck, deployState, mergeMethodFor } from './merge.mjs';
 const t = { reviewedSha: 'abc1234def' };
 const pr = (o = {}) => ({ state: 'open', merged_at: null, base: { ref: 'staging' }, head: { sha: 'abc1234def' }, mergeable: true, mergeable_state: 'clean', ...o });
 const cases = [
@@ -77,5 +77,14 @@ for (const [name, p, rounds, want] of cases) {
   assert.match(deployState({ ...d, state: 'late' }, { version: '262147cd6c67aa', now: t0 + 90 * min }).say, /Late, but there/);
   assert.match(deployState(d, { version: null, now: t0 + 50 * min }).say, /did not say which version it runs/);
   console.log('ok deploy check: live when staging runs a version that includes the merge; one late notice after 45 min; then live, late');
+}
+{
+  const plain = [{ parents: ['a'] }, { parents: ['b'] }], joined = [{ parents: ['a'] }, { parents: ['b', 'c'] }];
+  assert.equal(mergeMethodFor('squash', plain), 'squash', 'ordinary PR keeps the project method');
+  assert.equal(mergeMethodFor('rebase', plain), 'rebase');
+  assert.equal(mergeMethodFor('squash', joined), 'merge', 'a PR with a merge commit lands as a merge commit');
+  assert.equal(mergeMethodFor('squash', []), 'squash', 'no commit list: project method');
+  assert.equal(mergeMethodFor(undefined, plain), 'merge', 'default is merge');
+  console.log('ok merge method: merge commits in the head force a merge commit, otherwise the project method');
 }
 console.log(`all ${cases.length} passed`);
