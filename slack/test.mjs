@@ -68,6 +68,8 @@ const dir = mkdtempSync(`${tmpdir()}/slackbot-`);
 for (const [f, v] of Object.entries({ 'slack-bot-token': 'xoxb-test', 'slack-app-token': 'xapp-test', 'agents-token': 'agents-secret' })) writeFileSync(`${dir}/${f}`, v);
 Object.assign(process.env, { SECRETS_DIR: dir, BOT_STATE: `${dir}/state.json`, SLACK_API: `http://127.0.0.1:${slackSrv.address().port}`, AGENTS_API: `http://127.0.0.1:${agentsSrv.address().port}`, FACTS_FILE: `${dir}/none.json`, SLACK_NOTIFY: 'all' }); // the older steps below check every message; the notify steps switch it off
 const bot = await import('./bot.mjs');
+const { parkedOnYou, WAITING_ON_YOU } = await import('./notify.mjs');
+const lifecycle = await import('../agents/lifecycle.mjs');
 const since = (i) => calls.slice(i);
 const posted = (i, ch) => since(i).filter((c) => c.method === 'chat.postMessage' && (!ch || c.p.channel === ch));
 let ok = 0; const step = async (name, f) => { await f(); ok++; console.log(`ok ${ok} - ${name}`); };
@@ -495,6 +497,17 @@ await step('notify: a refused automatic merge (needsYou) is posted', async () =>
   await bot.pushUpdates();
   const i = calls.length; t.messages.push({ from: 'factory', text: "[factory] not merged automatically: a check failed. It's ready for you.", needsYou: true });
   await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /not merged automatically/);
+});
+await step('notify: parked statuses follow lifecycle.mjs: every real waitingOn line posts, except a pause and the automatic merge retrying', async () => {
+  assert.deepEqual([...WAITING_ON_YOU].sort(), lifecycle.PARKED.filter((x) => x !== 'paused').sort());
+  for (const status of WAITING_ON_YOU) assert.ok(parkedOnYou({ status, waitingOn: lifecycle.waitingOnFor(status) }), status);
+  assert.ok(!parkedOnYou({ status: 'paused', waitingOn: lifecycle.waitingOnFor('paused') }));
+  assert.ok(!parkedOnYou({ status: 'ready for you', waitingOn: lifecycle.waitingOnFor('ready for you', { mergeWanted: true }) }));
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'research', { phase: 'run', status: 'working', title: 'research' });
+  await bot.pushUpdates();
+  t.status = 'research review'; t.waitingOn = lifecycle.waitingOnFor('research review');
+  const i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /research PR/);
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

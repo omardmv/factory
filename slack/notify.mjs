@@ -2,8 +2,10 @@
 // Pure, so `node slack/test.mjs` covers it without Slack. SLACK_NOTIFY=all brings back every message.
 export const notifyAll = (env = process.env) => String(env.SLACK_NOTIFY ?? '').toLowerCase() === 'all';
 export const isBriefLike = (t) => (t.kind === 'program' && t.phase === 'brief') || (t.kind === 'change' && t.phase === 'brief' && t.status === 'waiting for you');
-// the task is stopped on the person's call (status and waitingOn say so, whoever wrote the last message)
-export const parkedOnYou = (t) => ['waiting for you', 'decision needed'].includes(t.status) && /^your call\b/i.test(t.waitingOn ?? '');
+// the task rests on the person (agents/lifecycle.mjs PARKED, minus a pause they chose themselves), whoever wrote the last message;
+// slack/test.mjs checks this list against lifecycle.mjs
+export const WAITING_ON_YOU = ['waiting for you', 'decision needed', 'ready for you', 'research review', 'waiting for merges'];
+export const parkedOnYou = (t) => WAITING_ON_YOU.includes(t.status) && !!String(t.waitingOn ?? '').trim() && !/nothing needed from you/i.test(t.waitingOn);
 // true when message m of task t needs the person to answer or press a button:
 // a DECISION NEEDED block, a brief or epic plan awaiting Go, an epic discussion, an approval request, a stuck escalation
 export function needsAnswer(t, m) {

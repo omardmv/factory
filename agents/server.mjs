@@ -964,7 +964,7 @@ async function watchPrograms() {
         update(t.id, (x) => { x.stallNotice = key; });
         const line = (i) => { const k = i.taskId ? load(i.taskId) : null; return `- ${i.title}: ${g.state[i.key]}${k ? ` (${k.status}${k.pr ? ` · ${k.pr.url}` : ''})` : ''}`; };
         const stuck = t.plan.filter((i) => ['failed', 'stuck'].includes(g.state[i.key]));
-        say(t.id, 'factory', `[factory] the epic is stuck: ${g.merged}/${g.total} merged, nothing can move.\n${stuck.map(line).join('\n')}\nBlocked behind them: ${g.blocked.map((b) => b.item.title).join(', ') || 'nothing'}.\nAnswer the stuck task in its own channel, or reply here to change the plan.`);
+        say(t.id, 'factory', `[factory] the epic is stuck: ${g.merged}/${g.total} merged, nothing can move.\n${stuck.map(line).join('\n')}\nBlocked behind them: ${g.blocked.map((b) => b.item.title).join(', ') || 'nothing'}.\nAnswer the stuck task in its own channel, or reply here to change the plan.`, { needsYou: true });
       }
     }
   }
