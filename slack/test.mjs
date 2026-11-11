@@ -47,6 +47,7 @@ const agentsSrv = await listen(async (req, res) => {
     return send({ ...(/mini app/i.test(p.text) ? { project: 'shop', why: 'Mini App feature' } : /slack bot/i.test(p.text) ? { project: 'factory', why: 'the Slack bot' } : { project: null, why: 'could be either' }), ...named });
   }
   if (u.pathname === '/programs' && req.method === 'POST') return send(mk(p.project, p.goal, { kind: 'program', phase: 'talk', status: 'queued', ...(p.title ? { title: p.title } : {}) }), 201);
+  if (u.pathname === '/digest') return send({ ready: [], decisions: [], waiting: [], moving: [], finished: [], merged: [], stopped: [], costUsd: 0 });
   if (u.pathname === '/batches' && req.method === 'POST') return send({ batch: 'b1', tasks: p.items.map((x) => mk(p.project, x.text, { phase: 'run', ...(x.type ? { type: x.type } : {}), ...(x.title ? { title: x.title } : {}) })) }, 201);
   if (u.pathname === '/tasks' && req.method === 'GET') return send(Object.values(tasks).map(({ messages, ...t }) => t));
   if (u.pathname === '/tasks' && req.method === 'POST') return send(mk(p.project, p.text, { ...(p.kind ? { kind: p.kind } : {}), ...(p.type ? { type: p.type } : {}), ...(p.title ? { title: p.title } : {}) }), 201);
@@ -65,8 +66,10 @@ const agentsSrv = await listen(async (req, res) => {
 const old = mk('shop', 'old task from before Slack'); old.messages.push({ from: 'agent', text: 'old reply' });
 const dir = mkdtempSync(`${tmpdir()}/slackbot-`);
 for (const [f, v] of Object.entries({ 'slack-bot-token': 'xoxb-test', 'slack-app-token': 'xapp-test', 'agents-token': 'agents-secret' })) writeFileSync(`${dir}/${f}`, v);
-Object.assign(process.env, { SECRETS_DIR: dir, BOT_STATE: `${dir}/state.json`, SLACK_API: `http://127.0.0.1:${slackSrv.address().port}`, AGENTS_API: `http://127.0.0.1:${agentsSrv.address().port}`, FACTS_FILE: `${dir}/none.json` });
+Object.assign(process.env, { SECRETS_DIR: dir, BOT_STATE: `${dir}/state.json`, SLACK_API: `http://127.0.0.1:${slackSrv.address().port}`, AGENTS_API: `http://127.0.0.1:${agentsSrv.address().port}`, FACTS_FILE: `${dir}/none.json`, SLACK_NOTIFY: 'all' }); // the older steps below check every message; the notify steps switch it off
 const bot = await import('./bot.mjs');
+const { parkedOnYou, WAITING_ON_YOU } = await import('./notify.mjs');
+const lifecycle = await import('../agents/lifecycle.mjs');
 const since = (i) => calls.slice(i);
 const posted = (i, ch) => since(i).filter((c) => c.method === 'chat.postMessage' && (!ch || c.p.channel === ch));
 let ok = 0; const step = async (name, f) => { await f(); ok++; console.log(`ok ${ok} - ${name}`); };
@@ -421,6 +424,97 @@ await step('ready for your check: an Approve & merge button; pressing it approve
   assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Approved by you at `abc1234`: merging/);
   await press(`${t.id}|stale`, '92.1');
   assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Not approved: the PR changed/);
+});
+await step('notify: by default only what needs your answer is posted; the rest stays on the dashboard', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'quiet task', { phase: 'run', status: 'running', title: 'quiet task' });
+  await bot.pushUpdates(); // the task's channel exists, nothing posted yet
+  let i = calls.length;
+  t.messages.push({ from: 'agent', text: 'I changed the parser.' }, { from: 'review', text: 'VERDICT: PASS\nlooks good' }, { from: 'qa', text: 'QA VERDICT: PASS\nfine' },
+    { from: 'factory', text: '[factory] 📌 Decision taken: x', decided: { id: 'd1', question: 'q', options: ['a', 'b'], chosen: 'a' } });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'progress, review, QA and decided notes are silent');
+  i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'and not sent later either');
+  i = calls.length; t.messages.push({ from: 'agent', text: 'DECISION NEEDED\nWhich DB?' });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Decision needed/);
+  i = calls.length; t.messages.push({ from: 'factory', text: '[factory] STUCK: nothing moves', ping: true });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Stuck/);
+  i = calls.length; t.messages.push({ from: 'factory', text: '[factory] ✅ Ready for your check', approve: { sha: 'abc', pr: 1 } });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1);
+  const b = mk('shop', 'briefed', { phase: 'brief', status: 'waiting for you', title: 'briefed' });
+  b.messages.push({ from: 'agent', text: 'Playbook: feature. Plan...' });
+  i = calls.length; await bot.pushUpdates();
+  const m = posted(i).find((c) => /Brief/.test(c.p.text)); assert.ok(m, 'a brief awaiting Go is posted'); assert.ok(m.p.blocks.some((x) => x.type === 'actions'));
+});
+await step('notify: SLACK_NOTIFY=all posts everything again', async () => {
+  process.env.SLACK_NOTIFY = 'all';
+  const t = mk('shop', 'chatty task', { phase: 'run', status: 'running', title: 'chatty task' });
+  await bot.pushUpdates();
+  const i = calls.length; t.messages.push({ from: 'agent', text: 'progress' }, { from: 'review', text: 'VERDICT: PASS\nok' });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 2);
+});
+await step('notify: a brief saved while the task is still briefing is not lost', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const b = mk('shop', 'racy', { phase: 'brief', status: 'briefing', title: 'racy' });
+  await bot.pushUpdates();
+  b.messages.push({ from: 'agent', text: 'Playbook: feature. The brief.' });
+  let i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'not yet waiting for you');
+  b.status = 'waiting for you';
+  i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Brief/);
+});
+await step('notify: the morning digest and "Queue done" are off by default and on with SLACK_NOTIFY=all', async () => {
+  const noon = Date.parse('2026-11-12T07:00:00Z');
+  const q = mk('shop', 'queued', { phase: 'run', status: 'ready for you', title: 'queued' });
+  bot.state.batches.bq = { ids: [q.id], project: 'shop', reported: false };
+  delete process.env.SLACK_NOTIFY; bot.state.lastDigest = '2026-11-11';
+  let i = calls.length; await bot.morning(noon); await bot.pushUpdates();
+  assert.equal(posted(i).length, 0, 'no digest, no queue summary'); assert.equal(bot.state.batches.bq.reported, true, 'the batch is closed silently');
+  bot.state.batches.bq2 = { ids: [q.id], project: 'shop', reported: false };
+  process.env.SLACK_NOTIFY = 'all'; bot.state.lastDigest = '2026-11-11';
+  i = calls.length; await bot.morning(noon); await bot.pushUpdates();
+  assert.ok(posted(i).some((c) => /Factory, last 24 hours/.test(c.p.text))); assert.ok(posted(i).some((c) => /Queue done/.test(c.p.text)));
+});
+await step('notify: a task parked on your call (round limit) is posted; the same note on a running task is not', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'limit', { phase: 'run', status: 'working', title: 'limit' });
+  await bot.pushUpdates();
+  let i = calls.length; t.messages.push({ from: 'factory', text: '[factory] some note' }); await bot.pushUpdates(); assert.equal(posted(i).length, 0);
+  t.status = 'waiting for you'; t.waitingOn = 'your call: QA failures are still open at the round limit';
+  i = calls.length; t.messages.push({ from: 'factory', text: '[factory] round limit (3) reached with QA failures open: stopped. A person decides what next.' });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /round limit/);
+});
+await step('notify: a task parked on your call by an agent turn posts once, whoever spoke last', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'nopr', { phase: 'run', status: 'working', title: 'nopr' });
+  await bot.pushUpdates();
+  let i = calls.length; t.messages.push({ from: 'agent', text: 'I stopped without a PR.' }); await bot.pushUpdates(); assert.equal(posted(i).length, 0);
+  t.status = 'waiting for you'; t.waitingOn = 'your call: the agent ended 2 turns without opening a PR';
+  i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Waiting for you[\s\S]*without opening a PR/);
+  i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'once');
+});
+await step('notify: a refused automatic merge (needsYou) is posted', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'refused', { phase: 'run', status: 'ready for you', waitingOn: 'your merge of the reviewed PR', title: 'refused' });
+  await bot.pushUpdates();
+  const i = calls.length; t.messages.push({ from: 'factory', text: "[factory] not merged automatically: a check failed. It's ready for you.", needsYou: true });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /not merged automatically/);
+});
+await step('notify: parked statuses follow lifecycle.mjs: every real waitingOn line posts, except a pause and the automatic merge retrying', async () => {
+  assert.deepEqual([...WAITING_ON_YOU].sort(), lifecycle.PARKED.filter((x) => x !== 'paused').sort());
+  for (const status of WAITING_ON_YOU) assert.ok(parkedOnYou({ status, waitingOn: lifecycle.waitingOnFor(status) }), status);
+  assert.ok(!parkedOnYou({ status: 'paused', waitingOn: lifecycle.waitingOnFor('paused') }));
+  assert.ok(!parkedOnYou({ status: 'ready for you', waitingOn: lifecycle.waitingOnFor('ready for you', { mergeWanted: true }) }));
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'research', { phase: 'run', status: 'working', title: 'research' });
+  await bot.pushUpdates();
+  t.status = 'research review'; t.waitingOn = lifecycle.waitingOnFor('research review');
+  const i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /research PR/);
+});
+await step('notify: a review PASS the factory merges itself is not "waiting for you"; without auto-merge it is', async () => {
+  const pass = (autoMerge) => lifecycle.afterReview({ task: { status: 'reviewing', factoryRounds: 0 }, verdict: 'PASS', headSha: 'h', autoMerge, maxRounds: 6 });
+  const auto = pass('dev'), manual = pass(undefined);
+  assert.equal(auto.mergeWanted, true);
+  assert.ok(!parkedOnYou({ status: auto.status, waitingOn: auto.waitingOn, mergeWanted: auto.mergeWanted }));
+  assert.ok(parkedOnYou({ status: manual.status, waitingOn: manual.waitingOn, mergeWanted: manual.mergeWanted }));
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

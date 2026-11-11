@@ -627,7 +627,7 @@ async function autoMerge(id) {
   if (p.approval && t.approvalAskedSha === t.reviewedSha && t.approved !== t.reviewedSha) return;
   const token = await githubToken(t.repo);
   const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
-  const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`); log('merge.refused', { task: id, why }); };
+  const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`, { needsYou: true }); log('merge.refused', { task: id, why }); };
   // the project's required checks (box config "requiredChecks"), enforced here: GitHub can't on a free private repo
   let checks = null;
   if (p.requiredChecks?.length && pr.head?.sha) {
@@ -964,7 +964,7 @@ async function watchPrograms() {
         update(t.id, (x) => { x.stallNotice = key; });
         const line = (i) => { const k = i.taskId ? load(i.taskId) : null; return `- ${i.title}: ${g.state[i.key]}${k ? ` (${k.status}${k.pr ? ` · ${k.pr.url}` : ''})` : ''}`; };
         const stuck = t.plan.filter((i) => ['failed', 'stuck'].includes(g.state[i.key]));
-        say(t.id, 'factory', `[factory] the epic is stuck: ${g.merged}/${g.total} merged, nothing can move.\n${stuck.map(line).join('\n')}\nBlocked behind them: ${g.blocked.map((b) => b.item.title).join(', ') || 'nothing'}.\nAnswer the stuck task in its own channel, or reply here to change the plan.`);
+        say(t.id, 'factory', `[factory] the epic is stuck: ${g.merged}/${g.total} merged, nothing can move.\n${stuck.map(line).join('\n')}\nBlocked behind them: ${g.blocked.map((b) => b.item.title).join(', ') || 'nothing'}.\nAnswer the stuck task in its own channel, or reply here to change the plan.`, { needsYou: true });
       }
     }
   }
