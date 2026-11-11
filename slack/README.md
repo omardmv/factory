@@ -26,6 +26,12 @@ Telegram bot until Slack has proven itself; both talk to factory-agents.
 
 ## Use
 
+- Slack is quiet by default: it posts only what waits for your answer (a
+  `DECISION NEEDED`, a brief or plan with Go, an epic discussion, Approve &
+  merge, a stuck alert). Progress, review and QA results, the morning digest
+  and the queue summary stay on the dashboard. Set `SLACK_NOTIFY=all` on the
+  bot to get every message again.
+
 - Create a channel `<project>-<something>` (a project) or anything else (the
   factory) and write the idea as its first message.
 - Or DM the bot; it makes the channel.

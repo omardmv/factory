@@ -11,10 +11,11 @@
 //  - when the PR is merged or closed (or the task is stopped or done), the
 //    channel is archived
 //  - /factory pause | resume | stop (in a task's channel), status, tasks,
-//    digest, help; the morning summary arrives in the DM at 08:00 Tashkent
+//    digest, help; the morning summary (only with SLACK_NOTIFY=all) arrives in the DM at 08:00 Tashkent
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { needsAnswer, isBriefLike, notifyAll } from './notify.mjs';
 
 const SECRETS = process.env.SECRETS_DIR ?? '/run/factory';
 const STATE_FILE = process.env.BOT_STATE ?? '/data/state.json';
@@ -159,7 +160,6 @@ export function mrkdwn(md) {
   return h.replace(/\u0000(\d+)\u0000/g, (_, i) => '```' + esc(blocks[i]) + '```');
 }
 const taskLink = (id) => `${DASHBOARD}/?task=${id}`;
-const isBriefLike = (t) => (t.kind === 'program' && t.phase === 'brief') || (t.kind === 'change' && t.phase === 'brief' && t.status === 'waiting for you');
 // one task message, ready to post: { text, go, plan } (go: show a Go button; plan: a Plan it button, epic in talk phase)
 export function render(t, m) {
   const links = [t.pr ? `<${t.pr.url}|PR #${t.pr.number}>` : '', `<${taskLink(t.id)}|full conversation>`].filter(Boolean).join(' · ');
@@ -583,9 +583,11 @@ export async function pushUpdates() {
     const fresh = full.messages.slice(from).filter((m) => m.from !== 'you');
     if (fresh.length) {
       const ch = await channelFor(full);
-      for (const m of fresh) { const r = render(full, m); await post(ch, r.text, { go: r.go, plan: r.plan, taskId: t.id, choices: r.choices }); }
+      // only what waits for an answer is posted (SLACK_NOTIFY=all: everything); the rest stays on the dashboard
+      const shown = fresh.filter((m) => notifyAll() || needsAnswer(full, m));
+      for (const m of shown) { const r = render(full, m); await post(ch, r.text, { go: r.go, plan: r.plan, taskId: t.id, choices: r.choices }); }
       // a run ended (the agent, coordinator or QA tester spoke): its new screenshots and videos follow
-      if (fresh.some((m) => ['agent', 'coordinator', 'qa'].includes(m.from))) await postMedia(full, ch).catch((e) => log('media.error', { task: t.id, error: e.message }));
+      if (shown.some((m) => ['agent', 'coordinator', 'qa'].includes(m.from))) await postMedia(full, ch).catch((e) => log('media.error', { task: t.id, error: e.message }));
     }
     state.sent[t.id] = full.messages.length; persist();
     if (full.kind === 'program') await syncEpicChannel(full, state.taskChannel[t.id]);
@@ -597,7 +599,7 @@ export async function pushUpdates() {
 const SETTLED = ['ready for you', 'decision needed', 'waiting for you', 'stopped', 'paused', 'done', 'merged'];
 async function batchSummaries() {
   const open = Object.entries(state.batches).filter(([, b]) => !b.reported);
-  if (!open.length) return;
+  if (!open.length || !notifyAll()) return;
   const tasks = await agents('/tasks');
   for (const [, b] of open) {
     const mine = tasks.filter((t) => b.ids.includes(t.id));
@@ -627,7 +629,7 @@ async function sendDigest(hours) {
 function morning() {
   const now = new Date(Date.now() + 5 * 3600e3); // Asia/Tashkent, UTC+5, no DST
   const day = now.toISOString().slice(0, 10);
-  if (!state.owner || now.getUTCHours() < 8 || state.lastDigest === day) return;
+  if (!state.owner || !notifyAll() || now.getUTCHours() < 8 || state.lastDigest === day) return;
   state.lastDigest = day; persist();
   sendDigest(24).catch((e) => log('digest.error', { error: e.message }));
 }

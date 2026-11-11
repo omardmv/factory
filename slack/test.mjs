@@ -65,7 +65,7 @@ const agentsSrv = await listen(async (req, res) => {
 const old = mk('shop', 'old task from before Slack'); old.messages.push({ from: 'agent', text: 'old reply' });
 const dir = mkdtempSync(`${tmpdir()}/slackbot-`);
 for (const [f, v] of Object.entries({ 'slack-bot-token': 'xoxb-test', 'slack-app-token': 'xapp-test', 'agents-token': 'agents-secret' })) writeFileSync(`${dir}/${f}`, v);
-Object.assign(process.env, { SECRETS_DIR: dir, BOT_STATE: `${dir}/state.json`, SLACK_API: `http://127.0.0.1:${slackSrv.address().port}`, AGENTS_API: `http://127.0.0.1:${agentsSrv.address().port}`, FACTS_FILE: `${dir}/none.json` });
+Object.assign(process.env, { SECRETS_DIR: dir, BOT_STATE: `${dir}/state.json`, SLACK_API: `http://127.0.0.1:${slackSrv.address().port}`, AGENTS_API: `http://127.0.0.1:${agentsSrv.address().port}`, FACTS_FILE: `${dir}/none.json`, SLACK_NOTIFY: 'all' }); // the older steps below check every message; the notify steps switch it off
 const bot = await import('./bot.mjs');
 const since = (i) => calls.slice(i);
 const posted = (i, ch) => since(i).filter((c) => c.method === 'chat.postMessage' && (!ch || c.p.channel === ch));
@@ -421,6 +421,33 @@ await step('ready for your check: an Approve & merge button; pressing it approve
   assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Approved by you at `abc1234`: merging/);
   await press(`${t.id}|stale`, '92.1');
   assert.match(calls.filter((c) => c.method === 'chat.update').at(-1).p.blocks.at(-1).elements[0].text, /Not approved: the PR changed/);
+});
+await step('notify: by default only what needs your answer is posted; the rest stays on the dashboard', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'quiet task', { phase: 'run', status: 'running', title: 'quiet task' });
+  await bot.pushUpdates(); // the task's channel exists, nothing posted yet
+  let i = calls.length;
+  t.messages.push({ from: 'agent', text: 'I changed the parser.' }, { from: 'review', text: 'VERDICT: PASS\nlooks good' }, { from: 'qa', text: 'QA VERDICT: PASS\nfine' },
+    { from: 'factory', text: '[factory] 📌 Decision taken: x', decided: { id: 'd1', question: 'q', options: ['a', 'b'], chosen: 'a' } });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'progress, review, QA and decided notes are silent');
+  i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'and not sent later either');
+  i = calls.length; t.messages.push({ from: 'agent', text: 'DECISION NEEDED\nWhich DB?' });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Decision needed/);
+  i = calls.length; t.messages.push({ from: 'factory', text: '[factory] STUCK: nothing moves', ping: true });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Stuck/);
+  i = calls.length; t.messages.push({ from: 'factory', text: '[factory] ✅ Ready for your check', approve: { sha: 'abc', pr: 1 } });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1);
+  const b = mk('shop', 'briefed', { phase: 'brief', status: 'waiting for you', title: 'briefed' });
+  b.messages.push({ from: 'agent', text: 'Playbook: feature. Plan...' });
+  i = calls.length; await bot.pushUpdates();
+  const m = posted(i).find((c) => /Brief/.test(c.p.text)); assert.ok(m, 'a brief awaiting Go is posted'); assert.ok(m.p.blocks.some((x) => x.type === 'actions'));
+});
+await step('notify: SLACK_NOTIFY=all posts everything again', async () => {
+  process.env.SLACK_NOTIFY = 'all';
+  const t = mk('shop', 'chatty task', { phase: 'run', status: 'running', title: 'chatty task' });
+  await bot.pushUpdates();
+  const i = calls.length; t.messages.push({ from: 'agent', text: 'progress' }, { from: 'review', text: 'VERDICT: PASS\nok' });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 2);
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);
