@@ -509,5 +509,12 @@ await step('notify: parked statuses follow lifecycle.mjs: every real waitingOn l
   t.status = 'research review'; t.waitingOn = lifecycle.waitingOnFor('research review');
   const i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /research PR/);
 });
+await step('notify: a review PASS the factory merges itself is not "waiting for you"; without auto-merge it is', async () => {
+  const pass = (autoMerge) => lifecycle.afterReview({ task: { status: 'reviewing', factoryRounds: 0 }, verdict: 'PASS', headSha: 'h', autoMerge, maxRounds: 6 });
+  const auto = pass('dev'), manual = pass(undefined);
+  assert.equal(auto.mergeWanted, true);
+  assert.ok(!parkedOnYou({ status: auto.status, waitingOn: auto.waitingOn, mergeWanted: auto.mergeWanted }));
+  assert.ok(parkedOnYou({ status: manual.status, waitingOn: manual.waitingOn, mergeWanted: manual.mergeWanted }));
+});
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

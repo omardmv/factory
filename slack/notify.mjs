@@ -5,7 +5,8 @@ export const isBriefLike = (t) => (t.kind === 'program' && t.phase === 'brief') 
 // the task rests on the person (agents/lifecycle.mjs PARKED, minus a pause they chose themselves), whoever wrote the last message;
 // slack/test.mjs checks this list against lifecycle.mjs
 export const WAITING_ON_YOU = ['waiting for you', 'decision needed', 'ready for you', 'research review', 'waiting for merges'];
-export const parkedOnYou = (t) => WAITING_ON_YOU.includes(t.status) && !!String(t.waitingOn ?? '').trim() && !/nothing needed from you/i.test(t.waitingOn);
+export const parkedOnYou = (t) => WAITING_ON_YOU.includes(t.status) && !!String(t.waitingOn ?? '').trim() && !/nothing needed from you/i.test(t.waitingOn)
+  && !(t.status === 'ready for you' && t.mergeWanted); // the factory is merging it (or asking Approve & merge, which posts itself)
 // true when message m of task t needs the person to answer or press a button:
 // a DECISION NEEDED block, a brief or epic plan awaiting Go, an epic discussion, an approval request, a stuck escalation
 export function needsAnswer(t, m) {
