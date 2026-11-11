@@ -480,5 +480,14 @@ await step('notify: a task parked on your call (round limit) is posted; the same
   i = calls.length; t.messages.push({ from: 'factory', text: '[factory] round limit (3) reached with QA failures open: stopped. A person decides what next.' });
   await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /round limit/);
 });
+await step('notify: a task parked on your call by an agent turn posts once, whoever spoke last', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'nopr', { phase: 'run', status: 'working', title: 'nopr' });
+  await bot.pushUpdates();
+  let i = calls.length; t.messages.push({ from: 'agent', text: 'I stopped without a PR.' }); await bot.pushUpdates(); assert.equal(posted(i).length, 0);
+  t.status = 'waiting for you'; t.waitingOn = 'your call: the agent ended 2 turns without opening a PR';
+  i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Waiting for you[\s\S]*without opening a PR/);
+  i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'once');
+});
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

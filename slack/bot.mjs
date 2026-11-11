@@ -15,7 +15,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { needsAnswer, isBriefLike, notifyAll } from './notify.mjs';
+import { needsAnswer, isBriefLike, notifyAll, parkedOnYou } from './notify.mjs';
 
 const SECRETS = process.env.SECRETS_DIR ?? '/run/factory';
 const STATE_FILE = process.env.BOT_STATE ?? '/data/state.json';
@@ -590,6 +590,14 @@ export async function pushUpdates() {
       // a run ended (the agent, coordinator or QA tester spoke): its new screenshots and videos follow
       if (shown.some((m) => ['agent', 'coordinator', 'qa'].includes(m.from))) await postMedia(full, ch).catch((e) => log('media.error', { task: t.id, error: e.message }));
     }
+    // parked on your call without a message that asks (an agent turn ended without a PR, a closed PR...): say so once per reason
+    state.parked ??= {};
+    if (parkedOnYou(full)) {
+      if (state.parked[t.id] !== full.waitingOn) {
+        state.parked[t.id] = full.waitingOn; persist();
+        if (!shown.some((m) => needsAnswer(full, m))) await post(await channelFor(full), `⏸️ *Waiting for you*\n${mrkdwn(clip(full.waitingOn, 600).text)}\n<${taskLink(t.id)}|full conversation>`);
+      }
+    } else if (state.parked[t.id]) { delete state.parked[t.id]; persist(); }
     // a brief is saved while the status is still `briefing`: wait for the status before leaving silent messages behind
     const held = !shown.length && ['briefing', 'planning'].includes(full.status);
     if (!held) { state.sent[t.id] = full.messages.length; persist(); }
