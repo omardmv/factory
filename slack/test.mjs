@@ -47,6 +47,7 @@ const agentsSrv = await listen(async (req, res) => {
     return send({ ...(/mini app/i.test(p.text) ? { project: 'shop', why: 'Mini App feature' } : /slack bot/i.test(p.text) ? { project: 'factory', why: 'the Slack bot' } : { project: null, why: 'could be either' }), ...named });
   }
   if (u.pathname === '/programs' && req.method === 'POST') return send(mk(p.project, p.goal, { kind: 'program', phase: 'talk', status: 'queued', ...(p.title ? { title: p.title } : {}) }), 201);
+  if (u.pathname === '/digest') return send({ ready: [], decisions: [], waiting: [], moving: [], finished: [], merged: [], stopped: [], costUsd: 0 });
   if (u.pathname === '/batches' && req.method === 'POST') return send({ batch: 'b1', tasks: p.items.map((x) => mk(p.project, x.text, { phase: 'run', ...(x.type ? { type: x.type } : {}), ...(x.title ? { title: x.title } : {}) })) }, 201);
   if (u.pathname === '/tasks' && req.method === 'GET') return send(Object.values(tasks).map(({ messages, ...t }) => t));
   if (u.pathname === '/tasks' && req.method === 'POST') return send(mk(p.project, p.text, { ...(p.kind ? { kind: p.kind } : {}), ...(p.type ? { type: p.type } : {}), ...(p.title ? { title: p.title } : {}) }), 201);
@@ -448,6 +449,27 @@ await step('notify: SLACK_NOTIFY=all posts everything again', async () => {
   await bot.pushUpdates();
   const i = calls.length; t.messages.push({ from: 'agent', text: 'progress' }, { from: 'review', text: 'VERDICT: PASS\nok' });
   await bot.pushUpdates(); assert.equal(posted(i).length, 2);
+});
+await step('notify: a brief saved while the task is still briefing is not lost', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const b = mk('shop', 'racy', { phase: 'brief', status: 'briefing', title: 'racy' });
+  await bot.pushUpdates();
+  b.messages.push({ from: 'agent', text: 'Playbook: feature. The brief.' });
+  let i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'not yet waiting for you');
+  b.status = 'waiting for you';
+  i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Brief/);
+});
+await step('notify: the morning digest and "Queue done" are off by default and on with SLACK_NOTIFY=all', async () => {
+  const noon = Date.parse('2026-11-12T07:00:00Z');
+  const q = mk('shop', 'queued', { phase: 'run', status: 'ready for you', title: 'queued' });
+  bot.state.batches.bq = { ids: [q.id], project: 'shop', reported: false };
+  delete process.env.SLACK_NOTIFY; bot.state.lastDigest = '2026-11-11';
+  let i = calls.length; await bot.morning(noon); await bot.pushUpdates();
+  assert.equal(posted(i).length, 0, 'no digest, no queue summary'); assert.equal(bot.state.batches.bq.reported, true, 'the batch is closed silently');
+  bot.state.batches.bq2 = { ids: [q.id], project: 'shop', reported: false };
+  process.env.SLACK_NOTIFY = 'all'; bot.state.lastDigest = '2026-11-11';
+  i = calls.length; await bot.morning(noon); await bot.pushUpdates();
+  assert.ok(posted(i).some((c) => /Factory, last 24 hours/.test(c.p.text))); assert.ok(posted(i).some((c) => /Queue done/.test(c.p.text)));
 });
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);
