@@ -471,5 +471,14 @@ await step('notify: the morning digest and "Queue done" are off by default and o
   i = calls.length; await bot.morning(noon); await bot.pushUpdates();
   assert.ok(posted(i).some((c) => /Factory, last 24 hours/.test(c.p.text))); assert.ok(posted(i).some((c) => /Queue done/.test(c.p.text)));
 });
+await step('notify: a task parked on your call (round limit) is posted; the same note on a running task is not', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'limit', { phase: 'run', status: 'working', title: 'limit' });
+  await bot.pushUpdates();
+  let i = calls.length; t.messages.push({ from: 'factory', text: '[factory] some note' }); await bot.pushUpdates(); assert.equal(posted(i).length, 0);
+  t.status = 'waiting for you'; t.waitingOn = 'your call: QA failures are still open at the round limit';
+  i = calls.length; t.messages.push({ from: 'factory', text: '[factory] round limit (3) reached with QA failures open: stopped. A person decides what next.' });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /round limit/);
+});
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);
