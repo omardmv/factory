@@ -489,5 +489,12 @@ await step('notify: a task parked on your call by an agent turn posts once, whoe
   i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /Waiting for you[\s\S]*without opening a PR/);
   i = calls.length; await bot.pushUpdates(); assert.equal(posted(i).length, 0, 'once');
 });
+await step('notify: a refused automatic merge (needsYou) is posted', async () => {
+  delete process.env.SLACK_NOTIFY;
+  const t = mk('shop', 'refused', { phase: 'run', status: 'ready for you', waitingOn: 'your merge of the reviewed PR', title: 'refused' });
+  await bot.pushUpdates();
+  const i = calls.length; t.messages.push({ from: 'factory', text: "[factory] not merged automatically: a check failed. It's ready for you.", needsYou: true });
+  await bot.pushUpdates(); assert.equal(posted(i).length, 1); assert.match(posted(i)[0].p.text, /not merged automatically/);
+});
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

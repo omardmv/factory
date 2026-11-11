@@ -627,7 +627,7 @@ async function autoMerge(id) {
   if (p.approval && t.approvalAskedSha === t.reviewedSha && t.approved !== t.reviewedSha) return;
   const token = await githubToken(t.repo);
   const pr = await gh(token, `/repos/${t.repo}/pulls/${t.pr.number}`);
-  const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`); log('merge.refused', { task: id, why }); };
+  const giveUp = (why) => { update(id, (x) => { x.mergeWanted = false; }); say(id, 'factory', `[factory] not merged automatically: ${why}. It's ready for you.`, { needsYou: true }); log('merge.refused', { task: id, why }); };
   // the project's required checks (box config "requiredChecks"), enforced here: GitHub can't on a free private repo
   let checks = null;
   if (p.requiredChecks?.length && pr.head?.sha) {
