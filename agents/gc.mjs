@@ -17,7 +17,11 @@ export function taskCleanup(t, { now, busy = false }) {
   if (t.previewPr) return { clean: false, why: 'preview still up' };
   const age = t.updatedAt ? (now - Date.parse(t.updatedAt)) / H : NaN;
   if (Number.isNaN(age)) return { clean: false, why: 'no timestamp' };
-  if (t.status === 'stopped' && !isMerged(t)) return age >= STOPPED_GRACE_H ? { clean: true, why: 'stopped a week ago' } : { clean: false, why: 'stopped recently' };
+  // stopped work may be unpushed or its PR still open: only a closed PR (its work is settled) lets the checkout go
+  if (t.status === 'stopped' && !isMerged(t)) {
+    if (t.pr?.state !== 'closed') return { clean: false, why: 'stopped with an open or no PR' };
+    return age >= STOPPED_GRACE_H ? { clean: true, why: 'stopped a week ago' } : { clean: false, why: 'stopped recently' };
+  }
   const finished = t.status === 'merged' || t.status === 'done' || isMerged(t);
   if (!finished) return { clean: false, why: 'not finished' };
   return age >= FINISHED_GRACE_H ? { clean: true, why: 'finished' } : { clean: false, why: 'finished recently' };

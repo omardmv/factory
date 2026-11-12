@@ -278,7 +278,7 @@ agents push. Limits:
 | no push for 72 h | containers stopped (DB kept); next push or `factory up` wakes it |
 | PR closed or merged | `factory down`: containers, DB, media, artifacts gone |
 | nightly | `factory-box gc` (04:30): old Coolify images (5 newest per app kept), build cache above 30 GB, unused anonymous volumes, journal; snapshot refreshed (03:00) |
-| task merged / done (6 h) or stopped (7 days) | the agents service deletes its checkout, venv, database files and review copy; messages, screens, videos and decisions stay |
+| task merged / done (6 h) or stopped with a closed PR (7 days) | the agents service deletes its checkout, venv, database files and review copy; messages, screens, videos and decisions stay |
 | disk reaches 85 % | the agents service posts a notice (Slack DM) once a day while it stays there |
 
 ## Phases

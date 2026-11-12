@@ -10,7 +10,12 @@ git config --global user.email "${GIT_EMAIL:-353544174+omar-factory[bot]@users.n
 git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
 if [ -n "${REPO:-}" ] && [ ! -d /workspace/repo/.git ]; then
   git clone -q --filter=blob:none "https://github.com/$REPO.git" /workspace/repo
-  git -C /workspace/repo checkout -q -b "agent/$TASK_ID" "origin/${BASE:-main}"
+  # a task resumed after its checkout was cleaned up (agents/gc.mjs) continues from its own pushed branch
+  if git -C /workspace/repo rev-parse -q --verify "origin/agent/$TASK_ID" >/dev/null; then
+    git -C /workspace/repo checkout -q -b "agent/$TASK_ID" "origin/agent/$TASK_ID"
+  else
+    git -C /workspace/repo checkout -q -b "agent/$TASK_ID" "origin/${BASE:-main}"
+  fi
 fi
 cd /workspace/repo 2>/dev/null || cd /workspace
 # the factory's chosen plugins (FACTORY_PLUGINS, from brain/claude/plugins.json):

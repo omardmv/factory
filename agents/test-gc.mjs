@@ -26,9 +26,12 @@ test('active, waiting and busy tasks are never cleaned', () => {
 test('a task with a preview up keeps its checkout (the preview builds from it)', () => {
   assert.equal(taskCleanup(t({ previewPr: 43 }), { now: NOW }).clean, false);
 });
-test('stopped tasks keep their checkout for a week', () => {
-  assert.equal(taskCleanup(t({ status: 'stopped', updatedAt: ago(24) }), { now: NOW }).clean, false);
-  assert.equal(taskCleanup(t({ status: 'stopped', updatedAt: ago(24 * 8) }), { now: NOW }).clean, true);
+test('stopped tasks keep their checkout for a week, and for good with an open or no PR', () => {
+  const stopped = (h, pr) => taskCleanup(t({ status: 'stopped', updatedAt: ago(h), pr }), { now: NOW }).clean;
+  assert.equal(stopped(24, { state: 'closed' }), false);
+  assert.equal(stopped(24 * 8, { state: 'closed' }), true);
+  assert.equal(stopped(24 * 30, { state: 'open' }), false);
+  assert.equal(stopped(24 * 30, undefined), false);
 });
 test('a missing timestamp is not cleaned', () => assert.equal(taskCleanup({ status: 'merged', updatedAt: undefined }, { now: NOW }).clean, false));
 test('what the dashboard serves is never in the delete list', () => {
