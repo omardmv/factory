@@ -14,6 +14,7 @@
 #   factory-box self-update                        (root) pull the factory repo, sync if it changed
 #   factory-box status                            (root) write /srv/factory/state/status.json for the dashboard
 #   factory-box agent-say <task-id>  < message      post a [factory] report into a factory-agents task
+#   factory-box gc                                 (root) nightly cleanup: old Coolify images (keep 5 per app), build cache cap, orphan anonymous volumes, journal
 #   factory-box ls                                  running previews
 set -euo pipefail
 FACTORY_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -429,7 +430,35 @@ agent_say() {  # task id; message on stdin
   log "reported to agent task $id"
 }
 
+# nightly housekeeping. Only things that are rebuilt on demand: old Coolify deploy images (the 5 newest per app and
+# any in use stay, so rollback works), build cache above a cap, anonymous volumes nothing uses, the journal.
+# Never touched: named volumes (media, databases), running containers, other images, Docker itself (no restart).
+# Task folders and dead previews are swept by the agents service (agents/gc.mjs), not here.
+gc() {
+  [ "$(id -u)" = 0 ] || die "gc needs root"
+  local node="${NODE:-/opt/factory/node/bin/node}" keep="${GC_KEEP_IMAGES:-5}" cache="${GC_BUILD_CACHE_KEEP:-30GB}" tmp ref v
+  tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  log "gc: disk before $(df --output=pcent / | tail -1 | tr -d ' ')"
+  # images in use by any container, running or not
+  docker ps -aq | xargs -r docker inspect -f '{{.Image}}' > "$tmp" 2>/dev/null || true
+  docker images --no-trunc --format '{{.ID}}|{{.Repository}}|{{.Tag}}|{{.CreatedAt}}' |
+    "$node" "$FACTORY_DIR/agents/gc.mjs" images "$keep" "$tmp" |
+    while read -r ref; do
+      [ -n "$ref" ] || continue
+      docker rmi "$ref" >/dev/null 2>&1 && log "gc: removed image $ref" || log "gc: kept image $ref (in use)"
+    done
+  docker image prune -f >/dev/null 2>&1 || true   # dangling layers only
+  docker builder prune -f --keep-storage "$cache" >/dev/null 2>&1 || log "gc: builder prune failed"
+  # volumes: only 64-hex anonymous ones that no container uses (dangling); `docker volume rm` refuses a used one
+  for v in $(docker volume ls -q -f dangling=true | "$node" "$FACTORY_DIR/agents/gc.mjs" volumes); do
+    docker volume rm "$v" >/dev/null 2>&1 || true
+  done
+  journalctl --vacuum-size=500M >/dev/null 2>&1 || true
+  log "gc: disk after $(df --output=pcent / | tail -1 | tr -d ' ')"
+}
+
 case "$cmd" in
+  gc)           gc ;;
   agent-say)    [ $# -eq 1 ] || die "usage: agent-say <task-id> < message"; agent_say "$1" ;;
   status)       status ;;
   snapshot-all)

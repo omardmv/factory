@@ -5,3 +5,5 @@
 */5 * * * * root /usr/local/bin/factory-box self-update >> /srv/factory/state/self-update.log 2>&1
 # every minute: facts for the dashboard (it has no docker access of its own)
 * * * * * root /usr/local/bin/factory-box status 2>> /srv/factory/state/status.err
+# 04:30: cleanup (old staging images, build cache cap, orphan volumes, journal); task folders are swept by the agents service
+30 4 * * * root /usr/local/bin/factory-box gc >> /srv/factory/state/gc.log 2>&1
