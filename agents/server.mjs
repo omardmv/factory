@@ -33,9 +33,10 @@ import { evidenceSection } from './evidence.mjs';
 import { loopDecision, openLoopTasks, isOpenLoop, loopTaskText, afterStart, afterRemind, normalizeLoops } from './loops.mjs';
 import { createMcp } from './mcp.mjs';
 import { launchArgs } from './launch.mjs';
+import { taskCleanup, HEAVY, previewIsDead, previewNeedsPrCheck, diskAlert, diskAlertText, prNeedsRefresh } from './gc.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, unlinkSync, renameSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, statfsSync, unlinkSync, renameSync, rmSync } from 'node:fs';
 
 const HOME = process.env.AGENTS_DIR ?? '/srv/factory/agents';
 const SECRETS = process.env.AGENTS_SECRETS ?? '/opt/factory/agents';
@@ -578,15 +579,62 @@ async function buildPreview(id) {
   log(url ? 'preview.ready' : 'preview.failed', { task: id, pr: n, sha, ...(error ? { error } : {}) });
   autoMerge(id).catch((e) => log('merge.failed', { task: id, error: e.message })); // now ask, with the link
 }
-// a preview whose PR merged or closed, or whose task ended, is removed
+// a preview whose PR merged or closed, or whose task ended, is removed. A paused or otherwise
+// unfinished task keeps the PR state it last saw, so a merge it never noticed is asked of GitHub here.
 async function previewSweep() {
-  for (const t of allTasks().filter((x) => x.previewPr && (x.status === 'merged' || ['stopped', 'done'].includes(x.status) || ['merged', 'closed'].includes(x.pr?.state)))) {
+  for (const t of allTasks().filter(previewNeedsPrCheck)) {
+    const pr = await findPr(t).catch(() => null);
+    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; syncWire.settleResync(x); if (pr.state === 'merged') x.status = 'merged'; });
+  }
+  for (const t of allTasks().filter(previewIsDead)) {
     if (previewJobs.has(t.id)) continue;
     const r = await run(FACTORY_BOX, ['down', t.project, String(t.previewPr)], { timeoutMs: 300000 });
     rmSync(`${PREVIEW_SRC}/${t.id}`, { recursive: true, force: true });
     update(t.id, (x) => { delete x.previewPr; x.previewUrl = null; });
     log('preview.down', { task: t.id, pr: t.previewPr, code: r.code });
   }
+}
+
+// ---------- housekeeping (decisions in gc.mjs) ----------
+// a finished task keeps what the dashboard shows (task.json, messages, screens, videos, decisions) and loses
+// the checkout, venv, database files and review copy: about 1.7 GB each
+function taskSweep(now = Date.now()) {
+  const busy = new Set([...busyIds(), ...previewJobs, ...queue.map((j) => j.id)]);
+  for (const t of allTasks()) {
+    if (!taskCleanup(t, { now, busy: busy.has(t.id) }).clean) continue;
+    const gone = HEAVY.filter((h) => existsSync(`${dir(t.id)}/${h}`));
+    if (!gone.length) continue;
+    try { for (const h of gone) rmSync(`${dir(t.id)}/${h}`, { recursive: true, force: true }); log('gc.task', { task: t.id, removed: gone }); }
+    catch (e) { log('gc.task_failed', { task: t.id, error: e.message }); }
+  }
+}
+const GC_FILE = `${HOME}/gc.json`;
+function diskCheck(now = Date.now()) {
+  const s = statfsSync(HOME), pct = Math.round(100 * (1 - s.bavail / s.blocks));
+  const st = readJson(GC_FILE, {}), d = diskAlert(pct, st, now);
+  if (d.state !== st || d.alert) writeFileSync(GC_FILE, JSON.stringify(d.state));
+  if (!d.alert) return;
+  // the Slack bot DMs a notice with no project as plain text
+  const f = readJson(LOOPS_FILE, {}); f.notices ??= [];
+  f.notices.push({ id: `disk-${now}`, text: diskAlertText(pct), at: new Date(now).toISOString() });
+  writeFileSync(LOOPS_FILE, JSON.stringify(f, null, 1));
+  log('gc.disk_alert', { pct });
+}
+const PRCHECK_FILE = `${HOME}/pr-checked.json`;
+async function stoppedPrRefresh(now = Date.now()) {
+  const checked = readJson(PRCHECK_FILE, {});
+  for (const t of allTasks().filter((x) => prNeedsRefresh(x, checked, now))) {
+    checked[t.id] = now;
+    const pr = await findPr(t).catch(() => null);
+    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; if (pr.state === 'merged') x.status = 'merged'; });
+  }
+  writeFileSync(PRCHECK_FILE, JSON.stringify(checked));
+}
+let lastHousekeeping = 0;
+function housekeeping() {
+  if (Date.now() - lastHousekeeping < 10 * 60 * 1000) return;
+  lastHousekeeping = Date.now();
+  stoppedPrRefresh().catch((e) => log('gc.pr_refresh_failed', { error: e.message })).then(() => { try { taskSweep(); diskCheck(); } catch (e) { log('gc.failed', { error: e.message }); } });
 }
 
 // ---------- is the merge live? (decision in merge.mjs deployState) ----------
@@ -1316,7 +1364,7 @@ const poll = () => drain.draining ? Promise.resolve() : intake().catch((e) => lo
   .then(() => watchPrograms()).catch((e) => log('programs.failed', { error: e.message }))
   .then(() => loopsTick()).catch((e) => log('loops.failed', { error: e.message }))
   .then(() => deploySweep()).catch((e) => log('deploy.sweep_failed', { error: e.message }))
-  .then(() => { doctorSweep(); previewSweep().catch((e) => log('preview.sweep_failed', { error: e.message })); }); // in the background: a diagnosis takes a minute, the poll does not wait
+  .then(() => { housekeeping(); doctorSweep(); previewSweep().catch((e) => log('preview.sweep_failed', { error: e.message })); }); // in the background: a diagnosis takes a minute, the poll does not wait
 // ---------- the stall watchdog: one nudge, then a ping (decision in watchdog.mjs) ----------
 const WATCHDOG_EVERY_S = Number(process.env.WATCHDOG_EVERY_S ?? 60);
 const NUDGE_PROMPT = '[factory] Nudge: the factory saw no progress on this task for a while. Check `git status`, your decision log, your PR and its checks, then carry on with what you were doing. If you are blocked, say exactly on what.';
