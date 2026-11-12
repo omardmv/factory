@@ -436,7 +436,7 @@ agent_say() {  # task id; message on stdin
 # Task folders and dead previews are swept by the agents service (agents/gc.mjs), not here.
 gc() {
   [ "$(id -u)" = 0 ] || die "gc needs root"
-  local node="${NODE:-/opt/factory/node/bin/node}" keep="${GC_KEEP_IMAGES:-5}" cache="${GC_BUILD_CACHE_KEEP:-30GB}" tmp ref v
+  local node="${NODE:-/opt/factory/node/bin/node}" keep="${GC_KEEP_IMAGES:-5}" cache="${GC_BUILD_CACHE_MAX:-30gb}" tmp ref v
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
   log "gc: disk before $(df --output=pcent / | tail -1 | tr -d ' ')"
   # images in use by any container, running or not
@@ -447,13 +447,13 @@ gc() {
       [ -n "$ref" ] || continue
       docker rmi "$ref" >/dev/null 2>&1 && log "gc: removed image $ref" || log "gc: kept image $ref (in use)"
     done || log "gc: image step failed"
-  docker image prune -f >/dev/null 2>&1 || true   # dangling layers only
-  docker builder prune -f --keep-storage "$cache" >/dev/null 2>&1 || log "gc: builder prune failed"
+  docker image prune -f >/dev/null 2>&1 || log "gc: image prune failed"   # dangling layers only
+  docker builder prune -f --max-used-space "$cache" >/dev/null 2>&1 || log "gc: builder prune failed"
   # volumes: only 64-hex anonymous ones that no container uses (dangling); `docker volume rm` refuses a used one
   for v in $(docker volume ls -q -f dangling=true | "$node" "$FACTORY_DIR/agents/gc.mjs" volumes || true); do
-    docker volume rm "$v" >/dev/null 2>&1 || true
+    docker volume rm "$v" >/dev/null 2>&1 || log "gc: kept volume ${v:0:12} (in use)"
   done
-  journalctl --vacuum-size=500M >/dev/null 2>&1 || true
+  journalctl --vacuum-size=500M >/dev/null 2>&1 || log "gc: journal vacuum failed"
   log "gc: disk after $(df --output=pcent / | tail -1 | tr -d ' ')"
 }
 
