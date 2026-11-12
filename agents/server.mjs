@@ -33,7 +33,7 @@ import { evidenceSection } from './evidence.mjs';
 import { loopDecision, openLoopTasks, isOpenLoop, loopTaskText, afterStart, afterRemind, normalizeLoops } from './loops.mjs';
 import { createMcp } from './mcp.mjs';
 import { launchArgs } from './launch.mjs';
-import { taskCleanup, HEAVY, previewIsDead, previewNeedsPrCheck, diskAlert, diskAlertText } from './gc.mjs';
+import { taskCleanup, HEAVY, previewIsDead, previewNeedsPrCheck, diskAlert, diskAlertText, prNeedsRefresh } from './gc.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, readdirSync, chownSync, cpSync, statSync, statfsSync, unlinkSync, renameSync, rmSync } from 'node:fs';
@@ -620,11 +620,21 @@ function diskCheck(now = Date.now()) {
   writeFileSync(LOOPS_FILE, JSON.stringify(f, null, 1));
   log('gc.disk_alert', { pct });
 }
+const PRCHECK_FILE = `${HOME}/pr-checked.json`;
+async function stoppedPrRefresh(now = Date.now()) {
+  const checked = readJson(PRCHECK_FILE, {});
+  for (const t of allTasks().filter((x) => prNeedsRefresh(x, checked, now))) {
+    checked[t.id] = now;
+    const pr = await findPr(t).catch(() => null);
+    if (pr && pr.state !== t.pr.state) update(t.id, (x) => { x.pr = pr; if (pr.state === 'merged') x.status = 'merged'; });
+  }
+  writeFileSync(PRCHECK_FILE, JSON.stringify(checked));
+}
 let lastHousekeeping = 0;
 function housekeeping() {
   if (Date.now() - lastHousekeeping < 10 * 60 * 1000) return;
   lastHousekeeping = Date.now();
-  try { taskSweep(); diskCheck(); } catch (e) { log('gc.failed', { error: e.message }); }
+  stoppedPrRefresh().catch((e) => log('gc.pr_refresh_failed', { error: e.message })).then(() => { try { taskSweep(); diskCheck(); } catch (e) { log('gc.failed', { error: e.message }); } });
 }
 
 // ---------- is the merge live? (decision in merge.mjs deployState) ----------

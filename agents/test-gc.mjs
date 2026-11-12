@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { taskCleanup, previewIsDead, previewNeedsPrCheck, diskAlert, imagesToRemove, anonymousVolumes, parseCreated, HEAVY } from './gc.mjs';
+import { taskCleanup, previewIsDead, previewNeedsPrCheck, diskAlert, prNeedsRefresh, imagesToRemove, anonymousVolumes, parseCreated, HEAVY } from './gc.mjs';
 
 let n = 0;
 const test = (name, f) => { f(); n++; console.log('ok', name); };
@@ -49,6 +49,14 @@ test('preview of a merged task is dead; paused task with stale open PR needs a G
   assert.equal(previewNeedsPrCheck({ ...paused, status: 'merged' }), false);
 });
 
+test('stopped/paused tasks with an unsettled PR are re-checked at most once a day', () => {
+  const st = (o) => ({ id: 'a', status: 'stopped', pr: { number: 1, state: 'open' }, ...o });
+  assert.equal(prNeedsRefresh(st(), {}, NOW), true);
+  assert.equal(prNeedsRefresh(st({ status: 'paused' }), {}, NOW), true);
+  assert.equal(prNeedsRefresh(st(), { a: NOW - 3600000 }, NOW), false);
+  assert.equal(prNeedsRefresh(st(), { a: NOW - 25 * 3600000 }, NOW), true);
+  for (const o of [{ status: 'working' }, { pr: undefined }, { pr: { number: 1, state: 'closed' } }, { pr: { number: 1, state: 'merged' } }]) assert.equal(prNeedsRefresh(st(o), {}, NOW), false);
+});
 test('disk alert: silent below, once at 85, quiet while high, again after a day, re-arms below 80', () => {
   let r = diskAlert(84, {}, NOW); assert.equal(r.alert, false);
   r = diskAlert(85, r.state, NOW); assert.equal(r.alert, true);

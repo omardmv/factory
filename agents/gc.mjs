@@ -32,6 +32,12 @@ export const previewIsDead = (t) => !!t.previewPr && (['merged', 'stopped', 'don
 // a task that is paused or otherwise not final but has a preview: its stored PR state may be stale, ask GitHub
 export const previewNeedsPrCheck = (t) => !!t.previewPr && !!t.pr?.number && !previewIsDead(t);
 
+// stopped and paused tasks are never polled elsewhere, so a PR merged or closed after they stopped stays "open" in
+// task.json; ask GitHub about each at most once a day (checked: { <id>: ms })
+export const CHECK_EVERY_H = 24;
+export const prNeedsRefresh = (t, checked, now) => ['stopped', 'paused'].includes(t.status) && !!t.pr?.number && !['merged', 'closed'].includes(t.pr.state)
+  && !(checked?.[t.id] && now - checked[t.id] < CHECK_EVERY_H * H);
+
 // disk alert: fires once when usage reaches the threshold, again after repeatH while it stays there,
 // re-arms once usage drops `hysteresis` points below. state: { alertedAt?: ms }
 export function diskAlert(pct, state, now, { threshold = 85, hysteresis = 5, repeatH = 24 } = {}) {

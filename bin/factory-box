@@ -446,11 +446,11 @@ gc() {
     while read -r ref; do
       [ -n "$ref" ] || continue
       docker rmi "$ref" >/dev/null 2>&1 && log "gc: removed image $ref" || log "gc: kept image $ref (in use)"
-    done
+    done || log "gc: image step failed"
   docker image prune -f >/dev/null 2>&1 || true   # dangling layers only
   docker builder prune -f --keep-storage "$cache" >/dev/null 2>&1 || log "gc: builder prune failed"
   # volumes: only 64-hex anonymous ones that no container uses (dangling); `docker volume rm` refuses a used one
-  for v in $(docker volume ls -q -f dangling=true | "$node" "$FACTORY_DIR/agents/gc.mjs" volumes); do
+  for v in $(docker volume ls -q -f dangling=true | "$node" "$FACTORY_DIR/agents/gc.mjs" volumes || true); do
     docker volume rm "$v" >/dev/null 2>&1 || true
   done
   journalctl --vacuum-size=500M >/dev/null 2>&1 || true
