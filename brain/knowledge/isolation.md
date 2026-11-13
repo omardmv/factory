@@ -16,7 +16,7 @@
   role: SELECT only, ideally on a replica; the session is also opened
   `default_transaction_read_only`. Config naming a write-looking role, an
   unknown key or a path as password file is refused. The password is read from
-  the secrets folder and masked in the agent's messages and activity log.
+  the secrets folder and masked (plain and JSON-escaped) in the agent's messages and activity log. Limit: the Claude session transcript inside the task's `.claude` folder is not masked, so a tool result that prints the password lands there; the SELECT-only role is what bounds the damage.
   The box firewall must allow the agents' subnet to reach that host and port.
   No SSH or shell on the server.
 - **gVisor** (`AGENT_RUNTIME=runsc`): about x3 slower on disk and network

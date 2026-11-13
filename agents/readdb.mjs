@@ -2,7 +2,7 @@
 // Pure: the caller injects the secret reader. The real protection is the database role the
 // box owner creates (SELECT only, ideally on a replica); the session is also opened read-only as
 // a second layer. Off unless a project configures it; reviewers and the QA tester never get it.
-//   "shop": { ..., "readDb": { "host": "db.internal", "port": 5432, "name": "shop", "user": "agent_ro", "passwordFile": "shop-readdb-password", "sslmode": "require" } }
+//   "shop": { ..., "readDb": { "host": "db.internal", "port": 5432, "name": "shop", "user": "agent_ro", "passwordFile": "shop-readdb", "sslmode": "require" } }
 export const ENV_KEYS = ['PGHOST', 'PGPORT', 'PGDATABASE', 'PGUSER', 'PGPASSWORD', 'PGSSLMODE', 'PGOPTIONS', 'FACTORY_READ_DB'];
 const KNOWN = new Set(['host', 'port', 'name', 'user', 'passwordFile', 'sslmode']);
 const SSLMODES = ['require', 'verify-ca', 'verify-full'];
@@ -43,13 +43,20 @@ export function readDbEnv(project, readSecret) {
   };
 }
 
+// who gets the env: the working agent only. Reviewers, QA and every other role get nothing.
+export const readDbFor = (role, project, readSecret) => role === 'work' ? readDbEnv(project, readSecret) : {};
+
 // the line added to the working agent's rules; '' when off
 export const readDbRules = (env) => env?.FACTORY_READ_DB
   ? `\nREAD-ONLY DATABASE: the project's database is reachable with psql (PGHOST, PGDATABASE, PGUSER and PGPASSWORD are set, so plain \`psql\` works). The role can only read: use it to look at real data and schemas, never to change anything. Never print the password or put it in a file, commit, PR or message. Do not point tests or migrations at it.`
   : '';
 
-// mask the password wherever it shows up in text the factory stores or posts
+// mask the password wherever it shows up in text the factory stores or posts, in its plain and
+// JSON-escaped forms (a password with a quote or backslash is stored escaped in tool inputs)
 export const redact = (text, env) => {
   const p = env?.PGPASSWORD;
-  return p && p.length >= 4 ? String(text ?? '').split(p).join('[redacted]') : String(text ?? '');
+  let out = String(text ?? '');
+  if (!p || p.length < 4) return out;
+  for (const f of new Set([p, JSON.stringify(p).slice(1, -1)])) out = out.split(f).join('[redacted]');
+  return out;
 };

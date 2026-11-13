@@ -33,7 +33,7 @@ import { evidenceSection } from './evidence.mjs';
 import { loopDecision, openLoopTasks, isOpenLoop, loopTaskText, afterStart, afterRemind, normalizeLoops } from './loops.mjs';
 import { createMcp } from './mcp.mjs';
 import { launchArgs } from './launch.mjs';
-import { readDbConfig, readDbEnv, readDbRules, redact } from './readdb.mjs';
+import { readDbConfig, readDbFor, readDbRules, redact } from './readdb.mjs';
 import { taskCleanup, HEAVY, previewIsDead, previewNeedsPrCheck, diskAlert, diskAlertText, prNeedsRefresh } from './gc.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createSign, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -277,7 +277,7 @@ async function container(id, { prompt, mode, claudeDir, ghToken, system, model, 
       if (ev.type === 'assistant') {
         for (const part of ev.message?.content ?? []) {
           if (part.type === 'text' && part.text.trim()) { last = part.text.trim(); }
-          if (part.type === 'tool_use') appendFileSync(`${dir(id)}/activity.log`, redact(`${new Date().toISOString()} ${part.name} ${JSON.stringify(part.input).slice(0, 300)}\n`, more));
+          if (part.type === 'tool_use') appendFileSync(`${dir(id)}/activity.log`, `${new Date().toISOString()} ${part.name} ${redact(JSON.stringify(part.input), more).slice(0, 300)}\n`);
         }
       }
       if (ev.type === 'result') { last = (ev.result ?? last).trim(); cost += ev.total_cost_usd ?? 0; }
@@ -304,8 +304,8 @@ async function agentRun({ id, prompt, mode, from, origin }) {
   const t = update(id, (x) => { if (x.status !== 'pausing') x.status = mode === 'plan' ? (x.kind === 'program' ? 'planning' : 'briefing') : 'working'; });
   // read-only database access (projects.json "readDb"): the working agent only, never reviewers or QA
   const rdb = readDbConfig(PROJECTS[t.project]);
-  if (rdb && !rdb.ok) log('readdb.invalid', { task: id, error: rdb.error });
-  const dbEnv = readDbEnv(PROJECTS[t.project], secret);
+  if (rdb && !rdb.ok) { log('readdb.invalid', { task: id, error: rdb.error }); say(id, 'factory', `[factory] database read access is off for this run: ${rdb.error}`); }
+  const dbEnv = readDbFor('work', PROJECTS[t.project], secret);
   const r = await container(id, { prompt, mode, claudeDir: 'claude', ghToken: await githubToken(t.repo), system: (t.type === 'research' ? RESEARCH_RULES() : RULES()) + readDbRules(dbEnv), disallowed: ['AskUserQuestion'], resume: t.sessionId, env: dbEnv });
   r.last = redact(r.last, dbEnv); r.stderr = redact(r.stderr, dbEnv);
   if (r.last) say(id, t.kind === 'program' ? 'coordinator' : 'agent', r.last);
