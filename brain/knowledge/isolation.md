@@ -10,6 +10,15 @@
 - **Credentials**: the working agent gets a short-lived GitHub App token
   for its one repository. Reviewers and the QA tester get no GitHub token;
   QA gets no checkout either.
+- **Read-only database** (projects.json `readDb`, `agents/readdb.mjs`): off
+  unless a project sets it. The working agent (never reviewers or QA) gets
+  `PGHOST/PGUSER/PGPASSWORD/...` so plain `psql` reads. The protection is the
+  role: SELECT only, ideally on a replica; the session is also opened
+  `default_transaction_read_only`. Config naming a write-looking role, an
+  unknown key or a path as password file is refused. The password is read from
+  the secrets folder and masked in the agent's messages and activity log.
+  The box firewall must allow the agents' subnet to reach that host and port.
+  No SSH or shell on the server.
 - **gVisor** (`AGENT_RUNTIME=runsc`): about x3 slower on disk and network
   work; for untrusted code. Never `--network=host` for agents: it shares
   the host's loopback.

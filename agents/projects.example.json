@@ -15,6 +15,7 @@
     "requiredChecks": ["e2e"],
     "loops": { "security": "weekly", "docs": "weekly" },
     "baseBuild": { "branch": "staging", "checkout": "/srv/factory/shop-base-src" },
+    "readDb": { "host": "db.internal", "port": 5432, "name": "shop", "user": "agent_ro", "passwordFile": "shop-readdb-password", "sslmode": "require" },
     "mergeMethod": "squash",
     "githubApp": { "id": "<app id>", "key": "github-app-factory.pem", "bot": { "name": "<app slug>[bot]", "email": "<user id>+<app slug>[bot]@users.noreply.github.com" } }
   }
