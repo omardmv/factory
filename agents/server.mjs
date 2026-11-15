@@ -102,8 +102,7 @@ const save = (t) => {
   statusClock(t, now);
   const why = parkReason(t);
   if (why) t.waitingOn = why; else delete t.waitingOn;
-  t.updatedAt = now; writeFileSync(`${dir(t.id)}/task.json`, JSON.stringify(t, null, 1));
-  loadJson.forget(`${dir(t.id)}/task.json`); // two same-size writes inside one mtime tick must not read back the older copy
+  t.updatedAt = now; loadJson.save(`${dir(t.id)}/task.json`, JSON.stringify(t, null, 1)); // writes and drops the cache entry: two same-size writes inside one mtime tick must not read back the older copy
 };
 const update = (id, f) => { const t = load(id); f(t); save(t); return t; };
 const say = (id, from, text, extra = {}) => appendFileSync(`${dir(id)}/messages.jsonl`, JSON.stringify({ at: new Date().toISOString(), from, text, ...extra }) + '\n');

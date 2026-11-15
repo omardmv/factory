@@ -26,11 +26,11 @@ test('a missing file throws like readFileSync', () => {
   assert.throws(() => makeJsonCache()(`${d}/none.json`), /ENOENT/);
 });
 
-test('back-to-back same-size writes with forget() always read back the newest (the save path)', () => {
+test('back-to-back same-size writes through save() always read back the newest (the save path)', () => {
   const load = makeJsonCache(); const f = `${d}/c.json`;
   for (let i = 0; i < 300; i++) {
     const v = String(1000 + i);
-    writeFileSync(f, `{"n":"${v}"}`); load.forget(f);
+    load.save(f, `{"n":"${v}"}`);
     assert.equal(load(f).n, v);
   }
 });
