@@ -154,8 +154,10 @@ async function readForm(req) {
   return Object.fromEntries(new URLSearchParams(body));
 }
 const throttle = loginThrottle();
-// the last X-Forwarded-For entry is the one our own proxy appended; earlier ones come from the client
-const source = (req) => String(req.headers['x-forwarded-for'] ?? '').split(',').pop().trim() || req.socket.remoteAddress || '';
+// the client as Cloudflare saw it: nginx (box/nginx-factory.conf) refuses every connection not from Cloudflare and
+// passes request headers through, and Cloudflare sets CF-Connecting-IP itself (a client's own value is overwritten).
+// Fallback: the last X-Forwarded-For entry, which Cloudflare also appends.
+const source = (req) => String(req.headers['cf-connecting-ip'] ?? '').trim() || String(req.headers['x-forwarded-for'] ?? '').split(',').pop().trim() || req.socket.remoteAddress || '';
 const fromUs = (req) => (req.headers.origin ?? '') === SELF;
 
 // ---- the API for the desktop terminal (omardmv/terminal): what this page shows, as JSON, with the agents token

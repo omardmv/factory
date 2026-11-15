@@ -10,7 +10,9 @@ export function loginThrottle({ max = 10, globalMax = 100, windowMs = 60000, now
   return {
     // -> 0 when an attempt may be checked, else the seconds to wait
     wait(src = '') {
-      all = live(all); const mine = live(by.get(src) ?? []);
+      all = live(all);
+      for (const [k, v] of by) { const l = live(v); l.length ? by.set(k, l) : by.delete(k); } // sweep: sources that never return
+      const mine = live(by.get(src) ?? []);
       mine.length ? by.set(src, mine) : by.delete(src);
       return Math.max(mine.length >= max ? secs(mine) : 0, all.length >= globalMax ? secs(all) : 0);
     },

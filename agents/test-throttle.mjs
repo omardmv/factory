@@ -13,6 +13,7 @@ assert.equal(th.wait('b'), 0, 'another source is not locked out by a');
 th.fail('a'); t += 57000;
 assert.equal(th.wait('a'), 0, 'ages out; the failure while blocked was not counted');
 th.fail('a'); t += 1000; assert.equal(th.wait('a'), 0, 'only one failure counted again');
+const sw = loginThrottle({ max: 3, windowMs: 60000, now: () => t }); sw.fail('gone'); t += 61000; sw.wait('other');
 ok('per-source cap, bounded, ages out');
 const g = loginThrottle({ max: 3, globalMax: 5, windowMs: 60000, now: () => t });
 for (const s of ['a', 'a', 'b', 'b', 'c']) g.fail(s);
@@ -27,7 +28,7 @@ const PORT = 18000 + Math.floor(Math.random() * 1000), SELF = `http://127.0.0.1:
 const srv = spawn(process.execPath, ['dashboard/server.mjs'], { env: { ...process.env, PORT: String(PORT), SECRETS_DIR: sec, SELF_URL: SELF }, stdio: 'ignore' });
 try {
   for (let i = 0; i < 50; i++) { try { if ((await fetch(`${SELF}/healthz`)).ok) break; } catch {} await new Promise((r) => setTimeout(r, 100)); }
-  const login = (password, ip) => fetch(`${SELF}/login`, { method: 'POST', redirect: 'manual', headers: { origin: SELF, 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-for': `1.2.3.4, ${ip}` }, body: new URLSearchParams({ password }) });
+  const login = (password, ip) => fetch(`${SELF}/login`, { method: 'POST', redirect: 'manual', headers: { origin: SELF, 'cf-connecting-ip': ip, 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-for': '1.2.3.4, 0.0.0.0' }, body: new URLSearchParams({ password }) });
   for (let i = 0; i < 10; i++) assert.equal((await login('wrong', '9.9.9.9')).status, 401);
   const r = await login('wrong', '9.9.9.9');
   assert.equal(r.status, 429); assert.ok(Number(r.headers.get('retry-after')) > 0);
