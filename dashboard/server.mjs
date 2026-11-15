@@ -154,6 +154,8 @@ async function readForm(req) {
   return Object.fromEntries(new URLSearchParams(body));
 }
 const throttle = loginThrottle();
+// the last X-Forwarded-For entry is the one our own proxy appended; earlier ones come from the client
+const source = (req) => String(req.headers['x-forwarded-for'] ?? '').split(',').pop().trim() || req.socket.remoteAddress || '';
 const fromUs = (req) => (req.headers.origin ?? '') === SELF;
 
 // ---- the API for the desktop terminal (omardmv/terminal): what this page shows, as JSON, with the agents token
@@ -198,9 +200,9 @@ createServer(async (req, res) => {
     if (url.pathname === '/login' && req.method === 'GET') return send(200, loginPage(url.searchParams.get('next') ?? SELF));
     if (url.pathname === '/login' && req.method === 'POST') {
       const f = await readForm(req);
-      const wait = throttle.wait();
+      const wait = throttle.wait(source(req));
       if (wait) return send(429, loginPage(f.next ?? SELF, `Too many wrong passwords. Try again in ${wait} s.`), { 'retry-after': String(wait) });
-      if (!fromUs(req) || !safeEq(String(f.password ?? ''), secret('password'))) { throttle.fail(); return send(401, loginPage(f.next ?? SELF, 'Wrong password.')); }
+      if (!fromUs(req) || !safeEq(String(f.password ?? ''), secret('password'))) { throttle.fail(source(req)); return send(401, loginPage(f.next ?? SELF, 'Wrong password.')); }
       return send(303, '', { location: safeNext(f.next ?? SELF), 'set-cookie': sessionCookie(newSession(), SESSION_DAYS * 86400) });
     }
     if (url.pathname === '/logout') return send(303, '', { location: '/login', 'set-cookie': sessionCookie('', 0) });
