@@ -5,6 +5,7 @@
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, readdirSync, createReadStream, statSync } from 'node:fs';
+import { loginThrottle } from './throttle.mjs';
 import { chatView, chatCss, agents, mediaFile, projectNames } from './chat.mjs';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -152,6 +153,7 @@ async function readForm(req) {
   let body = ''; for await (const c of req) { body += c; if (body.length > 10000) break; }
   return Object.fromEntries(new URLSearchParams(body));
 }
+const throttle = loginThrottle();
 const fromUs = (req) => (req.headers.origin ?? '') === SELF;
 
 // ---- the API for the desktop terminal (omardmv/terminal): what this page shows, as JSON, with the agents token
@@ -196,7 +198,9 @@ createServer(async (req, res) => {
     if (url.pathname === '/login' && req.method === 'GET') return send(200, loginPage(url.searchParams.get('next') ?? SELF));
     if (url.pathname === '/login' && req.method === 'POST') {
       const f = await readForm(req);
-      if (!fromUs(req) || !safeEq(String(f.password ?? ''), secret('password'))) return send(401, loginPage(f.next ?? SELF, 'Wrong password.'));
+      const wait = throttle.wait();
+      if (wait) return send(429, loginPage(f.next ?? SELF, `Too many wrong passwords. Try again in ${wait} s.`), { 'retry-after': String(wait) });
+      if (!fromUs(req) || !safeEq(String(f.password ?? ''), secret('password'))) { throttle.fail(); return send(401, loginPage(f.next ?? SELF, 'Wrong password.')); }
       return send(303, '', { location: safeNext(f.next ?? SELF), 'set-cookie': sessionCookie(newSession(), SESSION_DAYS * 86400) });
     }
     if (url.pathname === '/logout') return send(303, '', { location: '/login', 'set-cookie': sessionCookie('', 0) });
