@@ -15,6 +15,7 @@
 // Loopback + one bridge address only; every call needs the API token.
 import { createServer } from 'node:http';
 import { tailLines, lastJsonLine } from './tail.mjs';
+import { makeJsonCache } from './taskcache.mjs';
 import * as syncWire from './syncwire.mjs';
 import { baseBuildConfig, baseBuildApplies, runBaseBuild } from './basebuild.mjs';
 import { readSyncCommits, mergeMethodFor, isSyncPr, mergeDecision, approvalGate, approveCheck, deployState } from './merge.mjs';
@@ -92,7 +93,8 @@ mkdirSync(`${HOME}/tasks`, { recursive: true });
 
 // ---------- tasks on disk: tasks/<id>/task.json + messages.jsonl ----------
 const dir = (id) => `${HOME}/tasks/${id}`;
-const load = (id) => JSON.parse(readFileSync(`${dir(id)}/task.json`, 'utf8'));
+const loadJson = makeJsonCache();
+const load = (id) => loadJson(`${dir(id)}/task.json`);
 // save also keeps two things true for every task: when its status last changed (the watchdog's clock; the
 // nudge marks restart with it) and that a parked task always says what the person is waited on for.
 const save = (t) => {
