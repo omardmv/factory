@@ -65,6 +65,9 @@ export async function findPr(d, task) {
     // Only an OPEN PR counts, and never from a base/default branch: a long-merged PR (a main→staging sync) from a branch that
     // merely exists in the checkout is not this task's PR and must not mark it merged.
     if (!p) for (const b of d.workspaceBranches(task)) { if (BASE_BRANCHES.has(b) || b === task.base) continue; p = (await d.gh(token, `/repos/${task.repo}/pulls?state=open&head=${owner}:${encodeURIComponent(b)}`)).find((x) => x.state === 'open' && !x.merged_at); if (p) { d.log('pr.other_branch', { task: task.id, branch: b, pr: p.number }); break; } }
+    // the task's recorded PR (opened from another branch) was merged/closed on GitHub since: the open-only search no longer sees
+    // it, so read that exact PR; only its own number can say merged, never another branch's old PR
+    if (!p && task.pr?.number) { const r = await d.gh(token, `/repos/${task.repo}/pulls/${task.pr.number}`); if (r?.number === task.pr.number) p = r; }
     // a resyncing task (see verifyUnblocked) has not opened its new PR yet: GitHub still only knows the merged one, and
     // reporting it would show the working task as merged (epic progress, loops). No PR yet is the truth.
     if (p && task.resyncFrom != null && p.number === task.resyncFrom && p.merged_at) return null;

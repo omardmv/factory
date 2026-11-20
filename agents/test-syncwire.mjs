@@ -94,6 +94,12 @@ const task = { id: 'a', repo: 'o/shop' };
   assert.equal(await findPr(d, { ...task, base: 'staging' }), null);
   console.log('ok - findPr: a merged PR from another workspace branch is not the task\'s PR');
 }
+{ // an other-branch PR recorded on the task, merged on GitHub since: the task is merged
+  const { d } = fp([[/pulls\/7$/, pull(7, { state: 'closed', merged_at: 'x' })]], { workspaceBranches: () => ['perf'] });
+  const r = await findPr(d, { ...task, pr: { number: 7 } });
+  assert.equal(r.number, 7); assert.equal(r.state, 'merged');
+  console.log('ok - findPr: a recorded other-branch PR that got merged shows as merged');
+}
 { // no PR on the task branch: any workspace branch
   const { d, logs } = fp([[/state=open&head=o:perf/, [pull(7)]]], { workspaceBranches: () => ['perf'] });
   assert.equal((await findPr(d, task)).number, 7); assert.equal(logs[0][0], 'pr.other_branch');
