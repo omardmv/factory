@@ -50,6 +50,8 @@ export function settleResync(task) {
   return task;
 }
 
+const BASE_BRANCHES = new Set(['main', 'master', 'staging']);
+
 // The PR lookup. d: { githubToken(repo), gh(token, url), workspaceBranches(task), pickPr(list), log }
 export async function findPr(d, task) {
   try {
@@ -60,7 +62,9 @@ export async function findPr(d, task) {
     if (p?.merged_at) for (const b of d.workspaceBranches(task)) { const o = d.pickPr(await d.gh(token, `/repos/${task.repo}/pulls?state=open&head=${owner}:${encodeURIComponent(b)}`)); if (o) { p = o; d.log('pr.followup', { task: task.id, branch: b, pr: o.number }); break; } }
     // an agent that pushed its PR from another branch (it happened: perf/lazy-screens): look at every
     // branch in its workspace, so the PR is still reviewed and reaches the founder instead of being orphaned
-    if (!p) for (const b of d.workspaceBranches(task)) { p = (await d.gh(token, `/repos/${task.repo}/pulls?state=all&head=${owner}:${encodeURIComponent(b)}`))[0]; if (p) { d.log('pr.other_branch', { task: task.id, branch: b, pr: p.number }); break; } }
+    // Only an OPEN PR counts, and never from a base/default branch: a long-merged PR (a main→staging sync) from a branch that
+    // merely exists in the checkout is not this task's PR and must not mark it merged.
+    if (!p) for (const b of d.workspaceBranches(task)) { if (BASE_BRANCHES.has(b) || b === task.base) continue; p = (await d.gh(token, `/repos/${task.repo}/pulls?state=open&head=${owner}:${encodeURIComponent(b)}`)).find((x) => x.state === 'open' && !x.merged_at); if (p) { d.log('pr.other_branch', { task: task.id, branch: b, pr: p.number }); break; } }
     // a resyncing task (see verifyUnblocked) has not opened its new PR yet: GitHub still only knows the merged one, and
     // reporting it would show the working task as merged (epic progress, loops). No PR yet is the truth.
     if (p && task.resyncFrom != null && p.number === task.resyncFrom && p.merged_at) return null;
