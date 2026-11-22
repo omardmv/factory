@@ -516,5 +516,14 @@ await step('notify: a review PASS the factory merges itself is not "waiting for 
   assert.ok(!parkedOnYou({ status: auto.status, waitingOn: auto.waitingOn, mergeWanted: auto.mergeWanted }));
   assert.ok(parkedOnYou({ status: manual.status, waitingOn: manual.waitingOn, mergeWanted: manual.mergeWanted }));
 });
+await step('state is flushed to disk when the bot gets SIGTERM, exit code 0 (the coalesced write is not lost)', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const f = `${dir}/sigterm-state.json`;
+  const code = `const b = await import(${JSON.stringify(new URL('./bot.mjs', import.meta.url).href)}); b.state.marker = 'kept'; process.kill(process.pid, 'SIGTERM'); setTimeout(() => {}, 5000);`;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, BOT_STATE: f }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse((await import('node:fs')).readFileSync(f, 'utf8')).marker, 'kept');
+});
+await import('./test-persist.mjs'); // the pure saver's own test runs with this suite
 console.log(`all ${ok} passed`);
 slackSrv.close(); agentsSrv.close(); process.exit(0);

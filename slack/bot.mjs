@@ -13,6 +13,7 @@
 //  - /factory pause | resume | stop (in a task's channel), status, tasks,
 //    digest, help; the morning summary (only with SLACK_NOTIFY=all) arrives in the DM at 08:00 Tashkent
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { makeSaver } from './persist.mjs';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { needsAnswer, isBriefLike, notifyAll, parkedOnYou } from './notify.mjs';
@@ -47,8 +48,11 @@ const log = (event, f = {}) => console.log(JSON.stringify({ t: new Date().toISOS
 export const state = existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, 'utf8')) : {};
 state.sent ??= {}; state.taskChannel ??= {}; state.channelTask ??= {}; state.archived ??= {}; state.batches ??= {}; state.skip ??= {}; state.fresh ??= {}; state.pending ??= {}; state.planPosted ??= {}; state.topic ??= {};
 if (!state.owner && !state.pairing) state.pairing = randomBytes(4).toString('hex');
-const persist = () => writeFileSync(STATE_FILE, JSON.stringify(state));
-persist();
+const saver = makeSaver(() => writeFileSync(STATE_FILE, JSON.stringify(state)));
+const persist = saver.save; // coalesced: one write per 200 ms however many tasks changed (see persist.mjs)
+saver.flush();
+process.on('exit', saver.flush);
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => process.exit(0));
 
 export async function slack(method, payload, token = secret('slack-bot-token')) {
   const r = await fetch(`${SLACK}/${method}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify(payload ?? {}), signal: AbortSignal.timeout(20000) });
@@ -363,7 +367,7 @@ export async function onMessage(ev) {
     if (ev.channel_type !== 'im') return;
     const code = text.replace(/^pair\s*/i, '');
     if (state.pairing && code.length === state.pairing.length && timingSafeEqual(Buffer.from(code), Buffer.from(state.pairing))) {
-      state.owner = ev.user; state.dm = ev.channel; delete state.pairing; persist();
+      state.owner = ev.user; state.dm = ev.channel; delete state.pairing; saver.flush();
       log('paired', { owner: ev.user });
       return post(ev.channel, `Paired.\n\n${help()}`);
     }
