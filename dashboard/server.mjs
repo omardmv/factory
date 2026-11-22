@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, readdirSync, createReadStream, statSync } from 'node:fs';
 import { loginThrottle } from './throttle.mjs';
+import { SECURITY_HEADERS } from './headers.mjs';
 import { chatView, chatCss, agents, mediaFile, projectNames } from './chat.mjs';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -194,6 +195,7 @@ async function api(req, url, send) {
 
 createServer(async (req, res) => {
   const url = new URL(req.url, SELF);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
   const send = (code, body, headers = {}) => { res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...headers }); res.end(body); };
   try {
     if (url.pathname === '/auth') return send(validSession(req) ? 204 : 401, '');
