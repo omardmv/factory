@@ -4,7 +4,7 @@
 // every minute (factory-box status), the e2e reports, and Coolify's API.
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { readFileSync, existsSync, readdirSync, createReadStream, statSync } from 'node:fs';
+import { readFileSync, createReadStream, statSync } from 'node:fs';
 import { loginThrottle } from './throttle.mjs';
 import { SECURITY_HEADERS } from './headers.mjs';
 import { chatView, chatCss, agents, mediaFile, projectNames } from './chat.mjs';
