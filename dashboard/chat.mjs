@@ -192,7 +192,7 @@ export async function chatView({ taskId, healthy, list = false }) {
       ${err ? `<p class="pill bad">${esc(err)}</p>` : ''}</div></div>`;
   }
   const html = `<div class="app ${list ? '' : 'has-task'}"><aside class="side"><h1><a href="/" style="color:inherit;text-decoration:none">Factory</a></h1><a class="newbtn" href="/?task=new">+ New task</a>${side || '<p class="hint">No tasks yet.</p>'}
-    <div class="health">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● needs a look</span>'} · <a href="/health">health</a> · <a href="/logout">sign out</a></div></aside>
+    <div class="health">${healthy ? '<span style="color:#0f6e56">●</span> all healthy' : '<span style="color:#a32d2d">● needs a look</span>'} · <a href="/health">health</a> · <form method="post" action="/logout" style="display:inline"><button style="background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-decoration:underline">sign out</button></form></div></aside>
     <section class="main">${main}</section></div>
     <script>
       const m = document.getElementById('msgs');

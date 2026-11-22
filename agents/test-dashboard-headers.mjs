@@ -21,4 +21,11 @@ try {
   framed(await fetch(`${SELF}/login`, { method: 'POST', headers: { origin: SELF, 'content-type': 'application/x-www-form-urlencoded' }, body: 'password=wrong' }), 'failed login');
   framed(await fetch(`${SELF}/healthz`), 'healthz');
   ok('login, redirects, failed login and healthz all carry the anti-framing headers');
+  const get = await fetch(`${SELF}/logout`, { redirect: 'manual' });
+  assert.equal(get.status, 405, 'GET /logout does nothing'); assert.equal(get.headers.get('set-cookie'), null);
+  const cross = await fetch(`${SELF}/logout`, { method: 'POST', redirect: 'manual', headers: { origin: 'https://evil.example' } });
+  assert.equal(cross.status, 405, 'cross-site POST /logout does nothing');
+  const post = await fetch(`${SELF}/logout`, { method: 'POST', redirect: 'manual', headers: { origin: SELF } });
+  assert.equal(post.status, 303); assert.match(post.headers.get('set-cookie') ?? '', /factory_session=;.*Max-Age=0/);
+  ok('/logout: GET and cross-site POST refused, own POST signs out');
 } finally { srv.kill(); }

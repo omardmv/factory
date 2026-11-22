@@ -135,7 +135,7 @@ async function dashboard() {
   ].join('');
 
   return page('Factory', `
-  <header><h1>Factory</h1><span class="muted">${stale ? 'host facts are stale' : `updated ${esc(ago(facts.at))}`} · <a href="/">tasks</a> · <a href="/logout">sign out</a></span></header>
+  <header><h1>Factory</h1><span class="muted">${stale ? 'host facts are stale' : `updated ${esc(ago(facts.at))}`} · <a href="/">tasks</a> · <form method="post" action="/logout" style="display:inline"><button style="background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-decoration:underline">sign out</button></form></span></header>
   <div class="big">${live.length} preview${live.length === 1 ? '' : 's'} running</div>
   <div class="muted">${esc(headline)}${unhealthy.length ? `: ${esc(unhealthy.join(', '))}` : ''}</div>
   <h2>Pull requests</h2>${rows}
@@ -209,7 +209,8 @@ createServer(async (req, res) => {
       if (!fromUs(req) || !safeEq(String(f.password ?? ''), secret('password'))) { throttle.fail(source(req)); return send(401, loginPage(f.next ?? SELF, 'Wrong password.')); }
       return send(303, '', { location: safeNext(f.next ?? SELF), 'set-cookie': sessionCookie(newSession(), SESSION_DAYS * 86400) });
     }
-    if (url.pathname === '/logout') return send(303, '', { location: '/login', 'set-cookie': sessionCookie('', 0) });
+    // POST from our own pages only: a GET (an image, a link on another site) must not be able to sign the founder out
+    if (url.pathname === '/logout') return req.method !== 'POST' || !fromUs(req) ? send(405, 'sign out with the button', { allow: 'POST' }) : send(303, '', { location: '/login', 'set-cookie': sessionCookie('', 0) });
     if (!validSession(req)) return send(303, '', { location: `/login?next=${encodeURIComponent(SELF + url.pathname)}` });
     if (url.pathname === '/redeploy' && req.method === 'POST') {
       const f = await readForm(req);
